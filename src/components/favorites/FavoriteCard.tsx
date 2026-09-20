@@ -1,14 +1,14 @@
 "use client";
 
 /**
- * 收藏 · **组合卡**（src/components/favorites/FavoriteCard.tsx；★ v2.3.0 S2 重写）
+ * 收藏 · **组合卡**（src/components/favorites/FavoriteCard.tsx；★ v2.3.0 S2 重写 / S3 补「编辑编排」）
  *
  * ── 规格（08 §C.2）────────────────────────────────────────────────────
  *   · 卡 = `--radius-card` 10px + **1.5px `--border-strong`** 框 + `--shadow-hard-sm`；**整卡可点**；
  *   · 左侧 **OD 图标对**（origin → arrowRight → destination，均已注册）；
  *   · 命名 = `--text-lg` 17px / 600 / -0.005em（超长单行省略）；
  *   · 摘要行 = `--text-sm` 13px / `--muted`：「**N 段编排 · 最近 X 分 · 线路标签**」；
- *   · 右侧 ⋯ 菜单（`.fav-menu` 复用）：重命名 / 置顶 / 停用 / 删除组合。
+ *   · 右侧 ⋯ 菜单（`.fav-menu` 复用）：**编辑编排** / 重命名 / 置顶 / 停用 / 删除组合。
  *   · 停用态：整体 `--meta` + 摘要显示「已停用」（**排序沉底由列表页负责**），点击提示去 ⋯ 里启用。
  *
  * ── ★ FA-A.4（关键）───────────────────────────────────────────────────
@@ -31,6 +31,8 @@ export interface FavoriteCardProps {
   colors: Record<string, string>;
   readOnly: boolean;
   onOpen: (combo: Combo) => void;
+  /** ★ S3：打开编排编辑器（⋯ 菜单「编辑编排」） */
+  onEdit: (combo: Combo) => void;
   onRename: (id: string, name: string) => void;
   onPin: (id: string, pinned: boolean) => void;
   onToggleDisabled: (id: string, disabled: boolean) => void;
@@ -58,6 +60,7 @@ export default function FavoriteCard({
   colors,
   readOnly,
   onOpen,
+  onEdit,
   onRename,
   onPin,
   onToggleDisabled,
@@ -122,12 +125,26 @@ export default function FavoriteCard({
             className="fav-menu__btn"
             aria-label="更多操作"
             aria-expanded={menuOpen}
-            onClick={() => {
-              setMenuOpen((v) => !v);
+            onClick={(e) => {
+              const next = !menuOpen;
+              /**
+               * ★ P2 二次修复（QA 实测驱动）：菜单 5 项约 220px 高，向下弹时若卡片靠近**视口底部**，
+               *   下半截会落在**视口之外**（实测 popRect.bottom 1074 > 视口 932 ⇒ 后 3 项点不到，
+               *   提高 z-index 也无效，因为点不到的是"屏幕外"而不是"被遮住"）。
+               *   ⇒ 下方空间不足以容纳菜单时，给 `.fav-menu` 打 `data-up="1"`，CSS 改为 `bottom:100%` **向上弹**。
+               *   用 DOM 属性而非 React state：避免新增状态与重渲染，判定发生在**打开那一刻**（就地量测）。
+               */
+              if (next) {
+                const r = e.currentTarget.getBoundingClientRect();
+                const need = 5 * 44 + 24; // 5 项 × 44 + 内边距
+                const up = window.innerHeight - r.bottom < need;
+                e.currentTarget.parentElement?.setAttribute("data-up", up ? "1" : "0");
+              }
+              setMenuOpen(next);
               setRenaming(false);
             }}
           >
-            <Icon name="expandVertical" size={20} />
+            <Icon name="more" size={20} />
           </button>
           {menuOpen && (
             <div className="fav-menu__pop" role="menu">
@@ -157,6 +174,19 @@ export default function FavoriteCard({
                 </form>
               ) : (
                 <>
+                  {/* ★ S3：编排编辑器入口（S2 故意留空的位置） */}
+                  <button
+                    type="button"
+                    className="fav-menu__item"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      onEdit(combo);
+                    }}
+                    disabled={readOnly}
+                  >
+                    <Icon name="edit" size={16} />
+                    编辑编排
+                  </button>
                   <button
                     type="button"
                     className="fav-menu__item"
