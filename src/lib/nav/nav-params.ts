@@ -6,9 +6,14 @@
  *   `fromKind toKind`（gps|poi|station|place）· `fromCode toCode`（place slug 等）
  *   `zone`（B/C|N/O|R）· `limit`（默认 5）· `plan`（详情页用：定位某张卡）
  *
+ * ★ v2.3.0：追加**可选** `chain` / `walk` / `tiers`（编码 `encodeURIComponent(JSON.stringify(...))`）
+ *   —— 承载用户自定义站链与步行参数；此处置于**宽松解析**（非法即视为缺省）。
+ *   ⚠️ `query` 仍**不含**这三者（保持 v2.2.0 逐字节一致；组合把它们作为独立字段保存/转发）。
+ *
  * 纯函数（无 pg / 无 next 依赖）—— 服务端组件与任何地方都能用。
  */
 import { SCHOOL_ZONES, type SchoolZone } from "@/lib/recommend/types";
+import { decodeChain, decodeTiers, decodeWalk, type ChainStep, type TierOverride, type WalkOverride } from "./combo-params";
 import type { NavPoint, NavPointKind } from "./types";
 
 export interface NavUrlParams {
@@ -20,6 +25,12 @@ export interface NavUrlParams {
   query: string;
   /** 详情页：目标卡片 planId（无则不填） */
   planId?: number;
+  /** ★ v2.3.0：可选自定义站链（缺省 = 自动选线） */
+  chain?: ChainStep[];
+  /** ★ v2.3.0：两段步行覆盖（缺省 = 系统算） */
+  walk?: WalkOverride;
+  /** ★ v2.3.0：五档覆盖（缺省 = 系统默认） */
+  tiers?: TierOverride;
 }
 
 const KIND_VALUES: NavPointKind[] = ["gps", "poi", "station", "place"];
@@ -80,5 +91,16 @@ export function parseNavParams(sp: SP): NavUrlParams | null {
   const planRaw = num(sp, "plan");
   const planId = planRaw !== null ? Math.trunc(planRaw) : undefined;
 
-  return { origin, dest, zone, limit, query: spOut.toString(), planId };
+  // ★ v2.3.0：可选出行参数（宽松解析；非法/缺省 → 不填）
+  const chainRaw = first(sp.chain)?.trim();
+  const dc = chainRaw ? decodeChain(chainRaw) : null;
+  const chain = dc && dc.ok ? dc.chain : undefined;
+  const walkRaw = first(sp.walk)?.trim();
+  const dw = walkRaw ? decodeWalk(walkRaw) : null;
+  const walk = dw && dw.ok ? dw.walk : undefined;
+  const tiersRaw = first(sp.tiers)?.trim();
+  const dt = tiersRaw ? decodeTiers(tiersRaw) : null;
+  const tiers = dt && dt.ok ? dt.tiers : undefined;
+
+  return { origin, dest, zone, limit, query: spOut.toString(), planId, chain, walk, tiers };
 }

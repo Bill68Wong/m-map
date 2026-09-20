@@ -14,12 +14,12 @@
  *   **页级组件**，只挂在首页 / 收藏页（`/about` 亦挂）；**不挂全局布局**
  *   （挂全局会波及 `/commute`、`/nav` 等旧页 → 大面积回归）。
  *
- * ⚠️ SSR 首帧 `useFavorites` 恒为空 → 收藏圆点首帧不渲染（`mounted` 守卫，防 hydration 失败）。
+ * ⚠️ SSR 首帧 `useCombos` 恒为空 → 收藏圆点首帧不渲染（`mounted` 守卫，防 hydration 失败）。
  */
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import Icon, { type IconName } from "@/components/ui/Icon";
-import { useFavorites } from "@/lib/favorites/useFavorites";
+import { useCombos } from "@/lib/favorites/useCombos";
 
 interface TabDef {
   key: "home" | "favorites";
@@ -54,8 +54,8 @@ const TABS: TabDef[] = [
 
 export default function BottomNav() {
   const pathname = usePathname();
-  const favs = useFavorites();
-  const hasFav = favs.mounted && favs.items.length > 0;
+  const favs = useCombos();
+  const hasFav = favs.mounted && favs.combos.length > 0;
 
   return (
     <nav className="bottom-nav" aria-label="主导航">

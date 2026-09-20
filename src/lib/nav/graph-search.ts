@@ -65,6 +65,14 @@ export interface SearchOpts {
    *   把剩余名额留给 2 换乘。0 换乘不受此限（其有效候选数量天然很小）。
    */
   stage1Share?: number;
+  /**
+   * ★ v2.3.0（07 §3.7 软吸附）：**起点吸附锚站主码** —— 名称与起点 POI 重合的站，
+   *   去重**前置**到 `SRC` 首位（即使超出 `radiusM` 半径也**额外纳入**）。
+   *   缺省 = 不吸附（保持「最近站」逻辑不变）。
+   */
+  anchorFromMain?: string;
+  /** ★ v2.3.0：**终点吸附锚站主码** —— 同上，作用于 `DST` */
+  anchorToMain?: string;
 }
 
 export interface RidePath {
@@ -78,7 +86,7 @@ export interface StationPath {
   transfers: { at: string; to: string }[];
 }
 
-const DEFAULTS: Required<SearchOpts> = {
+const DEFAULTS: Required<Omit<SearchOpts, "anchorFromMain" | "anchorToMain">> = {
   k: 8,
   radiusM: 700,
   maxTransfers: 2,
@@ -87,6 +95,12 @@ const DEFAULTS: Required<SearchOpts> = {
   perChainLimit: 12,
   stage1Share: 0.6,
 };
+
+/** ★ v2.3.0 软吸附：把锚站去重**前置**到首位（命中则移前；不在列表内则**追加**） */
+function withAnchor(list: string[], anchor?: string): string[] {
+  if (!anchor) return list;
+  return [anchor, ...list.filter((m) => m !== anchor)];
+}
 
 /** 取离 point 最近的主码（≤radius，最多 k 个；按距离升序） */
 function nearestMains(geo: GeoStation[], point: LatLng, k: number, radiusM: number): string[] {
@@ -189,8 +203,9 @@ export function searchStationPaths(
   opts: SearchOpts = {},
 ): StationPath[] {
   const o = { ...DEFAULTS, ...opts };
-  const SRC = nearestMains(geo, fromWgs, o.k, o.radiusM);
-  const DST = nearestMains(geo, toWgs, o.k, o.radiusM);
+  // ★ v2.3.0：软吸附 —— 同名站锚站去重前置（即使超出半径也纳入，§3.7）
+  const SRC = withAnchor(nearestMains(geo, fromWgs, o.k, o.radiusM), o.anchorFromMain);
+  const DST = withAnchor(nearestMains(geo, toWgs, o.k, o.radiusM), o.anchorToMain);
   if (!SRC.length || !DST.length) return [];
 
   const routesAt = buildRoutesAt(routeIdx);

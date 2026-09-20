@@ -36,15 +36,18 @@ import { fetchLive } from "@/lib/recommend/live";
 import { amapPlanToSeed, modelOption, type ModeledOption } from "@/lib/recommend/model";
 import { contextFor, loadStatics, type RecStatic } from "@/lib/recommend/query";
 import { mainCodeOf } from "@/lib/recommend/segment-lookup";
-import type { RecommendCard, SchoolZone } from "@/lib/recommend/types";
-import { candidatesToSeeds, pathsToCandidates, LOCAL_SUMMARY } from "./enumerate-nav";
+import type { AltBusView, OptionSeed, RecommendCard, SchoolZone } from "@/lib/recommend/types";
+import { candidatesToSeeds, chainToCandidates, pathsToCandidates, LOCAL_SUMMARY } from "./enumerate-nav";
+import { anchorMainFor } from "./anchor";
+import { siblingSeedsOf } from "./parallel-alts";
+import { applyWalkSeg, tierSpeedOverrideOf, type ChainStep, type TierOverride, type WalkOverride } from "./combo-params";
 import { searchStationPaths, type GeoStation, type StationPath } from "./graph-search";
 import { loadStationMap, type BridgeContext, type StationMap } from "./map-stations";
 import { mergeSources } from "./merge-sources";
 import { parseAndBridge } from "./parse-amap-plan";
 import { rankItems, type RankedItem } from "./rank";
 import { makeCacheWalkResolver, makeWalkResolver, ourDataCoverage, overlayTransferIndex, patchAmapFallback, type WalkCacheMap } from "./recompute";
-import type { AmapPlanSeed, NavEmptyReason, NavPoint, RecomputeProvenance, SegmentLevel } from "./types";
+import type { AmapPlanSeed, NavEmptyReason, NavPoint, RecomputeProvenance, SegmentLevel, WalkResolver } from "./types";
 
 // ─────────────────────────── 接口 ───────────────────────────
 
@@ -66,6 +69,16 @@ export interface NavInput {
   allowInlineLocal?: boolean;
   /** 测试/回放：直接注入高德原始响应（跳过网络） */
   transitFixture?: AmapTransitRawResponse;
+  /**
+   * ★ v2.3.0（`/api/nav` 可选参数）：**自定义站链**（07 §2.2）。
+   *   非空 ⇒ **候选枚举按链约束**（段 = 用户指定 board/alight/routes；不调高德）；
+   *   缺省 ⇒ 自动选线，**行为与 v2.2.0 完全一致**。
+   */
+  chain?: ChainStep[];
+  /** ★ v2.3.0：两段步行覆盖（仅在 `chain` 非空时生效，见 07 §2.2） */
+  walk?: WalkOverride;
+  /** ★ v2.3.0：五档覆盖（仅在 `chain` 非空时生效） */
+  tiers?: TierOverride;
 }
 
 export interface NavStats {
@@ -82,6 +95,8 @@ export interface NavStats {
   localSource: "inline" | "none";
   /** ★ 本次实际使用的高德策略（诊断用；如 `[0]` 或 `[0,7,8]`） */
   strategiesUsed: number[];
+  /** ★ v2.3.0：是否走「自定义站链」模式（诊断用；true 时未调高德） */
+  chainMode: boolean;
   liveMs: number;
   modelMs: number;
   ms: number;
@@ -293,6 +308,19 @@ function slugOf(p: NavPoint, placeSlugs: Set<string>): string {
   return p.kind;
 }
 
+/**
+ * ★ v2.3.0：把「组合级步行覆盖」（`/api/nav` 的 `walk`）套到步行解析器上。
+ *   `seg1` = 出发地→上车站（out）；`seg2` = 下车站→目的地（in）——见 07 §2.5。
+ *   **无覆盖 → 原样返回**（自动选线/默认链路零变化）。
+ */
+function withWalkOverride(r: WalkResolver, ov?: WalkOverride): WalkResolver {
+  if (!ov || (!ov.seg1 && !ov.seg2)) return r;
+  return {
+    out: () => applyWalkSeg(r.out(""), ov.seg1),
+    in: () => applyWalkSeg(r.in(""), ov.seg2),
+  };
+}
+
 // ─────────────────────────── 主流程 ───────────────────────────
 
 export async function planNav(pool: Pool, input: NavInput): Promise<NavOutput> {
@@ -305,6 +333,12 @@ export async function planNav(pool: Pool, input: NavInput): Promise<NavOutput> {
   const fromWgs = gcj02ToWgs84({ lng: origin.lng, lat: origin.lat });
   const toWgs = gcj02ToWgs84({ lng: dest.lng, lat: dest.lat });
 
+  // ★ v2.3.0：自定义站链模式（`chain` 非空）—— 候选枚举按链约束、**不调高德**；
+  //   `walk` / `tiers` 仅在此模式下生效（07 §2.2：chain 为空 = 现有路径，零改动）。
+  const chain = input.chain && input.chain.length >= 2 ? input.chain : undefined;
+  const chainMode = !!chain;
+  const tierOverride = chainMode ? tierSpeedOverrideOf(input.tiers) : undefined;
+
   // ① 静态
   const tStatic = Date.now();
   const st: RecStatic = await loadStatics(pool);
@@ -313,10 +347,15 @@ export async function planNav(pool: Pool, input: NavInput): Promise<NavOutput> {
   const map = await loadStationMapCached(pool);
   const geo = await loadStationGeoCached(pool);
   const validRoutes = new Set<string>(st.routeIdx.dirsOf.keys());
-  const bridgeCtx: BridgeContext = { map, validRoutes, routeIdx: st.routeIdx };
+  const bridgeCtx: BridgeContext = { map, validRoutes, routeIdx: st.routeIdx, geo };
   const placeSlugs = new Set(Object.keys(st.placeIds));
   const fromSlug = slugOf(origin, placeSlugs);
   const toSlug = slugOf(dest, placeSlugs);
+
+  // ★ v2.3.0（07 §3.7 软吸附）：POI/地点名 ↔ 站名 命中（L1/L2）+ L3 距离闸门 ⇒ 吸附锚站主码。
+  //   只改「下车/上车锚站」，**不改终点本身**（`walkIn` 仍走到 POI 坐标）；无命中 ⇒ null（逻辑不变）。
+  const anchorFromMain = anchorMainFor({ label: origin.label, lng: origin.lng, lat: origin.lat }, geo, st.routeIdx)?.main;
+  const anchorToMain = anchorMainFor({ label: dest.label, lng: dest.lng, lat: dest.lat }, geo, st.routeIdx)?.main;
 
   // ③ 高德（默认 strategy=0）
   const tTransit = Date.now();
@@ -329,25 +368,27 @@ export async function planNav(pool: Pool, input: NavInput): Promise<NavOutput> {
   /** ★ 本次实际用到的策略（诊断；s=0 恒在，命中补查时追加 7/8） */
   const strategiesUsed: number[] = [];
 
-  if (input.transitFixture) {
-    rawPlans = input.transitFixture;
-    amapTotal = (input.transitFixture.route?.transits ?? []).length;
-    // ★ §B.6 触发条件③：高德返回 **0 方案** = 异常 ⇒ 视为**不可用**（走降级）
-    transitOk = amapTotal > 0;
-    if (transitOk) strategiesUsed.push(0);
-  } else {
-    const r = await fetchTransitPlans({ lng: origin.lng, lat: origin.lat }, { lng: dest.lng, lat: dest.lat }, {
-      cache: makeTransitCacheIo(pool),
-      noCache: input.noCache,
-      nowMs,
-      strategy: 0,
-    });
-    if (r.ok) {
-      transitOk = true;
-      fromCache = r.fromCache;
-      rawPlans = { status: "1", route: { transits: r.raw } };
-      amapTotal = r.raw.length;
-      strategiesUsed.push(0);
+  if (!chainMode) {
+    if (input.transitFixture) {
+      rawPlans = input.transitFixture;
+      amapTotal = (input.transitFixture.route?.transits ?? []).length;
+      // ★ §B.6 触发条件③：高德返回 **0 方案** = 异常 ⇒ 视为**不可用**（走降级）
+      transitOk = amapTotal > 0;
+      if (transitOk) strategiesUsed.push(0);
+    } else {
+      const r = await fetchTransitPlans({ lng: origin.lng, lat: origin.lat }, { lng: dest.lng, lat: dest.lat }, {
+        cache: makeTransitCacheIo(pool),
+        noCache: input.noCache,
+        nowMs,
+        strategy: 0,
+      });
+      if (r.ok) {
+        transitOk = true;
+        fromCache = r.fromCache;
+        rawPlans = { status: "1", route: { transits: r.raw } };
+        amapTotal = r.raw.length;
+        strategiesUsed.push(0);
+      }
     }
   }
   const transitMs = Date.now() - tTransit;
@@ -367,13 +408,29 @@ export async function planNav(pool: Pool, input: NavInput): Promise<NavOutput> {
     }
   }
 
-  // ⑤ 本地候选（**请求期现场枚举**；补漏来源 + 降级引擎共用同一实现）。
-  //    已删除原「只读离线表 `shadow_diff_report`」路径（口径变更 2026-09-19，见文件头）。
+  // ⑤ 候选
+  //   · chain 模式：**按用户站链约束**现场生成（段 = 用户指定 board/alight/routes，07 §2.2）；
+  //   · 否则：**请求期现场枚举**（补漏来源 + 降级引擎共用同一实现）。
+  //     （已删除原「只读离线表 `shadow_diff_report`」路径，口径变更 2026-09-19，见文件头。）
   let localSource: NavStats["localSource"] = "none";
   let localCandidates: StationPath[] = [];
-  if (geo.length) {
-    localCandidates = searchStationPaths(st.routeIdx, geo, fromWgs, toWgs, { maxCandidates: 240 });
+  let localSeeds: OptionSeed[] = [];
+  if (chainMode && chain) {
+    const chainCands = chainToCandidates(chain, st.routeIdx, origin, dest);
+    localSeeds = candidatesToSeeds(chainCands, { planIdBase: 900_000, fromSlug, toSlug });
+    localSource = chainCands.length ? "inline" : "none";
+  } else if (geo.length) {
+    localCandidates = searchStationPaths(st.routeIdx, geo, fromWgs, toWgs, {
+      maxCandidates: 240,
+      anchorFromMain,
+      anchorToMain,
+    });
     localSource = "inline";
+    localSeeds = candidatesToSeeds(pathsToCandidates(localCandidates, origin, dest), {
+      planIdBase: 900_000,
+      fromSlug,
+      toSlug,
+    });
   }
 
   // ── 组装 OptionSeed（两来源一次性喂 fetchLive）──
@@ -384,9 +441,6 @@ export async function planNav(pool: Pool, input: NavInput): Promise<NavOutput> {
     const opt = amapPlanToSeed(s, { planId: i + 1, summary, fromSlug, toSlug, crossBorder: false });
     if (opt) amapSeeds.push({ seed: s, opt });
   }
-
-  const localNavCands = pathsToCandidates(localCandidates, origin, dest);
-  const localSeeds = candidatesToSeeds(localNavCands, { planIdBase: 900_000, fromSlug, toSlug });
 
   const allSeeds = [...amapSeeds.map((a) => a.opt!).filter(Boolean), ...localSeeds];
 
@@ -399,7 +453,7 @@ export async function planNav(pool: Pool, input: NavInput): Promise<NavOutput> {
     lrtPre: st.lrtPre,
   });
   const liveMs = Date.now() - tLive;
-  const baseCtx = contextFor(st, nowMs, zone, batch.live);
+  const baseCtx = { ...contextFor(st, nowMs, zone, batch.live), tierOverride };
 
   // ⑦ 建模
   const tModel = Date.now();
@@ -407,6 +461,8 @@ export async function planNav(pool: Pool, input: NavInput): Promise<NavOutput> {
   /** ★ P2-a：保留 `modelOption` 的 `alts`（本班之外的后续班次），排序后按旧口径回填 `altBuses` */
   const modeled: ModeledOption[] = [];
   const amapItems: RankedItem[] = [];
+  /** ★ v2.3.0（A3）：并行线 sibling 的后续班次（按主干线 planId 归并）——不单独出卡 */
+  const siblingAlts: { parentPlanId: number; route: string; alts: AltBusView[] }[] = [];
   for (const { seed, opt } of amapSeeds) {
     if (!opt) continue;
     const ctx = {
@@ -420,6 +476,14 @@ export async function planNav(pool: Pool, input: NavInput): Promise<NavOutput> {
     provenance[opt.key] = prov;
     modeled.push(modeled1);
     amapItems.push({ card: modeled1.card, origin: "amap", key: opt.key, seed, provenance: prov });
+
+    // ★ v2.3.0（A3）：段内并行线各建模一次（**仅取 alts**，不进 items/排序/展示）
+    if (opt.segments[0]?.parallelRoutes?.length) {
+      for (const sib of siblingSeedsOf(opt, st.routeIdx)) {
+        const mSib = modelOption(sib.seed, ctx);
+        if (mSib) siblingAlts.push({ parentPlanId: opt.planId, route: sib.route, alts: mSib.alts });
+      }
+    }
   }
 
   // 本地（**P1-4**：首末步行走 `walk_cache`（未命中 → 直线×1.5），不再落 `walkIdx` 的全局均值）
@@ -430,7 +494,10 @@ export async function planNav(pool: Pool, input: NavInput): Promise<NavOutput> {
   for (const lseed of localSeeds) {
     const ctx = {
       ...baseCtx,
-      walkResolver: makeCacheWalkResolver(lseed, fromWgs, toWgs, geoOf, walkCache, st.routeIdx.nameOf),
+      walkResolver: withWalkOverride(
+        makeCacheWalkResolver(lseed, fromWgs, toWgs, geoOf, walkCache, st.routeIdx.nameOf),
+        chainMode ? input.walk : undefined,
+      ),
     };
     const modeled1 = modelOption(lseed, ctx);
     if (!modeled1) continue;
@@ -454,13 +521,18 @@ export async function planNav(pool: Pool, input: NavInput): Promise<NavOutput> {
   }
 
   // ⑧ 合并 + 排序
+  //   ★ chain 模式：站链由用户显式指定 ⇒ **不过本地补漏质量闸门**（覆盖度/补漏语义不适用），
+  //     直接把链候选送入统一排优；缺省模式仍走 `mergeSources` 闸门（口径不变）。
   const rankedLocal = rankItems(localItems);
-  const merged = mergeSources(amapItems, rankedLocal, {});
+  const merged = chainMode
+    ? { items: rankedLocal, dropped: [] as { key: string; reason: string }[], localCap: Number.POSITIVE_INFINITY }
+    : mergeSources(amapItems, rankedLocal, {});
   const ranked = rankItems(merged.items);
   const cards = ranked.slice(0, limit).map((r) => r.card);
 
   // ★ P2-a：回填「本班之外的后续班次」（**逐字复用旧 `service.ts` v1.1.5 口径**）
-  backfillAltBuses(cards, modeled);
+  //   ★ v2.3.0（A3）：并行线 sibling 的 alts 一并合并（按 route 分组）
+  backfillAltBuses(cards, modeled, siblingAlts);
   const modelMs = Date.now() - tModel;
 
   // ── 空状态原因（§11.4）──
@@ -468,7 +540,10 @@ export async function planNav(pool: Pool, input: NavInput): Promise<NavOutput> {
   let nearbyWalkMin: number | undefined;
   if (cards.length === 0) {
     const straightM = haversineM(fromWgs, toWgs);
-    if (straightM < 400) {
+    if (chainMode) {
+      // 自定义站链：不算「太近」；无候选 = 该链当前无实时/无解
+      emptyReason = batch.live.size === 0 ? "no_live" : "no_candidate";
+    } else if (straightM < 400) {
       emptyReason = "too_close";
       // ★ 纯步行建议：直线 → 短距修正（无高德几何时）→ ÷84（常速基准分钟）
       const corrected = fixWalkDistance(straightM, null).correctedM;
@@ -483,7 +558,8 @@ export async function planNav(pool: Pool, input: NavInput): Promise<NavOutput> {
     toSlug,
     cards,
     colors: st.routeColors,
-    degraded: !transitOk,
+    // ★ chain 模式未调高德（是既定路径，非失败）⇒ 不标「本地推算」降级
+    degraded: !transitOk && !chainMode,
     emptyReason,
     nearbyWalkMin,
     provenance,
@@ -501,6 +577,7 @@ export async function planNav(pool: Pool, input: NavInput): Promise<NavOutput> {
       localKept: merged.items.filter((i) => i.origin === "local").length,
       localSource,
       strategiesUsed,
+      chainMode,
       liveMs,
       modelMs,
       ms: Date.now() - tAll,
@@ -518,15 +595,29 @@ export const NEUTRAL_LOCAL_LABEL = LOCAL_SUMMARY;
  * 规则：阈值 = **最后一张卡**的总时长；只列 `totalMin ≤ 阈值` 的后续班次
  *   （用户口径：坐这一班的车，门到门总时长**不差于第 N 张卡**才值得列）。
  * ⚠️ `modelOption` 内部已按 `loSec` 去重并排除本班（v1.1.6）—— 此处**不重复**该逻辑。
- * 独立成函数便于**单测**（数据不足时真实链路可能一条 alts 都没有）。
+ *
+ * ★ v2.3.0（A3）：`siblings` = 该卡首段**并行线**的后续班次（由 `siblingSeedsOf` 独立建模、
+ *   不单独出卡）。合并顺序 = 主干线 → 各并行线（`parallelRoutes` 原序），每条已带 `route`
+ *   ⇒ 前端按 `route` 分组列出。阈值筛选对每一组同样生效（口径不变）。
  */
-export function backfillAltBuses(cards: RecommendCard[], modeled: ModeledOption[]): void {
+export function backfillAltBuses(
+  cards: RecommendCard[],
+  modeled: ModeledOption[],
+  siblings: { parentPlanId: number; route: string; alts: AltBusView[] }[] = [],
+): void {
   if (!cards.length) return;
   const threshold = cards[cards.length - 1].totalMin;
   const topSet = new Set(cards);
   for (const m of modeled) {
     if (!topSet.has(m.card)) continue;
-    const keep = m.alts.filter((a) => a.totalMin <= threshold + 1e-9);
-    if (keep.length) m.card.altBuses = keep;
+    const byThreshold = (a: AltBusView) => a.totalMin <= threshold + 1e-9;
+    // 本线（主干线）后续
+    const groups: AltBusView[] = m.alts.filter(byThreshold);
+    // 并行线后续（按首段 parallelRoutes 原序；各线已按 totalMin 升序）
+    for (const pr of m.card.rides[0]?.parallelRoutes ?? []) {
+      const sib = siblings.find((s) => s.parentPlanId === m.card.planId && s.route === pr);
+      if (sib) groups.push(...sib.alts.filter(byThreshold));
+    }
+    if (groups.length) m.card.altBuses = groups;
   }
 }

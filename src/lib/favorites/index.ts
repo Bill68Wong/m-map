@@ -5,6 +5,7 @@
  */
 export * from "./types";
 export * from "./storage";
+export { SEED_VERSION, buildDefaultComboSeeds, type SeedPlaceCoord } from "./presets";
 export {
   addFavorite,
   removeFavorite,
@@ -16,3 +17,19 @@ export {
   makePlanFavorite,
   type AddResult,
 } from "./useFavorites";
+export {
+  /** ★ v2：组合 → 组合下方案（两级模型，v2.3.0） */
+  addCombo,
+  removeCombo,
+  updateCombo,
+  togglePinCombo,
+  touchCombo,
+  addPlanToCombo,
+  removePlanFromCombo,
+  updateComboPlan,
+  makeCombo,
+  makeComboPlan,
+  seedDefaultCombos,
+  subscribeCombos,
+  type UseCombos,
+} from "./useCombos";

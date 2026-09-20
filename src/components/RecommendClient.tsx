@@ -9,13 +9,16 @@
  * 刷新语义：`force=1` 穿透服务端 10s 缓存直算；未刷新时同一方向的重复进入会命中缓存（体感即时）。
  *
  * 页脚：合规声明摘要 + 「關於」链接（四条红线的落地见 /about；推荐属派生值，必须注明算法）。
+ *
+ * ★ 修复包 v2.2.1（第 2 条 / 第 5 条）：
+ *   · 「查看全部路线 → `/routes`」入口**已移除**（`/routes` 冻结、仍可直达，代码未删）；
+ *   · `DevModeToggle` 门把手**不再渲染**（组件文件与逻辑保留）；
+ *   · 页脚「估算」字样改为「推算」（**不删该披露句** —— 条款 #7 要求说明计算方法）。
  */
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import DevModeToggle from "./DevModeToggle";
 import RecommendCards from "./RecommendCards";
 import Icon from "./ui/Icon";
-import { useDevMode } from "@/lib/dev-mode";
 import type { RecommendCard, SchoolZone } from "@/lib/recommend/types";
 
 interface Payload {
@@ -78,7 +81,6 @@ export default function RecommendClient({
   fromLabel,
   toLabel,
   zone,
-  authed,
   initial,
 }: {
   fromSlug: string;
@@ -86,13 +88,10 @@ export default function RecommendClient({
   fromLabel: string;
   toLabel: string;
   zone: SchoolZone | null;
-  /** ★ v1.1.10：是否已过口令门 —— 开发者入口只对已登录者渲染（本页对公众公开） */
+  /** 保留（原开发者入口已停用；`/recommend/page.tsx` 仍按原契约传入） */
   authed: boolean;
   initial: Payload;
 }) {
-  const devModeRaw = useDevMode();
-  // 只在已登录时开发者模式才「生效」（开关本身对公众不渲染）
-  const devMode = devModeRaw && authed;
   const [data, setData] = useState<Payload>(initial);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -181,21 +180,9 @@ export default function RecommendClient({
         missed={data.missed}
       />
 
-      {devMode && (
-        <div className="rc-devbar">
-          {/* v1.0.0：旧「全部路線」列表带上门禁（DevGate），这里把方向参数一并带上 */}
-          <Link
-            href={`/routes?from=${encodeURIComponent(fromSlug)}&to=${encodeURIComponent(toSlug)}`}
-            className="btn btn--outline btn--sm"
-          >
-            查看全部路线（含第 6 名以后）→
-          </Link>
-        </div>
-      )}
-
       <footer className="rc-footer">
         <p>
-          行驶时间为站间实测统计、步行时间为实测样本均值、轻轨按表定逐跳 2 分钟估算 —— 均可能有误差，
+          行驶时间为站间实测统计、步行时间为实测样本均值、轻轨按表定逐跳 2 分钟推算 —— 均可能有误差，
           请以现场为准。跨境行程不计通关时间。
         </p>
         <p>
@@ -204,11 +191,6 @@ export default function RecommendClient({
           <Link href="/about" className="link-hit">
             关于本专案与数据说明
           </Link>
-        </p>
-        <p>
-          {/* ★ v1.1.11：开关**始终可见**（用户口径「开启开发者模式才需要密钥」）。
-              未登录时点它 → /login；登录后即可正常开/关。与首页共用同一组件，行为一致。 */}
-          <DevModeToggle authed={authed} />
         </p>
       </footer>
     </main>

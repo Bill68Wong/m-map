@@ -1,40 +1,37 @@
 "use client";
 
 /**
- * 首页（v1.0.0：方向卡直达自动选线结果）
+ * 旧首页（v1.0.0：方向卡直达自动选线结果）—— 现由 `/commute` 承载
  *
  * v0.13.x → v1.0.0 的入口变更：点方向卡不再进「路线选择页」，而是直接进
  * `/recommend`，由服务端在 2 秒内算出**最快 5 条门到门路线**，首页卡片即最终产物。
- *   · 选方向 → 看最快路线（默认路径）
- *   · 开发者模式开启时，`/recommend` 页底出现「查看全部路線」→ 旧 `/routes`（保留未删、带门禁）
  *
- * 座区在这里选（`<ZonePicker/>`，全站唯一入口）：下车后走到 B/C、N/O、R 哪一座，
- * 步行时间差得远，所以它是**必要输入**，随方向卡一起带进 `/recommend`。
+ * ★ 修复包 v2.2.1（第 5 条 · 停用清理）：
+ *   · **移除全部旧功能入口**（通勤记录 `/records` · 统计 `/stats` · 自由记站 `/free` ·
+ *     继续计时 `/timer/*`）—— 这些页面已冻结（仍可直达，代码未删）；
+ *   · **停止渲染 `DevModeToggle`**（组件文件与逻辑保留，只是不在任何页面出现）。
+ *
+ * 座区在这里选（`<ZonePicker/>`）：下车后走到 B/C、N/O、R 哪一座，步行时间差得远，
+ * 所以它是**必要输入**，随方向卡一起带进 `/recommend`。
  */
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import DevModeToggle from "./DevModeToggle";
 import ZonePicker, { useZone } from "./ZonePicker";
-import Icon from "./ui/Icon";
-import { useDevMode } from "@/lib/dev-mode";
 import { HOME_SLUG, PAIR_ORDER, PLACE_SHORT, dirLabel, type PlanRow, type ActiveSession } from "@/lib/home-plans-shared";
 
 export default function HomeClient({
   plans,
-  active,
   dbError,
-  authed,
 }: {
   plans: PlanRow[];
+  /** 保留（`/commute` 仍按原契约传入）；本页已不再展示「继续计时」入口 */
   active: ActiveSession | null;
   dbError: string | null;
-  /** ★ v1.1.10：是否已过口令门 —— 开发者入口只对已登录者渲染（公众看到的是纯推荐功能） */
+  /** 保留（原开发者入口已停用） */
   authed: boolean;
 }) {
   const router = useRouter();
   const [zone, setZone] = useZone();
-  /** ★ v1.1.11：数据入口按「开发者模式」显示（开关未登录时会先引导去登录） */
-  const devMode = useDevMode();
 
   if (dbError) {
     return (
@@ -109,32 +106,6 @@ export default function HomeClient({
         </p>
       </header>
 
-      {active && (
-        <button
-          className="press-card press-card--ok anim-pop"
-          onClick={() => router.push(`/timer/${active.id}`)}
-          style={{ marginBottom: 16, minHeight: 68 }}
-        >
-          <span className="icon-badge">
-            <Icon name="play" size={20} />
-          </span>
-          <span style={{ flex: 1, minWidth: 0, textAlign: "left" }}>
-            <span className="h-title" style={{ display: "block" }}>
-              继续进行中的计时
-            </span>
-            <span
-              className="t-label"
-              style={{ display: "block", opacity: 0.85, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-            >
-              {active.summary}
-            </span>
-          </span>
-          <span aria-hidden style={{ opacity: 0.7 }}>
-            <Icon name="forward" size={20} />
-          </span>
-        </button>
-      )}
-
       {/* v0.13.x：方向对分行 —— 左去程（擎天匯→地点）、右回程（地点→擎天匯） */}
       <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
         {rows.map((r) => (
@@ -154,45 +125,10 @@ export default function HomeClient({
         ))}
       </div>
 
-      {/* 座区：全站唯一选择入口（影响涉及澳科大的方向） */}
+      {/* 座区：影响涉及澳科大的方向 */}
       <div style={{ marginTop: 22 }}>
         <ZonePicker value={zone} onChange={setZone} />
       </div>
-
-      {/* ★ v1.1.10：以下入口指向**口令保护区**（記錄/統計/自由記站）。
-          ★ v1.1.11 改口径（用户 2026-09-17）：「开启开发者模式才需要密钥」——
-            所以这些入口不再按「已登录」藏，而是按**开发者模式**显示：
-            公众看到的开关点了会去登录页；登录后打开开关，这些入口才出现。 */}
-      {devMode && authed && (
-        <>
-          <div style={{ display: "flex", gap: 8, marginTop: 22 }}>
-            <button
-              className="btn btn--outline btn--sm"
-              onClick={() => router.push("/records")}
-              style={{ flex: 1, minHeight: 44, fontWeight: 500 }}
-            >
-              <Icon name="records" size={20} />
-              通勤记录
-            </button>
-            <button
-              className="btn btn--outline btn--sm"
-              onClick={() => router.push("/stats")}
-              style={{ flex: 1, minHeight: 44, fontWeight: 500 }}
-            >
-              <Icon name="stats" size={20} />
-              通勤統計
-            </button>
-          </div>
-          <button
-            className="btn btn--outline btn--sm"
-            onClick={() => router.push("/free")}
-            style={{ width: "100%", minHeight: 44, fontWeight: 500, marginTop: 8 }}
-          >
-            <Icon name="timer" size={20} />
-            自由记站（实测站间时长）
-          </button>
-        </>
-      )}
 
       <div
         className="t-label t-muted"
@@ -206,9 +142,6 @@ export default function HomeClient({
           opacity: 0.9,
         }}
       >
-        {/* ★ v1.1.11：开关**始终可见** —— 它同时是通往登录页的入口。
-            未登录时点它 → /login；登录后即可正常开/关。 */}
-        <DevModeToggle authed={authed} />
         <p style={{ margin: 0 }}>
           数据来源：澳门交通事务局 ·{" "}
           {/* ★ v1.1.7：纯文字链接原热区仅 ~20px 高，走路时基本点不中 → .link-hit 撑到 44px */}

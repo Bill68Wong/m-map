@@ -18,10 +18,8 @@ import { useRouter } from "next/navigation";
 import { LrtEtaInline } from "@/components/LrtEta";
 import RouteStack from "@/components/RouteStack";
 import Icon from "@/components/ui/Icon";
-import { macauClock, Row, TierBadge } from "@/components/RoutePieces";
-import CardDevActions from "./CardDevActions";
+import { EtaText, macauClock, Row, TierBadge } from "@/components/RoutePieces";
 import StationStrip from "./StationStrip";
-import { useDevMode } from "@/lib/dev-mode";
 import { lineNameOf } from "@/lib/route-label";
 import { DEFAULT_ZONE, SCHOOL_ZONES, type CardDetailPayload, type SchoolZone } from "@/lib/recommend/types";
 
@@ -32,7 +30,6 @@ export default function CardDetailClient({
   toLabel,
   zone,
   rank,
-  authed,
   initial,
   error,
 }: {
@@ -42,13 +39,12 @@ export default function CardDetailClient({
   toLabel: string;
   zone: SchoolZone | null;
   rank?: number;
-  /** ★ v1.1.10：是否已过口令门 —— 「開始計時」按钮只对已登录者渲染 */
+  /** 保留（原「開始計時」入口已停用；`/card/page.tsx` 仍按原契约传入） */
   authed: boolean;
   initial: CardDetailPayload | null;
   error: string | null;
 }) {
   const router = useRouter();
-  const devMode = useDevMode();
   const [data, setData] = useState<CardDetailPayload | null>(initial);
   const [err, setErr] = useState<string | null>(error);
   const [openFold, setOpenFold] = useState(false);
@@ -179,8 +175,9 @@ export default function CardDetailClient({
           dot="walk"
           main={
             <>
-              步行 <b>{card.walkOut.minutes}</b> 分 → {card.walkOut.toLabel}
-              {card.walkOut.estimated && <span className="rc-est">估算</span>}
+              步行{" "}
+              <b className={card.walkOut.estimated ? "rc-val--est" : undefined}>{card.walkOut.minutes}</b> 分 →{" "}
+              {card.walkOut.toLabel}
               {first?.tierHint && <span className="rc-sub">（{first.tierHint}）</span>}
             </>
           }
@@ -192,7 +189,7 @@ export default function CardDetailClient({
               在 <b>{first?.boardLabel ?? card.walkOut.toLabel}</b> 上车
               <span className="rc-sub">
                 （站台 {first?.board ?? "—"} ·{" "}
-                {card.walkOut.samples ? `步行样本 ${card.walkOut.samples} 次` : "步行为估算"}）
+                {card.walkOut.samples ? `步行样本 ${card.walkOut.samples} 次` : "步行为兜底值"}）
               </span>
             </>
           }
@@ -203,7 +200,7 @@ export default function CardDetailClient({
       <section className="rc-block rc-fold">
         <h2 className="rc-block__title">本班车</h2>
 
-        {/* 本班：始终显示、字号更大 */}
+        {/* 本班：始终显示、字号更大（★ 报站站数加粗 + 青花蓝；乘车分钟取整） */}
         {first && (
           <div className="rc-fold__first">
             <RouteStack codes={[first.route]} colorOf={colorOf} />
@@ -217,12 +214,18 @@ export default function CardDetailClient({
                   directionName={null}
                 />
               ) : (
-                <span className="rc-fold__live">{first.liveText || `等 ${first.waitMin} 分`}</span>
+                <span className="rc-fold__live">
+                  <EtaText text={first.liveText || `等 ${first.waitMin} 分`} />
+                </span>
               )}
               <TierBadge tier={first.tier} tierText={first.tierText} />
             </div>
             <p className="rc-fold__meta">
-              {first.boardLabel} → {first.alightLabel} · 车上 <b>{first.minutes}</b> 分
+              {first.boardLabel} → {first.alightLabel} · 车上{" "}
+              {/* ★ B5.2：规约见 `types.ts:416` —— 轻轨段豁免取整（有 rideSecText 用秒级串），巴士段照常取整 */}
+              <b>
+                {first.kind === "lrt" && first.rideSecText ? first.rideSecText : `${Math.round(first.minutes)} 分`}
+              </b>
             </p>
           </div>
         )}
@@ -311,8 +314,8 @@ export default function CardDetailClient({
             /* ★ 【3】下车步行引导：**下车站编号 站名 → 目的地**（原为「步行 → 下车站编号」）。
                `card.walkIn.toLabel` = 下车站带名标签；`toLabel` = 目的地名。繁体站名 + 简体连接词。 */
             <>
-              步行 <b>{card.walkIn.minutes}</b> 分
-              {card.walkIn.estimated && <span className="rc-est">估算</span>}
+              步行{" "}
+              <b className={card.walkIn.estimated ? "rc-val--est" : undefined}>{card.walkIn.minutes}</b> 分
               {" → "}
               <b>{card.walkIn.toLabel}</b>
               {" → "}
@@ -323,8 +326,8 @@ export default function CardDetailClient({
         />
       </section>
 
-      {/* ⑥ 开发者模式按钮（计时入口） */}
-      {devMode && authed && <CardDevActions card={card} zone={zone} />}
+      {/* ⑥ 计时入口已停用（修复包 v2.2.1 第 5 条）：`/timer` 已冻结、`DevModeToggle` 不再渲染，
+          故此处不再挂 `CardDevActions`（组件文件与逻辑保留）。 */}
 
       <footer className="rc-footer">
         <p>

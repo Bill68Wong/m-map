@@ -27,7 +27,9 @@ import { mainCodeOf } from "@/lib/recommend/segment-lookup";
 import type { RouteIndex } from "@/lib/recommend/types";
 import { segmentsOf } from "@/lib/recommend/enumerate";
 import { normalizeName } from "@/lib/shared/normalize";
+import { anchorMainFor } from "./anchor";
 import type { AmapPlanLeg, AmapStop, StationConfidence } from "./types";
+import type { GeoStation } from "./graph-search";
 
 // ─────────────────────────── 站映射 ───────────────────────────
 
@@ -85,9 +87,14 @@ export async function loadStationMap(pool: Pool): Promise<StationMap> {
 
 /** 高德站（可带 id）→ 我们主码；映射不到返回 null */
 export function bridgeStop(map: StationMap, stop: { id?: string; name?: string }): string | null {
-  if (stop.id && map.byId.has(stop.id)) return map.byId.get(stop.id)!.main;
+  return bridgeStopMeta(map, stop)?.main ?? null;
+}
+
+/** 高德站（可带 id）→ 映射**行**（含 `verified`/`confidence`）；用于 §3.7 二次加固判「是否人工确认」 */
+export function bridgeStopMeta(map: StationMap, stop: { id?: string; name?: string }): StationMapping | null {
+  if (stop.id && map.byId.has(stop.id)) return map.byId.get(stop.id)!;
   const nm = normalizeName(stop.name ?? "");
-  if (nm && map.byName.has(nm)) return map.byName.get(nm)!.main;
+  if (nm && map.byName.has(nm)) return map.byName.get(nm)!;
   return null;
 }
 
@@ -139,6 +146,8 @@ export interface BridgeContext {
   map: StationMap;
   validRoutes: Set<string>;
   routeIdx: RouteIndex;
+  /** ★ v2.3.0：站点地理（WGS84，`loadStationGeoCached()`）—— 供 §3.7 同名站二次加固 */
+  geo: GeoStation[];
 }
 
 /** 主码与载具种类是否一致（轻轨码统一 `LRT-` 前缀）——防止「LRT 站误配到巴士站码」
@@ -171,7 +180,20 @@ function mainKindOk(code: string, kind: "bus" | "lrt"): boolean {
 export function bridgeLeg(ctx: BridgeContext, leg: AmapPlanLeg): AmapPlanLeg {
   const mappedRoute = routeCodeOf(leg.amapLineName, leg.kind, ctx.validRoutes);
   let mappedBoard = bridgeStop(ctx.map, leg.amapBoard);
-  let mappedAlight = bridgeStop(ctx.map, leg.amapAlight);
+  // ★ v2.3.0（07 §3.7-3 二次加固）：**下车锚站**优先取「同名站」（L1/L2 + L3 距离闸门）。
+  //   ⚠️ 仅当映射来自**自动**（未人工确认）或未映射时才覆盖 —— **人工确认行优先**，
+  //      绝不推翻 `station_amap_map` 的 curated 映射（防回归）。
+  const metaAlight = bridgeStopMeta(ctx.map, leg.amapAlight);
+  let mappedAlight = metaAlight?.main ?? null;
+  if (!metaAlight || !metaAlight.verified) {
+    const hit = anchorMainFor(
+      { label: leg.amapAlight.name, lng: leg.amapAlight.lng, lat: leg.amapAlight.lat },
+      ctx.geo,
+      ctx.routeIdx,
+      leg.kind,
+    );
+    if (hit) mappedAlight = hit.main;
+  }
   // ★ 种类一致性护栏：LRT 腿必须映到 `LRT-` 站、巴士腿必须映到非 LRT 站
   //   （实测：T01 自动映射把高德轻轨站最近邻到了 60m 内的巴士站 C651 ⇒ 若放行，
   //     `segmentsOf` 解不出逐跳 + 上下车站标签错 ⇒ 宁可判「未映射」回落高德时长）
@@ -184,7 +206,20 @@ export function bridgeLeg(ctx: BridgeContext, leg: AmapPlanLeg): AmapPlanLeg {
     if (seg && seg.segs.length) mappedHops = seg.segs;
   }
 
-  return { ...leg, mappedRoute, mappedBoard, mappedAlight, mappedHops };
+  // ★ v2.3.0（B2）：同段并行线 —— 其余高德线路名 → 本库线码（**必须 `valid.has` 才认**）；
+  //   去重、剔除主干线自身；映射不出（null）则不填（宁少不误）。
+  const parallelRoutes = dedupe(
+    (leg.parallelNames ?? [])
+      .map((n) => routeCodeOf(n, leg.kind, ctx.validRoutes))
+      .filter((c): c is string => !!c),
+  ).filter((c) => c !== mappedRoute);
+
+  return { ...leg, mappedRoute, mappedBoard, mappedAlight, mappedHops, parallelRoutes };
+}
+
+/** 去重（保序） */
+function dedupe(arr: string[]): string[] {
+  return [...new Set(arr)];
 }
 
 /** 该腿是否「可用我们的数据重算」（三要素齐 + 逐跳可解） */

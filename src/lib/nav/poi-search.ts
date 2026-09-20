@@ -223,10 +223,14 @@ export async function searchAmap(query: string, opts: SuggestOptions = {}): Prom
  *
  * @param query 用户输入
  * @param opts.mode `type` = 打字（纯本地，0 配额）/ `enter` = 回车（本地优先 + 高德兜底）
+ * @param opts.forceAmap ★ 修复包 v2.2.1-B7：**强制走高德**（跳过「本地已有带坐标命中就短路」）——
+ *   供「点搜索确认」那条 pending 行使用：它的语义是「我要这条本地命中对应的**真实坐标**」，
+ *   而只要本地还有别的带坐标命中，旧逻辑就永不调高德 ⇒ 点击表现为**无任何反应**（FIX-10 根因）。
+ *   ⚠️ 仅在 `mode="enter"` 且调用方显式要求时生效（打字阶段绝不联网）。
  */
 export async function suggest(
   query: string,
-  opts: { mode: "type" | "enter" } & SuggestOptions,
+  opts: { mode: "type" | "enter"; forceAmap?: boolean } & SuggestOptions,
 ): Promise<PoiSuggestResponse> {
   const trimmed = (query ?? "").trim();
   const local = await suggestLocal(trimmed, opts);
@@ -238,10 +242,27 @@ export async function suggest(
   };
 
   if (opts.mode === "type") {
-    // 本地完全无命中（有坐标/无坐标都没有）且输入 ≥2 字符 → 灰字提示「按回车搜」
+    // 本地完全无命中（有坐标/无坐标都没有）且输入 ≥2 字符 → 灰字提示「按搜索」
     if (!local.results.length && !local.pending.length && trimmed.length >= 2) {
       resp.hint = "no_local_then_enter";
       resp.hintText = HINT_NO_LOCAL_ENTER;
+    }
+    return resp;
+  }
+
+  // ── ★ B7：强制高德（跳过本地短路）──
+  if (opts.forceAmap) {
+    const forced = await searchAmap(trimmed, opts);
+    resp.amapCircuitOpen = forced.circuitOpen;
+    resp.quotaConsumed = forced.quotaConsumed;
+    if (forced.results.length) {
+      // 高德结果**置前**（调用方要的就是它），本地结果保留在后但不再遮挡；
+      // 同名 pending 行已由高德给出坐标 → 移出 pending，避免下拉里再出现一行「点搜索确认」。
+      resp.results = [...forced.results, ...local.results];
+      resp.pending = local.pending.filter((p) => !forced.results.some((r) => r.name === p.name));
+    } else {
+      resp.hint = "amap_empty";
+      resp.hintText = HINT_AMAP_EMPTY;
     }
     return resp;
   }

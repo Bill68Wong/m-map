@@ -21,7 +21,7 @@ import Icon from "@/components/ui/Icon";
 import NavMap from "./NavMap";
 import StepSheet, { queryOf } from "./StepSheet";
 import StationCard, { type StationCardStation } from "./StationCard";
-import { useFavorites } from "@/lib/favorites/useFavorites";
+import { useCombos } from "@/lib/favorites/useCombos";
 import type { NavPoint } from "@/lib/nav/types";
 
 const MY_LOCATION = "我的位置";
@@ -52,7 +52,7 @@ export default function NavShell({ jsKey, colors = {}, initialFrom = null, initi
   /** 重新定位触发计数（右上定位按钮） */
   const [locateTick, setLocateTick] = useState(0);
   const centerProbeRef = useRef<CenterProbe | null>(null);
-  const favs = useFavorites();
+  const favs = useCombos();
 
   const onLocate = useCallback((pos: { lng: number; lat: number } | null) => setUserPos(pos), []);
   const onStationClick = useCallback((s: StationCardStation) => setStation(s), []);
@@ -100,7 +100,13 @@ export default function NavShell({ jsKey, colors = {}, initialFrom = null, initi
     router.push(`/nav?${queryOf(fromPoint, to)}`);
   }
 
-  const quickPairs = favs.mounted ? favs.places.slice(0, 3) : [];
+  /** ★ S2：常用 = **收藏组合**（排除已停用），按最近使用取前 3 */
+  const quickPairs = favs.mounted
+    ? [...favs.combos]
+        .filter((c) => !c.disabled)
+        .sort((a, b) => (b.lastUsedAt ?? b.updatedAt) - (a.lastUsedAt ?? a.updatedAt))
+        .slice(0, 3)
+    : [];
 
   return (
     <section className="nav-shell nav-shell--full">
@@ -201,6 +207,8 @@ export default function NavShell({ jsKey, colors = {}, initialFrom = null, initi
             onGo={go}
             going={picking}
             canGo={canGo}
+            /* ★ B6：下拖超阈值 / Esc → 关闭弹层（弹层自己不做状态机，只上报） */
+            onDismiss={() => setSheetOpen(false)}
           />
         </>
       )}

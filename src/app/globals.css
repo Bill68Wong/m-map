@@ -2290,14 +2290,21 @@ button[aria-disabled="true"] {
 .nav-inline-err {
   color: var(--error);
 }
+/**
+ * 「本地补充」来源徽章（修复包 v2.2.1-B3 / 08 §A.2b 三处必改）
+ * ① 用字：`其他組合` → `本地补充`（JSX 里改，含繁体「組」违反简体铁律）
+ * ② 圆角：`--r-pill` → `--radius-chip`（pill 只留给圆点/头像）
+ * ③ 配色：灰底灰字 → **青花蓝**底字 —— 与「来自高德」的**灰底**形成「我们的 / 别家的」对照
+ * ⚠️ 类名 `.rc-badge-local` 与 `origin === "local"` 判定**不变**（不动 JSX 结构）
+ */
 .rc-badge-local {
-  font-size: var(--fs-mini);
-  font-weight: 600;
-  padding: 1px 7px;
-  border-radius: var(--r-pill);
-  background: var(--surface-dim);
-  color: var(--on-surface-var);
-  box-shadow: var(--hairline-inset);
+  font-size: var(--text-xs);
+  font-weight: var(--fw-emphasize);
+  padding: 2px 8px;
+  border-radius: var(--radius-chip);
+  background: var(--accent-soft);
+  color: var(--accent);
+  letter-spacing: var(--tracking-mono);
 }
 .rc-strips {
   display: flex;
@@ -3016,6 +3023,304 @@ button[aria-disabled="true"] {
 }
 .is-busy {
   opacity: 0.6;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   ★ 修复包 v2.2.1 第二批 · 新增样式（B1 / B2 / B4）
+   ══════════════════════════════════════════════════════════════════ */
+
+/* ── B1：推算值的【独立标示】= 弱化样式（灰字），不含任何文字标记 ──
+   合规要求「推算值与实测值须可区分」，最终口径要求不出现「估算/预估」字样 ⇒ 用灰度区分。
+   与全站既有口径一致：灰 = 系统推算，实色 = 实测/确知。 */
+.rc-val--est {
+  color: var(--muted);
+}
+
+/* ── B2：线路标签「分段 / 并列」（03 §G.2 解法 A + §G.4） ── */
+.route-stack {
+  flex-wrap: wrap;
+  row-gap: 4px;
+  /* 组胶囊自带圆角，外层不再裁剪（否则多段换行时会被切） */
+  overflow: visible;
+}
+.route-stack__group {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+/* 多码并列 = **墨色组胶囊承底** + 白斜杠（白斜杠落在墨色上，白底卡片也清晰可见） */
+.route-stack__group--multi {
+  background: var(--fg);
+  border-radius: var(--radius-group);
+  padding: 3px;
+}
+/* ★ 组内禁用旧斜切（§G.3 反例：斜切梯形）；码回归干净的圆角矩形 */
+.route-stack__group .route-stack__seg {
+  clip-path: none;
+  margin-right: 0;
+  border-radius: var(--radius-chip);
+  padding: 3px 8px;
+  font-size: 12px;
+}
+/* 白斜杠：左右各留 2px，避免与色块糊连（§G.3） */
+.route-stack__slash {
+  color: #fff;
+  opacity: 0.92;
+  font-weight: 700;
+  font-size: 12px;
+  line-height: 1;
+  padding: 0 2px;
+}
+/* 段间「换乘箭头」：粗一档 + muted，两侧留 --space-2(8px)（§G.4） */
+.route-stack__arrow {
+  color: var(--muted);
+  font-weight: var(--fw-announce);
+  font-size: 13px;
+  line-height: 1;
+  padding: 0 var(--space-2);
+}
+/* 单段并列 >3 条 → 第 3 条起折叠为 `+N`（§G.4） */
+.route-stack__more {
+  color: #fff;
+  opacity: 0.92;
+  font-weight: 700;
+  font-size: 12px;
+  line-height: 1;
+  padding: 0 4px;
+}
+
+/* ── B4：多台站分组（站点卡；08 §D.2） ── */
+/* 分组容器 = 发丝线框 + --radius-card、**无阴影**（不做"卡中卡"的投影堆叠） */
+.st-group {
+  margin-top: var(--space-3);
+  padding: var(--space-2) var(--space-3) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+}
+.st-group__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin-bottom: 6px;
+}
+/* 子码 `T373/1`：等宽 + --meta；★ 此处的 `/` 是**分组号**的一部分，
+   绝不套线路标签的墨色组胶囊（08 §D.2）。 */
+.st-group__code {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: var(--fw-announce);
+  color: var(--meta);
+  letter-spacing: var(--tracking-mono);
+}
+.st-group__dir {
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+.st-group__fold {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: 44px;
+  margin-top: var(--space-2);
+  color: var(--accent);
+  font-size: var(--text-sm);
+  font-weight: var(--fw-emphasize);
+}
+.nav-station-card__code {
+  font-family: var(--font-mono);
+  font-weight: var(--fw-announce);
+  letter-spacing: var(--tracking-mono);
+}
+.nav-station-card__meta {
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+
+/* ── B6：目的地弹层（顶部锚点 / 近全宽 / 四角圆角 / 可拖 / 滚动隔离 / 桌面居中） ──
+   ★ 覆盖 S2 的旧 `.step-sheet`（旧写法高度由内容决定、贴底 ⇒ 输入框落在屏幕 ~58% 处）。 */
+.step-sheet {
+  top: var(--sheet-top, 14vh);
+  bottom: auto;
+  left: 12px;
+  right: 12px;
+  max-height: calc(100dvh - var(--sheet-top, 14vh) - var(--tabbar-h) - var(--safe-bottom) - 6px);
+  border-radius: var(--radius-sheet);
+  /* ★ 滚动隔离：弹层本身不做原生滚动，只有内容区滚（防"下拖被列表吃掉"） */
+  touch-action: none;
+  transition:
+    top var(--dur-base) var(--ease-standard),
+    transform var(--dur-base) var(--ease-standard);
+  will-change: transform;
+}
+/* 拖动中跟手（无过渡） */
+.step-sheet[data-dragging="on"] {
+  transition: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .step-sheet {
+    transition: none;
+  }
+}
+/* 拖拽把手区（grip + 头部）；grip 命中区 44×24（WCAG） */
+.step-sheet__handle {
+  touch-action: none;
+  cursor: grab;
+  flex: none;
+}
+.step-sheet__handle:active {
+  cursor: grabbing;
+}
+.step-sheet__grip {
+  width: 44px;
+  height: 24px;
+  margin: 2px auto 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border-radius: 0;
+}
+.step-sheet__grip::before {
+  content: "";
+  width: 36px;
+  height: 4px;
+  border-radius: var(--radius-full);
+  background: var(--border-2);
+}
+/* 结果行 ≥52px（≥44 命中区，08 §B.4） */
+.nav-sbox__row {
+  min-height: 52px;
+}
+/* 下拉区独立滚动 + iOS 惯性 + 滚动链不外溢 */
+.nav-sbox__drop {
+  touch-action: pan-y;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+/* ── 桌面（≥1024px）：**居中面板**而不是底部弹层（08 §B.2） ── */
+@media (min-width: 1024px) {
+  .step-sheet__scrim {
+    background: var(--fg);
+    opacity: 0.18; /* 桌面不做全屏压暗（地图常驻可交互） */
+  }
+  .step-sheet {
+    left: 50%;
+    right: auto;
+    /* ★ 用 `translate` 属性做居中：与拖拽用的 `transform` 互不覆盖 */
+    translate: -50% 0;
+    top: 96px !important;
+    width: 440px;
+    max-width: calc(100vw - 32px);
+    max-height: calc(100dvh - 200px);
+    box-shadow: var(--shadow-sheet);
+  }
+  .step-sheet__handle {
+    cursor: default; /* 桌面用 scrim 点击 / Esc 关闭，不需要拖 */
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   ★ S2（v2.3.0）：收藏「组合卡」+ 删除确认弹窗
+   ══════════════════════════════════════════════════════════════════ */
+
+/* 组合卡（08 §C.2）：10px 圆角 + 1.5px 主描边 + 硬投影；整卡可点 */
+.fav-combo {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-3) 0;
+  padding: var(--space-3);
+  border: var(--frame-w) solid var(--border-strong);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  box-shadow: var(--shadow-hard-sm);
+}
+.fav-combo.is-pinned {
+  background: var(--surface-2);
+}
+/* 停用态：去主描边与投影，整体降级为 meta 色（08 §C.2；排序沉底由列表页负责） */
+.fav-combo.is-off {
+  border-color: var(--border);
+  box-shadow: var(--shadow-none);
+}
+.fav-combo__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-align: left;
+  color: inherit;
+}
+.fav-combo__name {
+  font-size: var(--text-lg);
+  font-weight: var(--fw-emphasize);
+  letter-spacing: -0.005em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fav-combo.is-off .fav-combo__name {
+  color: var(--meta);
+}
+.fav-combo__od {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+.fav-combo__end {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fav-combo__summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+.fav-combo__off {
+  color: var(--meta);
+}
+
+/* 删除确认弹窗（复用 .dialog-backdrop / .dialog-card） */
+.fav-confirm__title {
+  margin: 0;
+  font-size: var(--text-xl);
+  font-weight: var(--fw-emphasize);
+  letter-spacing: var(--tracking-title);
+  color: var(--fg);
+}
+.fav-confirm__name {
+  margin: var(--space-2) 0 0;
+  font-weight: var(--fw-emphasize);
+  color: var(--fg);
+}
+.fav-confirm__impact {
+  margin: var(--space-2) 0 0;
+  line-height: var(--leading-body);
+  color: var(--muted);
+}
+.fav-confirm__acts {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+/* 危险主按钮（删除确认用；08 §C.2「危险按钮用 --danger」） */
+.btn--danger {
+  background: var(--danger);
+  color: #fff;
+  border: var(--frame-w) solid var(--danger);
+}
+.btn--danger:disabled {
+  opacity: 0.5;
 }
 
 

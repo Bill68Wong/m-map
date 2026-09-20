@@ -59,11 +59,12 @@
 import { PLACE_SHORT } from "@/lib/home-plans-shared";
 import { hhmmOf } from "@/lib/lrt/eta";
 import type { AmapPlanSeed, WalkResolver } from "@/lib/nav/types";
-import { pickCatchTier, rangeText, tierHintOf, tierTextOf } from "./catch-up";
+import { pickCatchTier, rangeText, tierHintOf, tierTextOf, type TierSpeedOverride } from "./catch-up";
 import { mainCodeOf, rideOfHops, type SegmentIndex } from "./segment-lookup";
 import {
   BUS_HEADWAY_FALLBACK_SEC,
   LRT_MIN_PER_HOP,
+  LRT_RIDE_SEC_FIXED,
   TRANSFER_FALLBACK_MIN,
   WALK_FALLBACK_MIN,
   type AltBusView,
@@ -89,6 +90,15 @@ const num = (v: number | string | null | undefined): number | null => {
   const n = typeof v === "number" ? v : Number(v);
   return Number.isFinite(n) ? n : null;
 };
+
+/** ★ v2.3.0（B5.2）：秒 → 「M分S秒」（`100 → "1分40秒"`、`135 → "2分15秒"`）。 */
+function fmtRideSec(sec: number): string {
+  const s = Math.max(0, Math.round(sec));
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  if (m === 0) return `${r}秒`;
+  return r === 0 ? `${m}分` : `${m}分${r}秒`;
+}
 
 // ─────────────────────────── 步行索引 ───────────────────────────
 
@@ -240,6 +250,12 @@ export interface ModelContext {
    * ⚠️ 由 `nav-service.ts` 按方案注入（每个方案的步行段各不相同）。
    */
   walkResolver?: WalkResolver;
+  /**
+   * ★ v2.3.0（`/api/nav` 可选参数 `tiers`）：**组合级五档覆盖**。
+   *   有则 `pickCatchTier` / `tierHintOf` 用它替换默认 `SPEED_RATIO`（07 §2.5）；
+   *   **无则走默认常量** ⇒ 自动选线链路零变化 ✓。
+   */
+  tierOverride?: TierSpeedOverride;
 }
 
 const labelOf = (ctx: ModelContext, code: string): string => ctx.nameOf.get(code) ?? code;
@@ -261,11 +277,11 @@ const labelOf = (ctx: ModelContext, code: string): string => ctx.nameOf.get(code
  *
  * @returns null = 前五辆在途车都赶不上 → 调用方**整条剔除**该方案（v1.0.6）
  */
-function pickBoardable(lv: BusLive, walkMin: number, walkDistM?: number | null): BusArrival | null {
+function pickBoardable(lv: BusLive, walkMin: number, walkDistM?: number | null, ov?: TierSpeedOverride): BusArrival | null {
   let best: BusArrival | null = null;
   for (const cand of [lv.nearest, lv.second, ...(lv.more ?? [])]) {
     if (!cand) continue;
-    if (pickCatchTier(walkMin, cand.loSec, walkDistM) === null) continue;
+    if (pickCatchTier(walkMin, cand.loSec, walkDistM, ov) === null) continue;
     if (!best || cand.loSec < best.loSec) best = cand;
   }
   return best;
@@ -369,9 +385,9 @@ export function modelOption(seed: OptionSeed, ctx: ModelContext): ModeledOption 
       return null;
     }
     busPool = [lv.nearest, lv.second, ...(lv.more ?? [])].filter((x): x is BusArrival => x !== null);
-    const chosen = pickBoardable(lv, wOut.minutes, wOut.distanceM);
+    const chosen = pickBoardable(lv, wOut.minutes, wOut.distanceM, ctx.tierOverride);
     chosenBus = chosen;
-    const t0 = chosen ? pickCatchTier(wOut.minutes, chosen.loSec, wOut.distanceM) : null;
+    const t0 = chosen ? pickCatchTier(wOut.minutes, chosen.loSec, wOut.distanceM, ctx.tierOverride) : null;
     if (!chosen || t0 === null) {
       // 最近两辆在途车都赶不上（连冲刺也不行）→ 不显示这张卡。
       // 旧行为是「按班距 ÷ 2 估一个等车值」，但卡面同时又写「还有 0 站 · 约 0 分」
@@ -399,7 +415,7 @@ export function modelOption(seed: OptionSeed, ctx: ModelContext): ModeledOption 
     // ★ 判据必须取「**从现在起**车还有多久到站」（与巴士侧的 `chosen.loSec` 同语义）。
     //   旧代码误传 `waitMin0 * 60`（= 你走完站台后才剩的余量）→ 参照系错位 →
     //   档位系统性偏保守，实测把「正常走能赶上」误报成「本班赶不上」。
-    const t0 = pickCatchTier(wOut.minutes, (depMs - nowMs) / 1000, wOut.distanceM);
+    const t0 = pickCatchTier(wOut.minutes, (depMs - nowMs) / 1000, wOut.distanceM, ctx.tierOverride);
     if (t0 === null) {
       // 连冲刺都赶不上这一班 → 整条剔除（旧行为是直接用这班车算总用时 → 必然低估）
       ctx.missed.push(first.route);
@@ -437,10 +453,17 @@ export function modelOption(seed: OptionSeed, ctx: ModelContext): ModeledOption 
     const waitMin = waitNext;
     const legText = liveTextNext;
 
-    const ride =
-      seg.kind === "lrt"
-        ? { minutes: seg.hops.length * LRT_MIN_PER_HOP, levels: [] as number[] }
-        : rideOfHops(ctx.segIdx, seg.route, seg.hops, ctx.todayWeekday);
+    // ★ v2.3.0（B5.2）：轻轨固定乘车秒数（石排湾 100s / 横琴 135s；氹仔 = 跳数×120s）
+    let rideSecText: string | undefined;
+    let ride: { minutes: number; levels: number[] };
+    if (seg.kind === "lrt") {
+      const lrtSec = LRT_RIDE_SEC_FIXED[seg.route] ?? seg.hops.length * LRT_MIN_PER_HOP * 60;
+      ride = { minutes: lrtSec / 60, levels: [] };
+      // 仅「固定秒数线」下发秒级展示串（氹仔线按整分、不下发）
+      if (LRT_RIDE_SEC_FIXED[seg.route] !== undefined) rideSecText = fmtRideSec(lrtSec);
+    } else {
+      ride = rideOfHops(ctx.segIdx, seg.route, seg.hops, ctx.todayWeekday);
+    }
     cursor += ride.minutes * 60_000;
 
     rides.push({
@@ -450,7 +473,11 @@ export function modelOption(seed: OptionSeed, ctx: ModelContext): ModeledOption 
       alight: seg.alight,
       boardLabel: labelOf(ctx, seg.board),
       alightLabel: labelOf(ctx, seg.alight),
-      minutes: Math.round(ride.minutes * 10) / 10,
+      // ★ B5.2：轻轨保留秒级精度（不取整）；巴士照常 1 位小数
+      minutes: seg.kind === "lrt" ? ride.minutes : Math.round(ride.minutes * 10) / 10,
+      rideSecText,
+      // ★ B2：段内并行线（渲染白斜杠）
+      parallelRoutes: seg.parallelRoutes,
       hops: seg.hops.length,
       levels: ride.levels,
       waitMin: Math.round(waitMin * 10) / 10,
@@ -463,7 +490,7 @@ export function modelOption(seed: OptionSeed, ctx: ModelContext): ModeledOption 
       //   卡面那一行「步行 X 分」是**常速实测均值**，而总用时按该档速度算
       //   ⇒ 可见项直接相加会比顶部大字大。大字没错，缺的是这句解释。
       //   字段挂在 rides[0]，但渲染在卡面第一行「步行」上（差额正出在那一行）。
-      tierHint: i === 0 ? tierHintOf(wOut.minutes, tier, wOut.distanceM) : "",
+      tierHint: i === 0 ? tierHintOf(wOut.minutes, tier, wOut.distanceM, ctx.tierOverride) : "",
     });
 
     if (i + 1 >= segs.length) break;
@@ -515,7 +542,7 @@ export function modelOption(seed: OptionSeed, ctx: ModelContext): ModeledOption 
       waitNext = BUS_HEADWAY_FALLBACK_SEC / 2 / 60;
       cursor += (BUS_HEADWAY_FALLBACK_SEC / 2) * 1000;
       // 巴士第 2 段没有第二路实时数据源 → 明说是估算（口径见 types.ts 常量注释）
-      liveTextNext = "按班次间隔估算";
+      liveTextNext = "按班次间隔推算";
     }
   }
 
@@ -563,10 +590,12 @@ export function modelOption(seed: OptionSeed, ctx: ModelContext): ModeledOption 
     for (const b of busPool) {
       if (b === chosenBus) continue; // 本班已在主行展示过
       if (seenSec.has(b.loSec)) continue; // 到达时刻与本班或已列出的某辆相同 → 无新信息
-      const t = pickCatchTier(wOut.minutes, b.loSec, wOut.distanceM);
+      const t = pickCatchTier(wOut.minutes, b.loSec, wOut.distanceM, ctx.tierOverride);
       if (t === null) continue; // 赶不上的后车不列（列了也没用）
       seenSec.add(b.loSec);
       alts.push({
+        // ★ v2.3.0（A3）：打上所属线路码（并行线后续班次合并后按 route 分组）
+        route: first.route,
         stopsAway: b.stopsAway,
         waitText: rangeText(b.loSec, b.hiSec),
         tier: t,
@@ -639,6 +668,8 @@ export function amapPlanToSeed(seed: AmapPlanSeed, meta: AmapSeedMeta): OptionSe
       board,
       alight,
       hops: leg.mappedHops ?? [],
+      // ★ v2.3.0（B2）：段内并行线（仅高德腿有；本地/链枚举不填）
+      ...(leg.parallelRoutes?.length ? { parallelRoutes: leg.parallelRoutes } : {}),
     });
   }
   if (!segments.length) return null;

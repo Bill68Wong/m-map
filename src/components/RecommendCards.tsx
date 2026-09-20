@@ -77,7 +77,7 @@ export default function RecommendCards({
         <p className="t-label t-muted" style={{ margin: "0 2px 8px", lineHeight: 1.6 }}>
           目前仅有 {cards.length} 条路线可用
           {reasons.length > 0 && <>・{reasons.join("・")}</>}
-          （均为实时结果，不含估算）
+          （均为实时结果）
         </p>
       )}
       {cards.map((c, i) => (

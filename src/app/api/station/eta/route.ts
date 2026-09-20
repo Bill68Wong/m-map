@@ -51,6 +51,12 @@ interface StationEtaItem {
   route: string;
   /** 查询方向（我们库 `dsat_dir`） */
   dir: string;
+  /**
+   * ★ v2.3.0（FIX-07 落点）：该线在本站的**站台码**（如 `T373/1`）。
+   *   前端据此按主编号 + 站台分组（`mainCodeOf(platform)` 得主编号）。
+   *   内部链路上早已算出（`meta.push({ platform: stops[i] })`），此前**未返回**。
+   */
+  platform: string;
   /** 方向显示标签（如「往 關閘總站」） */
   dirLabel: string;
   /** 最近一辆车还有几站；null = 暂无在途车 */
@@ -142,6 +148,7 @@ export async function GET(req: NextRequest) {
         return {
           route: m.route,
           dir: m.dir,
+          platform: m.platform,
           dirLabel: m.dirLabel,
           stopsAway: n ? n.stopsAway : null,
           etaMin: n ? Math.max(0, Math.round(n.loSec / 60)) : null,

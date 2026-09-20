@@ -177,6 +177,23 @@ export const TIER_TEXT: Record<CatchTier, string> = {
  */
 export const LRT_MIN_PER_HOP = 2.0;
 
+/**
+ * ★ v2.3.0（B5.2 · FIX-08.2）：**逐线固定乘车秒数**（覆盖「跳数 × 表定 2 分」的恒定口径）。
+ *
+ * 裁定（2026-09-20）：轻轨段**豁免「乘车分钟取整」**，保留秒级精度并以 `RideLegView.rideSecText`
+ * 展示；**巴士段照常 `Math.round`**。
+ * · 石排湾线 1 跳实测 ≈ **100 s**（1 分 40 秒）≠ 跳数×120s；
+ * · 横琴线 1 跳 ≈ **135 s**（2 分 15 秒）；
+ * · **氹仔线不在本表** ⇒ 取 `跳数 × LRT_MIN_PER_HOP × 60`（按整分展示，不下发 `rideSecText`）。
+ *
+ * ⚠️ 来源：`lrt_timetables` 表定逐跳 + `docs/轻轨氹仔线发车偏移分析-20260915.md`（石排湾 +2~+3s）。
+ *    若 QA/数据侧在 DB 核到更精确秒值，替换本表即可（单一真源）。
+ */
+export const LRT_RIDE_SEC_FIXED: Record<string, number> = {
+  "LRT-石排湾线": 100, // 1 分 40 秒
+  "LRT-横琴线": 135, // 2 分 15 秒
+};
+
 /** 步行数据全落空时的常数兜底（分钟，1~2 站台距离） */
 export const WALK_FALLBACK_MIN = 3.0;
 
@@ -211,6 +228,12 @@ export interface RideSegment {
   alight: string;
   /** bus 必需：逐跳站码对（board → alight 行驶方向）；lrt 可为空（按跳数 × 表定） */
   hops: [string, string][];
+  /**
+   * ★ v2.3.0（B2）：**同一段内的并行可选线路**（同站上、同站下 → 渲染白斜杠 `/`）。
+   *   本库线码，由 `bridgeLeg` 从 `AmapPlanLeg.parallelNames` 经 `routeCodeOf` 映射得到；
+   *   本地枚举/链枚举不填（无并行线语义）。缺省 = 无并行线（渲染退化为「一段一码」）。
+   */
+  parallelRoutes?: string[];
 }
 
 /** 段间换乘（第 i 段 → 第 i+1 段） */
@@ -386,8 +409,26 @@ export interface RideLegView {
   alightLabel: string;
   /** 车上用时（分钟） */
   minutes: number;
+  /**
+   * ★ v2.3.0（B5.2）：**轻轨固定乘车时长的秒级展示串**（`"1分40秒"` / `"2分15秒"`）。
+   *   **仅轻轨且为固定秒数线**（`LRT_RIDE_SEC_FIXED`）时非空；巴士、氹仔线（跳数×120s）为 `undefined`。
+   *   ⚠️ **仅展示**：排序 / 合计 / 赶车模型仍用 `minutes`（数值不因它改变）。
+   *   前端取值规约：`r.kind === "lrt" && r.rideSecText ? r.rideSecText : \`${Math.round(r.minutes)} 分\``。
+   */
+  rideSecText?: string;
   /** 跳数 */
   hops: number;
+  /**
+   * ★ 修复包 v2.2.1-B2：**同一段内的并行可选线路**（同站上、同站下 → 渲染用白斜杠 `/`）。
+   *
+   * ⚠️ **生产者待接（已知阻塞）**：`src/lib/amap/transit.ts:230` 现只取 `segments[].bus.buslines[0]`
+   * 作骨架、其余并行线被丢弃。要填充本字段，必须先把同段其余**高德线路名**经
+   * 「高德线路名 → 本库线路码」的映射（服务端 `station_amap_map` / 路由别名，DB 支撑）转成
+   * **本库码** —— 否则会把高德名当线路码渲染出**错误的彩色标签**，比不显示更糟。
+   * 未接上之前**留空**：渲染层（`RouteStack` 的 `segments`）已就绪，空数组与当前行为**完全一致**。
+   * 另：只保留线路名/上下站摘要，**不得保留 polyline**（02 §6 坑#2：会掉方案数）。
+   */
+  parallelRoutes?: string[];
   /** 各跳命中层级（bus；lrt 为空数组） */
   levels: number[];
   /** 本段等车（分钟，**已含在总用时内**；第 2 段起同样是真实推进值，不再恒 0） */
@@ -449,6 +490,11 @@ export interface TransferView {
  *   → 不想跑的用户以为这条线没戏，转去选慢得多的方案。
  */
 export interface AltBusView {
+  /**
+   * ★ v2.3.0（A3）：该后续班次所属**线路码**（并行线分组用 —— 同一显示卡下
+   *   主干线 + 各 `parallelRoutes` 的后续班次合并下发，前端按 `route` 分组列出）。
+   */
+  route: string;
   /** 还有 N 站 */
   stopsAway: number;
   /** 「約 lo~hi 分」——服务端算好，与主行同口径（`rangeText`） */
@@ -517,6 +563,12 @@ export interface SegmentStrip {
   stops: StripStop[];
   /** 车上时长（**与 `card.rides[i].minutes` 同源同值** —— 同一串 hops + 同一个 lookupHop） */
   rideMin: number;
+  /**
+   * ★ v2.3.0（B5.2）：轻轨固定乘车时长的**秒级展示串**（`"1分40秒"` / `"2分15秒"`）。
+   *   与 `RideLegView.rideSecText` **同源**（由它回填）：**仅固定秒数线非空**；
+   *   巴士、氹仔线为 `undefined`（走原「X 分」）。**仅展示**，不影响 `rideMin`。
+   */
+  rideSecText?: string;
   /** 该段之后的换乘（最后一段为 null）—— 用户口径：巴士标上一趟终点 + 换乘站台；轻轨写明换乘步行时长 */
   transferAfter: TransferView | null;
 }
