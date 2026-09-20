@@ -154,6 +154,13 @@ const routeCodeOf = (route) => String(route ?? "").trim().padStart(ROUTE_CODE_LE
 
 /** 同一 (线路,方向) 连续失败达此数 → 本轮拉黑，不再浪费请求 */
 const LOC_MAX_TRIES = 3;
+/** ★ 报站侧：同一 (线路,方向) 连续失败达此数 → 本轮拉黑（模式同位置采样拉黑；阈值更保守 5>3）。
+ *  动机（2026-09-20 实测定案）：DSAT 对「**无排班数据**」的线（如 3AS/17S1/26S/52S）返回**空对象** `data:{}`
+ *  （`routeInfo` 字段缺失）⇒ 采集器判 nopayload 失败；而「**不在运营时间但有排班**」的线（如夜线 N6/N1A 白天）
+ *  **返回完整站表**（36/25 站 · 0 车）⇒ 视为成功（「无车」是合法状态）。
+ *  前者持续失败会把窗口失败率钉在 >0 ⇒ 升档条件（严格「失败率 = 0」）永不满足 ⇒ **采集卡死在档1**。
+ *  拉黑后不再请求、不再产生失败（拉黑前失败随 90 秒窗口滑出，最多延迟 ~1.5 分钟升档）。 */
+const BUS_MAX_TRIES = 5;
 /** 位置采样整体失败率超此值 → 自动关闭位置采样（自保护，绝不拖垮报站） */
 const LOC_ABORT_RATE = 0.2;
 /** 位置请求的独立超时（位置响应体更大，给宽一点；仍远低于 5s 轮长） */
@@ -969,6 +976,12 @@ async function main() {
   };
   let locNextAt = 0;   // 0 = 首轮立刻采（渐变期档0 时先小规模验证 routeCode 推导，再全速）
 
+  // ── ★ 报站侧「结构性失败」拉黑（2026-09-20）：见 BUS_MAX_TRIES 注释 ──
+  const busBlack = {
+    badTries: new Map(),   // "线路/d方向" → 连续失败次数（成功即重置）
+    blacklist: new Set(),  // 连续失败达 BUS_MAX_TRIES → 本轮拉黑（不再请求）
+  };
+
   const finishAt = Date.now() + CFG.minutes * 60 * 1000;
   let stageStartMs = Date.now();
   stageLog.push({ stage: curStage, at: new Date().toISOString(), reason: "start" });
@@ -1014,7 +1027,10 @@ async function main() {
 
     const activeRoutes = ordered.slice(0, Math.min(STAGE_ROUTE_COUNT[curStage], ordered.length));
     const reqs = [];
-    for (const p of activeRoutes) for (const d of p.dirs) reqs.push({ route: p.code, dir: d });
+    for (const p of activeRoutes) for (const d of p.dirs) {
+      if (busBlack.blacklist.has(`${p.code}/d${d}`)) continue; // ★ 本轮拉黑 → 不再请求（结构性失败线）
+      reqs.push({ route: p.code, dir: d });
+    }
 
     // ── v1.1.0 位置采样：按**自己的节拍**取一轮候选，报站的 5 秒节拍完全不受影响 ──
     let locReqs = [];
@@ -1080,8 +1096,10 @@ async function main() {
           }
         }
       } else {
-        health.push(!!rec.ok, rec.ms ?? 0, `${task.route}/d${task.dir}`);
+        const bKey = `${task.route}/d${task.dir}`;
+        health.push(!!rec.ok, rec.ms ?? 0, bKey);
         if (rec.ok) {
+          busBlack.badTries.delete(bKey); // ★ 成功即重置连续失败计数
           okN++;
           if (curStage !== baselineStage) { baselineStage = curStage; baselineP50 = 0; }
           if (baselineP50 === 0 && health.winLen >= 100) {
@@ -1090,6 +1108,12 @@ async function main() {
           }
         } else {
           failN++;
+          const bn = (busBlack.badTries.get(bKey) ?? 0) + 1;
+          busBlack.badTries.set(bKey, bn);
+          if (bn >= BUS_MAX_TRIES) {
+            busBlack.blacklist.add(bKey);
+            LOG(`🚫 报站拉黑 ${bKey}（连续 ${bn} 次失败：${rec.err}）→ 本轮不再采它`);
+          }
           if (failN <= 3) LOG(`   ✗ ${task.route}/d${task.dir} ${rec.err}${rec.hdr ? ` hdr=${rec.hdr}` : ""}`);
         }
       }
@@ -1109,6 +1133,7 @@ async function main() {
         winLen: health.winLen, winFail: health.winFail,   // ★ v0.27.4：窗口透明度
         // ★ v1.1.0 位置采样（独立计数，不参与上面的降档判定）
         locReqs: loc.requests, locFail: loc.fail, locStations: stationBook.size, locBlack: loc.blacklist.size,
+        busBlack: busBlack.blacklist.size, // ★ 报站侧拉黑数（结构性失败线）
       };
       healthSamples.push(hs);
       LOG(`♥ 轮${round} 档${curStage} 间隔${intervalMs / 1000}s 请求${seq} 累计成功率${hs.okRate.toFixed(2)}% 窗失败率${hs.winFailRate.toFixed(1)}%（${hs.winFail}/${hs.winLen}） p50=${hs.p50}ms p95=${hs.p95}ms 轮耗时${roundMs}ms`
@@ -1241,6 +1266,7 @@ async function main() {
       requests: health.total,
       failed: health.fail,
       failRatePct: health.total ? (health.fail / health.total) * 100 : 0,
+      busBlacklist: [...busBlack.blacklist], // ★ 报站侧拉黑（结构性失败，如特班线无车时段）
       intervalFinalMs: intervalMs,
       roundMsP50: roundSamples.map((r) => r.ms).sort((a, b) => a - b)[Math.floor(roundSamples.length / 2)] ?? null,
       roundMsMax: roundSamples.length ? Math.max(...roundSamples.map((r) => r.ms)) : null,
@@ -1276,6 +1302,7 @@ async function main() {
 
   LOG(`════ 采集结束 ════`);
   LOG(`轮次 ${round} · 请求 ${health.total} 次 · 失败 ${health.fail} 次（${meta.totals.failRatePct.toFixed(2)}%）`);
+  if (busBlack.blacklist.size) LOG(`🚫 报站拉黑 ${busBlack.blacklist.size} 条（结构性失败：${[...busBlack.blacklist].join(", ")}）→ 本轮不再采它们`);
   LOG(`轮耗时 p50 ${meta.totals.roundMsP50}ms / max ${meta.totals.roundMsMax}ms · 间隔终值 ${intervalMs / 1000}s`);
   LOG(`gzip 落盘 ${(writer.bytes / 1048576).toFixed(2)} MB · ${writer.files.length} 片`);
   if (locWriter) {
