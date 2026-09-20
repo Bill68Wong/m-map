@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import Icon from "@/components/ui/Icon";
 
 interface SessionData {
   session: {
@@ -47,8 +48,9 @@ export default function FinishForm({ sessionId }: { sessionId: number }) {
   return (
     <main className="page">
       <header style={{ marginBottom: 20, padding: "0 2px" }}>
-        <h1 className="h-display" style={{ marginBottom: 4 }}>
-          🎉 到达了
+        <h1 className="h-display" style={{ marginBottom: 4, display: "flex", alignItems: "center", gap: 8 }}>
+          <Icon name="arrive" size={24} />
+          到了
         </h1>
         <p className="t-label t-muted">{s.summary}</p>
       </header>
@@ -101,8 +103,9 @@ export default function FinishForm({ sessionId }: { sessionId: number }) {
       </div>
 
       {/* v0.18.0：拥挤度改为「上车后在行程内按程记录」（见 TimerWizard），结束页不再询问 */}
-      <p className="t-body t-ok" style={{ marginBottom: 16, textAlign: "center" }}>
-        ✓ 行程已完结
+      <p className="t-body t-ok" style={{ marginBottom: 16, textAlign: "center", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+        <Icon name="check" size={16} />
+        行程已完结
       </p>
       <button className="btn btn--primary btn--block" onClick={() => router.push("/")}>
         回到首页

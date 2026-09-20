@@ -16,6 +16,7 @@
  *   - 日切（澳门 0 点）自动重新拉取（服务班别/日期已变）
  */
 import RouteStack from "./RouteStack";
+import Icon from "./ui/Icon";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 /** 秒级读秒线路：石排湾线/横琴线（班次稀疏，倒计时需精确到秒）；
@@ -247,7 +248,7 @@ export default function LrtEta({
             whiteSpace: "nowrap",
           }}
         >
-          🚈 实时到站{" "}
+          <Icon name="lrt" size={20} /> 实时到站{" "}
           <RouteStack codes={[route]} colorOf={(c) => routeColors?.[c]} size="sm" />
         </p>
         <button
@@ -257,7 +258,7 @@ export default function LrtEta({
           aria-label="刷新轻轨到站"
         >
           <span className={loading ? "anim-spin" : ""} style={{ display: "inline-block" }}>
-            ↻
+            <Icon name="refresh" size={20} />
           </span>{" "}
           {loading ? "刷新中…" : cooldownSec > 0 ? `${cooldownSec}s` : "刷新"}
         </button>

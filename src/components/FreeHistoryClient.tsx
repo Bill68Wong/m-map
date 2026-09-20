@@ -8,6 +8,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import RouteStack from "./RouteStack";
+import Icon from "./ui/Icon";
 import {
   FREE_CROWD,
   FREE_EVENT_LABELS,
@@ -121,15 +122,17 @@ export default function FreeHistoryClient() {
     <main className="page">
       <header style={{ marginBottom: 14, width: "100%", padding: "0 2px" }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
-          <h1 className="h-headline" style={{ margin: 0 }}>
-            📋 采集记录
+          <h1 className="h-headline" style={{ margin: 0, display: "flex", alignItems: "center", gap: 6 }}>
+            <Icon name="records" size={24} />
+            采集记录
           </h1>
           <button
             className="btn btn--text btn--sm t-muted"
             style={{ marginLeft: "auto" }}
             onClick={() => router.push("/free")}
           >
-            ← 返回记站
+            <Icon name="back" size={20} />
+            返回记站
           </button>
         </div>
         <p className="t-label t-muted" style={{ marginTop: 6, lineHeight: 1.6 }}>
@@ -177,7 +180,7 @@ export default function FreeHistoryClient() {
               onClick={() => void toggle(h.id)}
             >
               <p className="t-body" style={{ margin: 0, lineHeight: 1.5 }}>
-                {h.route_code.startsWith("LRT-") ? "🚈" : "🚌"}{" "}
+                <Icon name={h.route_code.startsWith("LRT-") ? "lrt" : "bus"} size={16} />{" "}
                 <RouteStack
                   codes={[h.route_code]}
                   colorOf={() => h.route_color ?? undefined}
@@ -195,8 +198,9 @@ export default function FreeHistoryClient() {
                   : ""}
                 {` · ${h.timed_count} 个时刻点`}
               </p>
-              <p className="t-label t-muted" style={{ marginTop: 2, marginBottom: 0 }}>
-                {open === h.id ? "收起逐站时刻 ▲" : "展开逐站时刻 ▼"}
+              <p className="t-label t-muted" style={{ marginTop: 2, marginBottom: 0, display: "flex", alignItems: "center", gap: 4 }}>
+                {open === h.id ? "收起逐站时刻" : "展开逐站时刻"}
+                <Icon name={open === h.id ? "caretUp" : "caretDown"} size={16} />
               </p>
             </button>
 
@@ -237,7 +241,14 @@ export default function FreeHistoryClient() {
                 disabled={busyId === h.id}
                 onClick={() => void remove(h)}
               >
-                {busyId === h.id ? "删除中…" : "🗑 删除"}
+                {busyId === h.id ? (
+                  "删除中…"
+                ) : (
+                  <>
+                    <Icon name="trash" size={20} />
+                    删除
+                  </>
+                )}
               </button>
             </div>
           </div>

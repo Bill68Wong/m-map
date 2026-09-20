@@ -15,6 +15,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import DevModeToggle from "./DevModeToggle";
 import ZonePicker, { useZone } from "./ZonePicker";
+import Icon from "./ui/Icon";
 import { useDevMode } from "@/lib/dev-mode";
 import { HOME_SLUG, PAIR_ORDER, PLACE_SHORT, dirLabel, type PlanRow, type ActiveSession } from "@/lib/home-plans-shared";
 
@@ -114,7 +115,9 @@ export default function HomeClient({
           onClick={() => router.push(`/timer/${active.id}`)}
           style={{ marginBottom: 16, minHeight: 68 }}
         >
-          <span className="icon-badge">▶</span>
+          <span className="icon-badge">
+            <Icon name="play" size={20} />
+          </span>
           <span style={{ flex: 1, minWidth: 0, textAlign: "left" }}>
             <span className="h-title" style={{ display: "block" }}>
               继续进行中的计时
@@ -126,8 +129,8 @@ export default function HomeClient({
               {active.summary}
             </span>
           </span>
-          <span aria-hidden style={{ fontSize: 20, opacity: 0.7 }}>
-            ›
+          <span aria-hidden style={{ opacity: 0.7 }}>
+            <Icon name="forward" size={20} />
           </span>
         </button>
       )}
@@ -168,14 +171,16 @@ export default function HomeClient({
               onClick={() => router.push("/records")}
               style={{ flex: 1, minHeight: 44, fontWeight: 500 }}
             >
-              📋 通勤记录
+              <Icon name="records" size={20} />
+              通勤记录
             </button>
             <button
               className="btn btn--outline btn--sm"
               onClick={() => router.push("/stats")}
               style={{ flex: 1, minHeight: 44, fontWeight: 500 }}
             >
-              📊 通勤統計
+              <Icon name="stats" size={20} />
+              通勤統計
             </button>
           </div>
           <button
@@ -183,7 +188,8 @@ export default function HomeClient({
             onClick={() => router.push("/free")}
             style={{ width: "100%", minHeight: 44, fontWeight: 500, marginTop: 8 }}
           >
-            ⏱ 自由记站（实测站间时长）
+            <Icon name="timer" size={20} />
+            自由记站（实测站间时长）
           </button>
         </>
       )}

@@ -1,11 +1,11 @@
 {
-  "name": "MUST登校",
-  "short_name": "MUST登校",
-  "description": "擎天汇 ↔ 澳科大 ↔ 横琴 通勤计时与数据采集",
+  "name": "M Map",
+  "short_name": "M Map",
+  "description": "澳门巴士 / 轻轨全澳导航：全屏地图、路线收藏与实时报站",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#f9f9ff",
-  "theme_color": "#f9f9ff",
+  "background_color": "#F2F4F0",
+  "theme_color": "#F2F4F0",
   "lang": "zh-CN",
   "icons": [
     {

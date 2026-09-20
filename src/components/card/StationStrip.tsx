@@ -8,6 +8,7 @@
  */
 import { useState } from "react";
 import RouteStack from "@/components/RouteStack";
+import Icon from "@/components/ui/Icon";
 import type { SegmentStrip } from "@/lib/recommend/types";
 
 export default function StationStrip({
@@ -51,7 +52,9 @@ export default function StationStrip({
         <button className="rc-strip__toggle" onClick={() => setOpen(true)} aria-expanded={false}>
           途经 <b>{mids}</b> 站 · 车上约 <b>{strip.rideMin}</b> 分
           {est && <span className="rc-est">含估算</span>}
-          <span className="rc-strip__caret">▼</span>
+          <span className="rc-strip__caret">
+            <Icon name="caretDown" size={16} />
+          </span>
         </button>
       )}
 
@@ -73,7 +76,10 @@ export default function StationStrip({
 
       {mids > 0 && open && (
         <button className="rc-strip__toggle rc-strip__toggle--collapse" onClick={() => setOpen(false)}>
-          收起中间站 <span className="rc-strip__caret">▲</span>
+          收起中间站{" "}
+          <span className="rc-strip__caret">
+            <Icon name="caretUp" size={16} />
+          </span>
         </button>
       )}
 
@@ -91,7 +97,7 @@ export default function StationStrip({
       {/* 转车：巴士标上一趟终点 + 换乘站台；轻轨写明换乘步行时长 */}
       {!last && strip.transferAfter && (
         <div className="rc-strip__transfer">
-          <span aria-hidden="true">↕</span>
+          <Icon name="expandVertical" size={16} />
           {strip.transferAfter.sameField ? (
             <>同站台换乘 · 无需步行</>
           ) : (

@@ -26,6 +26,7 @@ export default function RecommendCards({
   missed = [],
   hrefBuilder,
   originOf,
+  cardAction,
 }: {
   cards: CardData[];
   colors: Record<string, string>;
@@ -41,6 +42,8 @@ export default function RecommendCards({
   hrefBuilder?: (card: CardData) => string;
   /** ★ v1.3.0：来源（本地补漏 → 卡片带中性徽章「其他组合」） */
   originOf?: (card: CardData) => "amap" | "local";
+  /** ★ M Map 改版 S5：每张卡的附加动作槽（如「收藏此方案」） */
+  cardAction?: (card: CardData, rank: number) => React.ReactNode;
 }) {
   const devMode = useDevMode();
 
@@ -89,6 +92,7 @@ export default function RecommendCards({
           toSlug={toSlug}
           hrefOverride={hrefBuilder?.(c)}
           origin={originOf?.(c)}
+          cardAction={cardAction?.(c, i + 1)}
           /* ★ v1.1.8：入场错峰（原先 5 张卡同时同速上浮，既没方向感也白花一次动画预算） */
           delayMs={i * 40}
         />

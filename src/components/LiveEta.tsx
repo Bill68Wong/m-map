@@ -16,12 +16,12 @@
  * v0.12.1（2026-09-05）刷新机制修正（用户定稿）：
  *  - 自动刷新仅限关键动作：进入路线页（挂载）/ 出发 / 人到站 / 上车 / 下车
  *    （TimerWizard 收紧 AUTO_REFRESH_TYPES，pause/继续/记站不再触发）
- *  - 10s 冷却对「任何刷新」生效：点击刷新或自动刷新后按钮进入不可点读秒（↻ 9s → 0）
+ *  - 10s 冷却对「任何刷新」生效：点击刷新或自动刷新后按钮进入不可点读秒（刷新 → 9s → 0）
  *  - 自动刷新无视冷却照发（force 直查）；手动点击被冷却禁用（自动刷新 5s 后手动点不动）
  *  - 原「手动刷新 ≥10s 间隔」小字提示删除，改为按钮内读秒
  *
  * v0.12.2（2026-09-05）卡片重构（用户定稿 7 条之二/三/四/五）：
- *  - 线路名并入标题行（「🚌 实时车距 · 26 路」）；卡片单线路（数据收集阶段）
+ *  - 线路名并入标题行（「实时车距 · 26 路」）；卡片单线路（数据收集阶段）
  *  - 最近车站数大字突出显示；「再下一班车」（第二辆在途车）副行小字展示
  *  - 删除「另有 N 辆总站待发」展示（服务端已不再返回）
  *  - 脚注文案：数据来自澳门交通事务局，仅供参考（不再写「DSAT 仅供参考」）
@@ -32,6 +32,7 @@
  */
 
 import RouteStack from "./RouteStack";
+import Icon from "./ui/Icon";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { smoothStopsAway, getSmoothMem } from "@/lib/eta-smooth";
 
@@ -212,7 +213,7 @@ export default function LiveEta({
             whiteSpace: "nowrap",
           }}
         >
-          🚌 实时车距
+          <Icon name="bus" size={20} /> 实时车距
           {titleRouteCodes.length > 0 && (
             <>
               {" "}
@@ -227,7 +228,7 @@ export default function LiveEta({
           aria-label="刷新车距"
         >
           <span className={loading ? "anim-spin" : ""} style={{ display: "inline-block" }}>
-            ↻
+            <Icon name="refresh" size={20} />
           </span>{" "}
           {/* v0.12.1：冷却期按钮不可点并读秒（点击刷新或自动刷新后都会进入 10s 冷却） */}
           {loading ? "刷新中…" : cooldownSec > 0 ? `${cooldownSec}s` : "刷新"}
@@ -242,7 +243,7 @@ export default function LiveEta({
             return (
               <p key={r.route} className="t-body t-muted" style={{ lineHeight: 1.7 }}>
                 <RouteStack codes={[r.route]} colorOf={(c) => routeColors?.[c]} size="sm" />{" "}
-                {r.error ?? "暂无数据"}
+                {r.error ?? "这条线路的报站暂时取不到"}
               </p>
             );
           }

@@ -5,13 +5,15 @@
  * 语气克制·不含糊·不卖萌（§11.4）；**界面文案用简体**（§6.2 / R5）。
  */
 import Link from "next/link";
+import Icon from "@/components/ui/Icon";
 
 export default function ComplianceBar() {
   return (
     <footer className="nav-compliance t-label t-muted">
       <span>数据来源：澳门交通事务局（DSAT）· 高德地图。本服务仅供个人通勤参考，非官方。</span>
       <Link href="/about" className="link-hit">
-        数据来源与合规声明 ›
+        数据来源与合规声明
+        <Icon name="forward" size={16} />
       </Link>
     </footer>
   );

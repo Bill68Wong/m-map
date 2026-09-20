@@ -22,8 +22,11 @@ export function lineNameOf(code: string): string {
   return code;
 }
 
-/** 载具图标：轻轨 🚈 / 巴士 🚌 */
-export const kindIcon = (code: string): string => (isLrtCode(code) ? "🚈" : "🚌");
+/**
+ * 载具语义键（★ M Map 改版 S6：**不再返回 emoji**）。
+ * 兼容旧签名（仍收线路码），返回可交给 `<Icon>` 的语义名 —— 全站零 emoji。
+ */
+export const kindIcon = (code: string): "lrt" | "bus" => (isLrtCode(code) ? "lrt" : "bus");
 
 /** 多线路展示顺序：轻轨在前 + 巴士自然排序（25B → 25BS → 50 → 102 → N6） */
 export { sortRouteOptions };

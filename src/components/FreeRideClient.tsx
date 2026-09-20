@@ -6,6 +6,7 @@
  * 与乘车计时完全隔离（free_rides / free_ride_events 表，不入 stats/records）。
  */
 import RouteStack from "./RouteStack";
+import Icon from "./ui/Icon";
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { FREE_CROWD as CROWD, freeLineLabel } from "@/lib/free-shared";
@@ -31,12 +32,12 @@ const EVENT_TC: Record<string, string> = {
 };
 const kindBadge = (kind: string) =>
   kind === "lrt" ? (
-    <span className="chip chip--on" style={{ padding: "0 8px", minHeight: 20, fontSize: 12 }}>
-      🚈
+    <span className="chip chip--on" style={{ padding: "0 8px", minHeight: 20 }}>
+      <Icon name="lrt" size={16} />
     </span>
   ) : (
-    <span className="chip" style={{ padding: "0 8px", minHeight: 20, fontSize: 12 }}>
-      🚌
+    <span className="chip" style={{ padding: "0 8px", minHeight: 20 }}>
+      <Icon name="bus" size={16} />
     </span>
   );
 const lrtName = (name: string) => name.replace(/站$/, "");
@@ -577,15 +578,17 @@ export default function FreeRideClient({ restoreRideId }: { restoreRideId: numbe
     <main className="page">
       <header style={{ marginBottom: 14, width: "100%", padding: "0 2px" }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
-          <h1 className="h-headline" style={{ margin: 0 }}>
-            ⏱ 自由记站
+          <h1 className="h-headline" style={{ margin: 0, display: "flex", alignItems: "center", gap: 6 }}>
+            <Icon name="timer" size={24} />
+            自由记站
           </h1>
           <button
             className="btn btn--text btn--sm t-muted"
             style={{ marginLeft: "auto" }}
             onClick={() => router.push("/free/history")}
           >
-            📋 采集记录
+            <Icon name="records" size={20} />
+            采集记录
           </button>
         </div>
         <p className="t-label t-muted" style={{ marginTop: 6, lineHeight: 1.6 }}>
@@ -624,7 +627,7 @@ export default function FreeRideClient({ restoreRideId }: { restoreRideId: numbe
             style={{ padding: "13px 14px", borderLeft: `4px solid ${rideColor ?? "var(--primary)"}` }}
           >
             <p className="t-label t-muted" style={{ lineHeight: 1.5 }}>
-              {isLrt(ride.route_code) ? "🚈" : "🚌"}{" "}
+              <Icon name={isLrt(ride.route_code) ? "lrt" : "bus"} size={20} />{" "}
               <RouteStack codes={[ride.route_code]} colorOf={() => rideColor ?? undefined} size="sm" />
               {rideDirLabel ? ` · ${rideDirLabel}` : ""}
               {ride.vehicle_plate ? ` · 车 ${ride.vehicle_plate}` : ""}
@@ -702,7 +705,8 @@ export default function FreeRideClient({ restoreRideId }: { restoreRideId: numbe
                 disabled={busy}
                 onClick={() => postEvent("stop_arrive")}
               >
-                ✓ 到站 · 记时刻（继续坐）
+                <Icon name="check" size={20} />
+                到站 · 记时刻（继续坐）
               </button>
               {!isLrt(ride.route_code) && (
                 <button
@@ -710,7 +714,8 @@ export default function FreeRideClient({ restoreRideId }: { restoreRideId: numbe
                   disabled={busy}
                   onClick={() => postEvent("stop_pass")}
                 >
-                  ↷ 甩站没停
+                  <Icon name="skip" size={20} />
+                  甩站没停
                 </button>
               )}
               <button
@@ -786,7 +791,7 @@ export default function FreeRideClient({ restoreRideId }: { restoreRideId: numbe
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <div className="card" style={{ padding: "13px 14px" }}>
             <p className="t-body" style={{ lineHeight: 1.5 }}>
-              {isLrt(detail.ride.route_code) ? "🚈" : "🚌"}{" "}
+              <Icon name={isLrt(detail.ride.route_code) ? "lrt" : "bus"} size={20} />{" "}
               <RouteStack
                 codes={[detail.ride.route_code]}
                 colorOf={() => rideColor ?? undefined}
@@ -879,7 +884,8 @@ export default function FreeRideClient({ restoreRideId }: { restoreRideId: numbe
                 resetSetup();
               }}
             >
-              🚌 按线路选
+              <Icon name="bus" size={16} />
+              按线路选
             </button>
             <button
               className={`chip${mode === "station" ? " chip--on" : ""}`}
@@ -888,7 +894,8 @@ export default function FreeRideClient({ restoreRideId }: { restoreRideId: numbe
                 resetSetup();
               }}
             >
-              📍 按站点选
+              <Icon name="pin" size={16} />
+              按站点选
             </button>
           </div>
 
@@ -1060,7 +1067,7 @@ export default function FreeRideClient({ restoreRideId }: { restoreRideId: numbe
                               .catch(() => {});
                           }}
                         >
-                          {s.kind === "lrt" ? "🚈" : "🚌"}
+                          <Icon name={s.kind === "lrt" ? "lrt" : "bus"} size={16} />
                           <span>{s.name}</span>
                         </button>
                       ))}
@@ -1068,8 +1075,9 @@ export default function FreeRideClient({ restoreRideId }: { restoreRideId: numbe
                 </div>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                  <p className="t-body">
-                    📍 {selStation.name}
+                  <p className="t-body" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <Icon name="pin" size={16} />
+                    {selStation.name}
                     <button className="btn btn--text t-muted" style={{ marginLeft: 8 }} onClick={() => setSelStation(null)}>
                       返回
                     </button>

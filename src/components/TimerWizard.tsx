@@ -13,6 +13,7 @@ import {
   type PlanLegLite,
 } from "@/lib/timer-flow";
 import RouteStack from "./RouteStack";
+import Icon from "./ui/Icon";
 import LiveEta from "./LiveEta";
 import LrtEta from "./LrtEta";
 import JourneyProgress from "./JourneyProgress";
@@ -106,7 +107,7 @@ function tryVibrate() {
    不再按亮度切黑字），与巴士标签保持一致。
    ★ v2.0.1：【4】全站线路标签统一为 `.route-stack`（RouteStack 组件），
    `textOn()` 对比色工具已无消费方 → 删除（RouteStack 内写死白字）。 */
-// v0.15.1：轻轨标签去掉「輕軌·」前缀（🚈 图标/乘车语境已标识载具，无需重复）
+// v0.15.1：轻轨标签去掉「輕軌·」前缀（乘车语境已标识载具，无需重复）
 //   LRT-石排湾线 → 石排灣線；LRT-横琴线 → 橫琴線；LRT-氹仔线 → 氹仔線
 const lrtLabelOf = (code: string) =>
   code
@@ -507,7 +508,7 @@ export default function TimerWizard({ sessionId }: { sessionId: number }) {
         const codes = sortRouteOptions(l.route_options ?? []);
         const first = codes[0] ?? "";
         return {
-          icon: first.startsWith("LRT-") ? "🚈" : "🚌",
+          icon: first.startsWith("LRT-") ? "lrt" : "bus",
           board: l.from_station ? stationName(l.from_station) : "",
           alight: l.to_station ? stationName(l.to_station) : "",
           codes,
@@ -1025,7 +1026,8 @@ export default function TimerWizard({ sessionId }: { sessionId: number }) {
                 className="btn btn--primary btn--lg btn--block"
                 onClick={() => postEvent("resume")}
               >
-                ▶ 继续
+                <Icon name="play" size={20} />
+                继续
               </button>
             </div>
           ) : (
@@ -1063,7 +1065,7 @@ export default function TimerWizard({ sessionId }: { sessionId: number }) {
 
           {/* 巴士段：打点后系统自动记录车距（无需手动选择） */}
           {autoRecordStops && (
-            <p className="t-label t-muted t-center">⚡ 点下方按钮后将自动记录当时车距</p>
+            <p className="t-label t-muted t-center">点下方按钮后将自动记录当时车距</p>
           )}
 
           {/* 学校分区：离校 → 从哪个座走 / 抵校 → 到了哪个座（需求 10）
@@ -1301,7 +1303,8 @@ export default function TimerWizard({ sessionId }: { sessionId: number }) {
                       })
                     }
                   >
-                    ✓ 停靠 · 记一站
+                    <Icon name="check" size={20} />
+                    停靠 · 记一站
                   </button>
                   {/* v0.18.5：轻轨必停不甩站 → 巴士才有甩站按钮 */}
                   {!rideInfo.routeCode.startsWith("LRT-") && (
@@ -1313,7 +1316,8 @@ export default function TimerWizard({ sessionId }: { sessionId: number }) {
                         })
                       }
                     >
-                      ↷ 甩站没停 · 也记一站
+                      <Icon name="skip" size={20} />
+                      甩站没停 · 也记一站
                     </button>
                   )}
                   {/* v0.18.5：忘记打卡——这站过了但没来得及点记站；推进到下一站但不留该站时刻 */}
@@ -1375,7 +1379,8 @@ export default function TimerWizard({ sessionId }: { sessionId: number }) {
                         })
                       }
                     >
-                      ✓ 停靠 · 记一站（继续坐）
+                      <Icon name="check" size={20} />
+                      停靠 · 记一站（继续坐）
                     </button>
                     {/* v0.18.5：轻轨必停不甩站 → 巴士才有甩站按钮 */}
                     {!rideInfo.routeCode.startsWith("LRT-") && (
@@ -1387,7 +1392,8 @@ export default function TimerWizard({ sessionId }: { sessionId: number }) {
                           })
                         }
                       >
-                        ↷ 甩站没停（继续坐）
+                        <Icon name="skip" size={20} />
+                        甩站没停（继续坐）
                       </button>
                     )}
                     {/* v0.18.5：忘记打卡（继续坐）——已过站未记时，推进但不留该站时刻 */}
@@ -1445,8 +1451,9 @@ export default function TimerWizard({ sessionId }: { sessionId: number }) {
               不传 onRemainChange：预览不回写 lrtRemainMs，避免污染本段 wait_start 的分钟快照 */}
           {lrtOnward && (
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              <p className="t-label t-muted" style={{ margin: 0 }}>
-                🚈 换乘预览 · 于「{stationName(lrtOnward.station)}」转乘
+              <p className="t-label t-muted" style={{ margin: 0, display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
+                <Icon name="lrt" size={16} />
+                换乘预览 · 于「{stationName(lrtOnward.station)}」转乘
                 {lrtOnward.dest ? ` → ${stationName(lrtOnward.dest)}` : ""}
               </p>
               <LrtEta

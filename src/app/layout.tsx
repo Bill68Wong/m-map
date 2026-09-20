@@ -4,8 +4,8 @@ import { SpeedInsights } from "@vercel/speed-insights/next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "MUST登校",
-  description: "擎天汇 ↔ 澳科大 ↔ 横琴 通勤计时与数据采集",
+  title: { default: "M Map", template: "%s · M Map" },
+  description: "澳门巴士 / 轻轨全澳导航：全屏地图、路线收藏与实时报站",
   manifest: "/manifest.webmanifest",
   icons: { icon: "/icon.svg" },
 };
@@ -19,7 +19,7 @@ export const viewport: Viewport = {
   maximumScale: 5,
   userScalable: true,
   themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#F9F9FF" },
+    { media: "(prefers-color-scheme: light)", color: "#F2F4F0" },
     { media: "(prefers-color-scheme: dark)", color: "#111318" },
   ],
 };

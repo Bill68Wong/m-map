@@ -31,6 +31,8 @@ const PUBLIC_PAGES = new Set([
   "/nav", // 导航结果页
   "/nav/detail", // 导航详情页
   "/commute", // 旧首页（原 `/` 的 HomeClient 原样迁此）
+  // ★ M Map 改版 S4：路线收藏页（新增公开页；fail-closed 必须显式加入）
+  "/favorites", // 路线收藏
 ]);
 
 /** ② 完全公开的**接口 / 静态资源**（前缀匹配） */

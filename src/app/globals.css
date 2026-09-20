@@ -1,103 +1,205 @@
 /* ============================================================
-   MUST登校 · Material You (M3) 设计地基 v0.3.0
-   纯视觉层：设计令牌 + 组件基元 + 动效，不含任何业务逻辑
+   M Map · 设计地基（方向 A「站牌」+ V2 蓝主）
+   权威：docs/改版-M-Map-20260920/04-design-tokens.md + design-tokens.json
+   ── 分层 ────────────────────────────────────────────────────
+   ① M Map 新 Token（--accent / --fg / --border-strong / --radius-* / --shadow-hard …）
+   ② 兼容别名（旧 M3 名 → 新 Token）—— 既有组件零改动继续生效
+   ⚠️ 深色模式本次不改设计（Spec §3），仅补新 Token 的深色取值保证新组件不裸奔。
    ============================================================ */
 
-/* ---------- 设计令牌 · 浅色（默认） ---------- */
+/* ---------- ① M Map Token · 浅色（默认） ---------- */
 :root {
   color-scheme: light;
 
-  /* M3 蓝色 scheme（源色 #0B57D0） */
-  --primary: #0b57d0;
-  --on-primary: #ffffff;
-  --primary-container: #d3e3fd;
-  --on-primary-container: #041e49;
-  --primary-dim: #0842a0;
+  /* 表面 Surface */
+  --bg: #f2f4f0; /* 页面底·冷雾白（刻意避开米黄/奶油） */
+  --surface: #ffffff; /* 卡片 / 浮层 / 底导 */
+  --surface-2: #eaece7; /* 次表面（置顶微底、内嵌块） */
 
-  /* 表面 */
-  --bg: #f9f9ff;
-  --surface: #ffffff;
-  --surface-dim: #edeef4;
-  --on-surface: #191c20;
-  --on-surface-var: #44474e;
+  /* 前景 Foreground（全部 ≥4.5:1） */
+  --fg: #0f1720;
+  --fg-2: #3a424e;
+  --muted: #5a6472;
+  --meta: #6e7684;
 
-  /* 描边 / 语义色 */
-  --outline: #74777f;
-  --stroke: rgba(25, 28, 32, 0.09);
-  --error: #ba1a1a;
-  --error-container: #ffdad6;
-  --on-error-container: #410002;
-  --ok: #146c2e;
-  --ok-container: #a8efb4;
-  --on-ok-container: #00210b;
+  /* 描边 Border（★ 路牌语言核心） */
+  --border: #dcdcdf; /* 发丝线 */
+  --border-2: #c7cbd1; /* 稍强分隔 */
+  --border-strong: #1b4d8f; /* ★ 主描边 = 青花蓝框 */
+  --frame-w: 1.5px;
+  --frame-w-emph: 2px;
 
-  /* 状态层等效（brightness 模拟 M3 状态层）
-     v0.13.x：按压明显加深（0.93 → 0.90），配合 Spring 回弹动效 */
+  /* 主强调 Accent（青花蓝） */
+  --accent: #1b4d8f;
+  --accent-deep: #16406f;
+  --accent-soft: #e6ecf6;
+  --accent-on: #ffffff;
+  --accent-hover: #17447d;
+  --accent-active: #123a66;
+
+  /* 辅主题色 Brand Green（澳门绿·工作值；仅「正向状态 + 品牌点缀」两岗位） */
+  --brand-green: #0b6e4f;
+  --brand-green-deep: #08543c;
+  --brand-green-soft: #dcebe2;
+  --brand-green-on: #ffffff;
+
+  /* 语义 Semantic（与品牌色解耦） */
+  --success: #0b6e4f;
+  --success-soft: #dcebe2;
+  --warn: #a85e00;
+  --warn-soft: #f7ebdb;
+  --danger: #b4342a;
+  --danger-soft: #f7e3e0;
+  --info: var(--accent);
+
+  /* 字体 Typography */
+  --font-display: "Barlow", "Noto Sans SC", -apple-system, "PingFang SC", sans-serif;
+  --font-body: "Barlow", "Noto Sans SC", -apple-system, "PingFang SC", sans-serif;
+  --font-mono: "JetBrains Mono", "Barlow", monospace;
+  --fw-read: 400;
+  --fw-emphasize: 600;
+  --fw-announce: 700;
+  --text-2xs: 11px;
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-md: 15px;
+  --text-lg: 17px;
+  --text-xl: 20px;
+  --text-2xl: 26px;
+  --text-3xl: 32px;
+  --leading-tight: 1.15;
+  --leading-title: 1.3;
+  --leading-body: 1.55;
+  --leading-loose: 1.7;
+  --tracking-display: -0.02em;
+  --tracking-title: -0.01em;
+  --tracking-body: 0;
+  --tracking-label: 0.09em;
+  --tracking-mono: 0.01em;
+
+  /* 间距 Spacing（4px 基准网格 · 仅 11 档） */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 32px;
+  --space-8: 40px;
+  --space-9: 48px;
+  --space-10: 64px;
+  --space-11: 80px;
+
+  /* 圆角 Radius（上限 10px；按钮不用 pill） */
+  --radius-chip: 6px;
+  --radius-group: 7px;
+  --radius-btn: 8px;
+  --radius-card: 10px;
+  --radius-sheet: 14px;
+  --radius-full: 999px;
+
+  /* 层级 Elevation —— ★ 零模糊阴影（硬投影造「实体/贴纸」感） */
+  --shadow-none: none;
+  --hairline: 0 0 0 1px var(--border);
+  --shadow-hard-sm: 2px 2px 0 0 var(--border-strong);
+  --shadow-hard: 3px 3px 0 0 var(--border-strong);
+  --shadow-sheet: 0 -6px 24px rgba(15, 23, 32, 0.12); /* 唯一允许的柔和抬升（浮在地图上） */
+
+  /* 焦点 / 动效 */
+  --focus-ring: 0 0 0 3px rgba(27, 77, 143, 0.32);
+  --dur-instant: 90ms;
+  --dur-base: 200ms;
+  --dur-slow: 300ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+
+  /* 图标（仅 16 / 20 / 24 三档） */
+  --icon-sm: 16px;
+  --icon-md: 20px;
+  --icon-lg: 24px;
+  --icon-stroke: 2px;
+
+  /* 布局 */
+  --container-mobile: 480px;
+  --container-desktop: 1200px;
+  --tabbar-h: 64px;
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-top: env(safe-area-inset-top, 0px);
+  --sheet-gutter: 16px;
+  --section-y-phone: 24px;
+  --section-y-tablet: 32px;
+  --section-y-desktop: 48px;
+
+  /* ---------- ② 兼容别名（旧 M3 名 → 新 Token；既有组件零改动） ---------- */
+  --primary: var(--accent);
+  --on-primary: var(--accent-on);
+  --primary-container: var(--accent-soft);
+  --on-primary-container: var(--accent-deep);
+  --primary-dim: var(--accent-deep);
+  --surface-dim: var(--surface-2);
+  --on-surface: var(--fg);
+  --on-surface-var: var(--muted);
+  --outline: var(--border-2);
+  --stroke: var(--border);
+  --error: var(--danger);
+  --error-container: var(--danger-soft);
+  --on-error-container: #5a150f;
+  --ok: var(--success);
+  --ok-container: var(--success-soft);
+  --on-ok-container: #06392a;
+
+  /* 状态层（亮度模拟；与弹簧回弹动效配套） */
   --state-hover: brightness(0.965);
   --state-active: brightness(0.9);
 
-  /* 字体层级（M3 Type Scale 简化） */
-  --fs-display: 32px;
+  /* 字体层级（旧名 → 新字号） */
+  --fs-display: var(--text-3xl);
   --fs-headline: 24px;
   --fs-title: 16px;
-  --fs-body: 15px;
-  --fs-label: 13px;
+  --fs-body: var(--text-md);
+  --fs-label: var(--text-sm);
+  --fs-mini: 12.5px;
+  --fs-meta: 13.5px;
 
-  /* 形状 */
-  --r-pill: 999px;
-  --r-card: 16px;
-  --r-field: 12px;
+  /* 形状（旧名 → 新圆角；★ 去 pill） */
+  --r-pill: var(--radius-btn);
+  --r-card: var(--radius-card);
+  --r-field: var(--radius-btn);
 
-  /* 动效 */
-  --ease-em: cubic-bezier(0.2, 0, 0, 1);
+  /* 动效（旧名 → 新时长） */
+  --ease-em: var(--ease-standard);
   --dur-fast: 150ms;
   --dur-med: 250ms;
-
-  /* v0.13.x Spring 回弹（YouTube 式按压，用户定稿）：
-     按下 = 快速下沉（--dur-press，短）+ 明显变深；
-     松开 = 带 overshoot 的回弹（--spring-release back-out，稍长）。
-     CSS 机制：transition 声明在默认态用「释放曲线」，:active 态覆写为「按压曲线」——
-     按下走 90ms 快沉，手指一松 :active 移除，改走默认 240ms back-out 回弹（>1 超调再落回）。 */
   --spring-press: cubic-bezier(0.2, 0, 0, 1);
   --spring-release: cubic-bezier(0.22, 1.9, 0.36, 1);
   --dur-press: 90ms;
   --dur-release: 240ms;
 
-  /* 兼容别名（迁移过渡期/内联引用） */
+  /* 内距 / 间距（旧名） */
   --card: var(--surface);
-  --text: var(--on-surface);
-  --muted: var(--on-surface-var);
-  --accent: var(--primary);
-  --danger: var(--error);
-  --border: var(--stroke);
-
-  /* ── ★ v1.1.7 视觉/交互地基修复：新增令牌（**只增不改** → 老页面零影响）── */
-  /* 字号：补 12→13 之间的断档（原先 12.5 / 13.5 是裸值散落在 rc-* 里） */
-  --fs-mini: 12.5px;
-  --fs-meta: 13.5px;
-  /* 卡片内距：把原先 8 种内联 padding 收敛为两档 */
+  --text: var(--fg);
   --pad-card: 14px 16px;
   --pad-card-tight: 12px 14px;
   --gap-card: 12px;
   --gap-row: 10px;
-  /* 行高：原先 1.5 / 1.6 / 1.7 / 1.85 四种混用 → 收敛为三档 */
+
+  /* 行高（旧名 → 新） */
   --lh-tight: 1.5;
   --lh-body: 1.6;
   --lh-loose: 1.8;
-  /* 投影：深色下 rgba(0,0,0,.03) 完全不可见 → 抽令牌以便深色覆写 */
-  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.03);
-  /* 亮色线路标签的细内描边（深色下让标签与卡片分离；沿用 .route-chip 已有解法） */
+
+  /* ★ 零模糊阴影：旧 --shadow-1 全面置为 none（改用发丝线/硬投影分层） */
+  --shadow-1: none;
   --hairline-inset: inset 0 0 0 1px rgba(255, 255, 255, 0.22);
-  /* 赶车档位徽章：4/5 档原先与 3 档同色（都是 ok-container）→ 拆出两档 */
   --tier-4: #cfe9d8;
   --tier-5: #eef1f8;
 }
 
-/* ---------- 设计令牌 · 深色 ---------- */
+/* ---------- 深色：保持现状（Spec §3 本次不做深色重排）；仅补新 Token 取值 ---------- */
 @media (prefers-color-scheme: dark) {
   :root {
     color-scheme: dark;
 
+    /* 既有深色覆写（不动） */
     --primary: #a8c7fa;
     --on-primary: #062e6f;
     --primary-container: #0842a0;
@@ -122,10 +224,34 @@
     --state-hover: brightness(1.07);
     --state-active: brightness(1.16);
 
-    /* ★ v1.1.7：深色覆写 —— 投影在深色下必须加重才看得见；徽章 4/5 档取深色系 */
-    --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.5);
+    --shadow-1: none;
     --tier-4: #1e3a2a;
     --tier-5: #23262d;
+
+    /* ★ 新增：让 M Map 新 Token 在深色下也有值（保证新组件可读；非设计重排） */
+    --surface-2: #2a2d34;
+    --fg: #e2e2e9;
+    --fg-2: #c4c6d0;
+    --muted: #c4c6d0;
+    --meta: #a9adb8;
+    --border: rgba(226, 226, 233, 0.12);
+    --border-2: rgba(226, 226, 233, 0.2);
+    --border-strong: #a8c7fa;
+    --accent: #a8c7fa;
+    --accent-deep: #d3e3fd;
+    --accent-soft: #0842a0;
+    --accent-on: #062e6f;
+    --brand-green: #6dd58c;
+    --brand-green-soft: #00391b;
+    --success: #6dd58c;
+    --success-soft: #00391b;
+    --warn: #f3c27a;
+    --warn-soft: #3a2a10;
+    --danger: #ffb4ab;
+    --danger-soft: #93000a;
+    --shadow-hard: 3px 3px 0 0 rgba(226, 226, 233, 0.22);
+    --shadow-hard-sm: 2px 2px 0 0 rgba(226, 226, 233, 0.22);
+    --focus-ring: 0 0 0 3px rgba(168, 199, 250, 0.34);
   }
 }
 
@@ -144,35 +270,51 @@ html {
 html,
 body {
   background: var(--bg);
-  color: var(--on-surface);
-  font-family:
-    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC",
-    "Hiragino Sans GB", "Microsoft YaHei", "MiSans", "HarmonyOS Sans SC",
-    sans-serif;
-  font-size: var(--fs-body);
-  line-height: 1.55;
+  color: var(--fg);
+  /* ★ M Map：品牌字体栈（Barlow = 加州交通标牌字血统；中文回落 Noto Sans SC） */
+  font-family: var(--font-body);
+  font-size: var(--text-md);
+  line-height: var(--leading-body);
+  /* ★ 所有数字一律 tabular（站牌的时刻/编号必须竖直对齐） */
+  font-variant-numeric: tabular-nums;
   -webkit-tap-highlight-color: transparent;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
 
 body {
-  transition: background-color 200ms var(--ease-em), color 200ms var(--ease-em);
+  transition:
+    background-color 200ms var(--ease-standard),
+    color 200ms var(--ease-standard);
 }
 
 ::selection {
-  background: var(--primary-container);
-  color: var(--on-primary-container);
+  background: var(--accent-soft);
+  color: var(--accent-deep);
+}
+
+/* ★ 图标（单一出口 = 组件 ui/Icon；此处兜底锁定 2px 方头方角，防 CSS 继承的偶然性） */
+.mm-icon,
+.mm-icon * {
+  stroke-width: var(--icon-stroke);
+  stroke-linecap: butt;
+  stroke-linejoin: miter;
+  vertical-align: -0.125em;
 }
 
 /* ---------- 布局基元 ---------- */
 .page {
-  max-width: 480px;
+  max-width: var(--container-mobile);
   margin: 0 auto;
-  padding: 20px 16px calc(20px + env(safe-area-inset-bottom, 0px));
+  padding: 20px 16px calc(20px + var(--safe-bottom));
   min-height: 100dvh;
   display: flex;
   flex-direction: column;
+}
+
+/* ★ 挂了页级底部导航的页面：给固定底导让出高度（ADR-003 页级挂载） */
+.page--with-nav {
+  padding-bottom: calc(var(--tabbar-h) + var(--safe-bottom) + 20px);
 }
 
 .page--center {
@@ -288,18 +430,18 @@ button[aria-disabled="true"] {
   }
 }
 
-/* ---------- 按钮变体（M3：filled / tonal / outline / text） ---------- */
+/* ---------- 按钮（方向 A：非 pill · 8px · 硬投影） ---------- */
 .btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: var(--space-2);
   min-height: 48px;
   padding: 0 24px;
-  border-radius: var(--r-pill);
+  border-radius: var(--radius-btn);
   font-size: var(--fs-title);
-  font-weight: 600;
-  letter-spacing: 0.1px;
+  font-weight: var(--fw-emphasize);
+  letter-spacing: 0;
   line-height: 1.2;
   white-space: nowrap;
 }
@@ -309,25 +451,27 @@ button[aria-disabled="true"] {
 }
 
 .btn--primary {
-  background: var(--primary);
-  color: var(--on-primary);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+  background: var(--accent);
+  color: var(--accent-on);
+  /* ★ 硬投影（零模糊）造「实体/标牌」感 */
+  box-shadow: var(--shadow-hard-sm);
 }
 
 .btn--tonal {
-  background: var(--primary-container);
-  color: var(--on-primary-container);
+  background: var(--accent-soft);
+  color: var(--accent-deep);
 }
 
+/* ★ 主描边 = 青花蓝框（路牌语言） */
 .btn--outline {
-  background: transparent;
-  color: var(--primary);
-  border: 1px solid var(--outline);
+  background: var(--surface);
+  color: var(--accent);
+  border: var(--frame-w) solid var(--border-strong);
 }
 
 .btn--text {
   background: transparent;
-  color: var(--primary);
+  color: var(--accent);
   padding-left: 16px;
   padding-right: 16px;
 }
@@ -897,13 +1041,14 @@ button[aria-disabled="true"] {
 
 .dialog-card {
   background: var(--surface);
-  color: var(--on-surface);
-  border-radius: 20px;
+  color: var(--fg);
+  border-radius: var(--radius-sheet);
   padding: 22px 20px;
   width: 100%;
   max-width: 380px;
-  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.25);
-  animation: dialog-pop 180ms var(--ease-em);
+  /* ★ 浮层唯一允许的柔和抬升 */
+  box-shadow: var(--shadow-sheet);
+  animation: dialog-pop 180ms var(--ease-standard);
 }
 
 @keyframes fade-in {
@@ -1023,8 +1168,9 @@ button[aria-disabled="true"] {
   overflow: hidden;
 }
 
+/* ★ 零模糊阴影：hover 用「主描边」提亮，不用投影（避免「1px 边框 + 大 blur」幽灵卡片） */
 .rc:hover {
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+  border-color: var(--border-strong);
 }
 
 /* ★ v1.1.7：修「5 张路线大卡按下去几乎没反应 + 按下还在弹」。
@@ -1126,14 +1272,15 @@ button[aria-disabled="true"] {
   flex-shrink: 0;
   width: 20px;
   height: 20px;
-  border-radius: var(--r-pill);
+  /* ★ 圆点用 50%（--r-pill 现为 8px 按钮圆角，20px 的圆点会变方角） */
+  border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 11px;
   line-height: 1;
-  background: var(--surface-dim);
-  color: var(--on-surface-var);
+  background: var(--surface-2);
+  color: var(--muted);
   z-index: 1;
 }
 
@@ -1797,7 +1944,7 @@ button[aria-disabled="true"] {
   white-space: nowrap;
 }
 
-/* ── 地图（占位用 aspect-ratio 锁高，防跳动 §11.1）── */
+/* ── 地图（内嵌形态：仍用 aspect-ratio 占位，防跳动 §11.1）── */
 .nav-shell {
   display: flex;
   flex-direction: column;
@@ -1807,14 +1954,30 @@ button[aria-disabled="true"] {
   position: relative;
   width: 100%;
   aspect-ratio: 4 / 3;
-  border-radius: var(--r-card);
+  border-radius: var(--radius-card);
   overflow: hidden;
-  background: var(--surface-dim);
+  background: var(--surface-2);
 }
 @media (min-width: 560px) {
   .nav-map {
     aspect-ratio: 16 / 9;
   }
+}
+
+/* ★ S2：首页**全屏地图** —— 去 aspect-ratio 改 fixed 铺满。
+   ⚠️ 底部让出「合规条 + 底部导航」整带 ⇒ 高德 Logo / 审图号（地图 DOM 左下 / 右下角）
+   **永不被遮挡**（合规红线，风险 #4）。 */
+.nav-map--full {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: calc(var(--tabbar-h) + var(--safe-bottom) + var(--compliance-h));
+  width: auto;
+  height: auto;
+  aspect-ratio: auto;
+  border-radius: 0;
+  z-index: 0;
 }
 .nav-map__canvas {
   position: absolute;
@@ -2163,5 +2326,697 @@ button[aria-disabled="true"] {
   color: var(--on-surface-var);
   margin: 0;
 }
+
+/* ══════════════════════════════════════════════════════════════════
+   ★ M Map 改版（S2 / S4 / S5）—— 全屏地图 · 底导 · 分步弹层 · 收藏页
+   全部走 M Map Token；零 emoji、零紫粉渐变、零模板文案。
+   ══════════════════════════════════════════════════════════════════ */
+
+/* 合规条带高（首页地图底部让位量的一部分；= 高德版权区不可遮挡） */
+:root {
+  --compliance-h: 30px;
+}
+
+/* ── 首页：全屏地图容器（承载绝对定位的站点信息卡） ── */
+.nav-shell--full {
+  gap: 0;
+}
+.nav-shell--full .nav-map-wrap {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: calc(var(--tabbar-h) + var(--safe-bottom) + var(--compliance-h));
+  z-index: 0;
+}
+/* 覆盖 .nav-map--full 的 fixed 形态（在 wrap 内改为绝对铺满） */
+.nav-shell--full .nav-map--full {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: auto;
+  height: auto;
+  aspect-ratio: auto;
+  border-radius: 0;
+}
+
+/* ── 首页顶部浮层：品牌字标 + 定位按钮 ── */
+.nav-top {
+  position: fixed;
+  top: calc(var(--space-3) + var(--safe-top));
+  left: 0;
+  right: 0;
+  padding: 0 var(--space-4);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  z-index: 20;
+}
+/* 品牌字标（16px/600，是「字标」不是大标题 —— 白底小牌，压在地图上清晰） */
+.nav-brand {
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: var(--fw-emphasize);
+  letter-spacing: var(--tracking-title);
+  color: var(--fg);
+  background: var(--surface);
+  border: var(--frame-w) solid var(--border-strong);
+  border-radius: var(--radius-chip);
+  padding: 3px 9px;
+  line-height: 1.3;
+}
+.nav-locate {
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface);
+  color: var(--accent);
+  border: var(--frame-w) solid var(--border-strong);
+  border-radius: var(--radius-full);
+  box-shadow: var(--shadow-hard-sm);
+}
+
+/* ── 顶置目的地搜索条（★ 标牌式；白底 + 蓝框 + 硬投影） ── */
+.nav-searchbar {
+  position: fixed;
+  top: calc(60px + var(--safe-top));
+  left: var(--space-4);
+  right: var(--space-4);
+  min-height: 52px;
+  padding: 0 var(--space-4);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  background: var(--surface);
+  color: var(--fg);
+  border: var(--frame-w-emph) solid var(--border-strong);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-hard);
+  text-align: left;
+  z-index: 20;
+}
+.nav-searchbar svg {
+  color: var(--accent);
+  flex: none;
+}
+.nav-searchbar__text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-md);
+}
+.nav-searchbar__text--ph {
+  color: var(--muted);
+}
+.nav-searchbar__tag {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 7px;
+  border-radius: var(--radius-chip);
+  background: var(--accent-soft);
+  color: var(--accent-deep);
+}
+
+/* 带入收藏提示条 */
+.nav-banner {
+  position: fixed;
+  top: calc(120px + var(--safe-top));
+  left: var(--space-4);
+  right: var(--space-4);
+  padding: 6px 10px;
+  border-radius: var(--radius-chip);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  z-index: 20;
+}
+
+/* ── 底部主导航（2 tab；选中 = 实心 + 加粗 + 青花蓝 三通道） ── */
+.home-chrome {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-top: var(--frame-w) solid var(--border);
+}
+.home-chrome .nav-compliance {
+  flex: none;
+  height: var(--compliance-h);
+  margin-top: 0;
+  padding: 0 var(--space-4);
+  align-items: center;
+  flex-wrap: nowrap;
+  overflow: hidden;
+  border-bottom: 1px solid var(--border);
+}
+.home-chrome .nav-compliance > span:first-child {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.home-chrome .bottom-nav {
+  position: static;
+  border-top: none;
+}
+
+.bottom-nav {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 30;
+  display: flex;
+  height: calc(var(--tabbar-h) + var(--safe-bottom));
+  padding-bottom: var(--safe-bottom);
+  background: var(--surface);
+  border-top: var(--frame-w) solid var(--border);
+}
+.bottom-nav__tab {
+  flex: 1;
+  min-height: 48px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  color: var(--muted);
+  text-decoration: none;
+}
+.bottom-nav__tab.is-active {
+  color: var(--accent);
+}
+.bottom-nav__icon {
+  position: relative;
+  display: inline-flex;
+}
+.bottom-nav__dot {
+  position: absolute;
+  right: -3px;
+  bottom: -1px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.bottom-nav__label {
+  font-size: var(--text-2xs);
+  letter-spacing: 0.04em;
+  font-weight: var(--fw-emphasize);
+}
+.bottom-nav__tab.is-active .bottom-nav__label {
+  font-weight: var(--fw-announce);
+}
+
+/* ── 分步搜索弹层（Bottom Sheet；落在拇指区，独立滚动） ── */
+.step-sheet__scrim {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: calc(var(--tabbar-h) + var(--safe-bottom));
+  z-index: 40;
+  background: var(--fg);
+  opacity: 0.3;
+  border: 0;
+  padding: 0;
+}
+.step-sheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: calc(var(--tabbar-h) + var(--safe-bottom));
+  z-index: 41;
+  display: flex;
+  flex-direction: column;
+  max-height: 62dvh;
+  background: var(--surface);
+  border-top-left-radius: var(--radius-sheet);
+  border-top-right-radius: var(--radius-sheet);
+  box-shadow: var(--shadow-sheet);
+  animation: fade-up var(--dur-base) var(--ease-standard) backwards;
+}
+.step-sheet__grip {
+  flex: none;
+  width: 36px;
+  height: 4px;
+  margin: 8px auto 0;
+  border-radius: var(--radius-full);
+  background: var(--border-2);
+}
+.step-sheet__head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4) var(--space-2);
+}
+.step-sheet__back {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  margin-left: -10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+}
+.step-sheet__title {
+  font-size: var(--text-lg);
+  font-weight: var(--fw-emphasize);
+  letter-spacing: var(--tracking-title);
+  color: var(--fg);
+}
+.step-dots {
+  list-style: none;
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.step-dots__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: var(--frame-w) solid var(--border-2);
+}
+.step-dots__dot.is-on {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.step-sheet__body {
+  flex: 1;
+  min-height: 0;
+  /* ★ 抽屉独立滚动：不与地图抢手势（风险 #1） */
+  overflow-y: auto;
+  touch-action: pan-y;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-1) var(--space-4) calc(var(--space-4) + var(--safe-bottom));
+}
+.step-sheet__lead {
+  margin: 0;
+  font-size: var(--text-md);
+  color: var(--fg-2);
+}
+.step-sheet__hint {
+  margin: 0;
+}
+.step-sheet__pin-preview {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: var(--frame-w) solid var(--border-strong);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  color: var(--fg);
+}
+.step-sheet__quick {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.step-sheet__quick-title {
+  color: var(--muted);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+.step-sheet__quick-row {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg);
+  text-align: left;
+}
+.step-sheet__quick-from,
+.step-sheet__quick-to {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.step-sheet__dest-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-2);
+  border-radius: var(--radius-chip);
+  color: var(--fg);
+}
+.step-sheet__dest-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: var(--fw-emphasize);
+}
+.step-sheet__od {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--fg);
+  font-size: var(--text-lg);
+  font-weight: var(--fw-emphasize);
+}
+.step-sheet__od-from {
+  color: var(--muted);
+}
+.step-sheet__actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/* ── 收藏按钮（4 入口共用） ── */
+.fav-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.fav-btn--block {
+  width: 100%;
+}
+.fav-btn--block .fav-btn__btn {
+  width: 100%;
+  justify-content: center;
+}
+.fav-btn__btn {
+  min-width: 44px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-btn);
+  color: var(--muted);
+  background: transparent;
+}
+.fav-btn__btn.is-on {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.fav-btn__btn:disabled {
+  color: var(--meta);
+  background: transparent;
+}
+.fav-btn__text {
+  font-size: var(--text-sm);
+  font-weight: var(--fw-emphasize);
+}
+.fav-btn__msg {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  margin-top: 2px;
+  padding: 2px 8px;
+  border-radius: var(--radius-chip);
+  background: var(--fg);
+  color: var(--surface);
+  font-size: var(--text-2xs);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  z-index: 5;
+}
+
+/* 卡片脚右侧动作槽（收藏入口 ①） */
+.rc-foot__action {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* /nav 一次性「已重新规划」提示条 */
+.nav-inline-notice {
+  padding: 6px 10px;
+  border-radius: var(--radius-chip);
+  background: var(--accent-soft);
+  color: var(--accent-deep);
+}
+
+/* ── 收藏页 ── */
+.fav-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.fav-page__title {
+  font-size: var(--text-xl);
+  font-weight: var(--fw-emphasize);
+  letter-spacing: var(--tracking-title);
+  color: var(--fg);
+  margin: 0;
+}
+.fav-note {
+  margin: 0;
+}
+.fav-note--warn {
+  padding: 6px 10px;
+  border-radius: var(--radius-chip);
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+.fav-sk {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.fav-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-9) var(--space-4);
+  text-align: center;
+  border: var(--frame-w) dashed var(--border-2);
+  border-radius: var(--radius-card);
+}
+.fav-empty__icon {
+  color: var(--border-2);
+}
+.fav-empty__title {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: var(--fw-emphasize);
+  color: var(--fg);
+}
+.fav-empty__body {
+  margin: 0;
+  max-width: 34ch;
+}
+.fav-group {
+  display: flex;
+  flex-direction: column;
+}
+.fav-group__title {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: var(--space-2) 0 var(--space-1);
+  padding-bottom: 6px;
+  border-bottom: var(--frame-w) solid var(--border);
+  font-size: var(--text-sm);
+  font-weight: var(--fw-emphasize);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--fg);
+}
+.fav-group__count {
+  margin-left: auto;
+  color: var(--muted);
+  letter-spacing: 0;
+  text-transform: none;
+}
+.fav-group__empty {
+  margin: var(--space-3) 0;
+  color: var(--muted);
+}
+
+/* 地点对：发丝线列表行（不套卡片盒） */
+.fav-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: 56px;
+  border-bottom: 1px solid var(--border);
+}
+.fav-row.is-pinned {
+  background: var(--surface-2);
+}
+.fav-row__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: var(--space-2) var(--space-2) var(--space-2) 0;
+  text-align: left;
+  color: var(--fg);
+}
+.fav-row__od {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-md);
+  font-weight: var(--fw-emphasize);
+}
+.fav-row__end {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fav-row__meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--muted);
+}
+.fav-badge {
+  padding: 1px 6px;
+  border-radius: var(--radius-chip);
+  background: var(--surface-2);
+  color: var(--muted);
+}
+.fav-badge--pin {
+  background: var(--accent-soft);
+  color: var(--accent-deep);
+}
+
+/* 路线方案：带纵向色轨的卡（与地点对形态不同，区分两类收藏） */
+.fav-plan {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin: var(--space-2) 0;
+  padding-left: var(--space-3);
+  border: var(--frame-w) solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  box-shadow: var(--shadow-hard-sm);
+}
+.fav-plan.is-pinned {
+  background: var(--surface-2);
+}
+.fav-plan__rail {
+  position: absolute;
+  left: 5px;
+  top: var(--space-3);
+  bottom: var(--space-3);
+  width: 3px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+.fav-plan__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: var(--space-3) var(--space-2) var(--space-3) var(--space-2);
+  text-align: left;
+  color: var(--fg);
+}
+.fav-plan__title {
+  font-size: var(--text-md);
+  font-weight: var(--fw-emphasize);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fav-plan__line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.fav-plan__meta {
+  display: block;
+}
+
+/* 「更多」菜单 */
+.fav-menu {
+  position: relative;
+  flex: none;
+  align-self: flex-start;
+}
+.fav-menu__btn {
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  border-radius: var(--radius-btn);
+}
+.fav-menu__pop {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  z-index: 10;
+  min-width: 168px;
+  padding: var(--space-1);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: var(--frame-w) solid var(--border-strong);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-hard-sm);
+}
+.fav-menu__item {
+  min-height: 44px;
+  padding: 0 var(--space-3);
+  text-align: left;
+  color: var(--fg);
+  border-radius: var(--radius-chip);
+}
+.fav-menu__item:disabled {
+  color: var(--meta);
+}
+.fav-menu__item--danger {
+  color: var(--danger);
+}
+.fav-menu__confirm,
+.fav-menu__rename {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1);
+}
+.fav-menu__confirm-text {
+  flex: 1;
+  color: var(--fg-2);
+}
+.fav-menu__inp {
+  min-height: 44px;
+  font-size: var(--text-sm);
+}
+.is-busy {
+  opacity: 0.6;
+}
+
 
 

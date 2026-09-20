@@ -13,6 +13,7 @@
 import { redirect } from "next/navigation";
 import { Suspense } from "react";
 import CardDetailClient from "@/components/card/CardDetailClient";
+import Icon from "@/components/ui/Icon";
 import { getPool } from "@/lib/db";
 import { PLACE_SHORT } from "@/lib/home-plans-shared";
 import { isAuthed } from "@/lib/auth-server";
@@ -91,7 +92,10 @@ function CardSkeleton() {
   return (
     <main className="page rc-detail">
       <div className="rc-top">
-        <span className="btn btn--text btn--sm">← 返回</span>
+        <span className="btn btn--text btn--sm">
+          <Icon name="back" size={20} />
+          返回
+        </span>
       </div>
       <div className="cd-sk">
         <span className="rc-sk rc-sk--big" />
