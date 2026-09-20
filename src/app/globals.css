@@ -2979,11 +2979,25 @@ button[aria-disabled="true"] {
   color: var(--muted);
   border-radius: var(--radius-btn);
 }
+/* ★ P2 修复（QA 2026-09-20 实测）：菜单**向下**弹出（`top:100%`），若组合卡靠近列表底部，
+   菜单下半会被固定底导（`.bottom-nav` z-index **30**）遮挡 → 「删除组合」不可点、
+   点击还会命中底导**误切 Tab**（几何实测：菜单 856→900 vs 底导 868→932 重叠）。
+   ① 主修：把**临时浮层**的 z-index 提到高于底导 —— 菜单是短时浮层，盖住底导可接受。
+   ③ 辅助：列表底部另留出底导高度（`.fav-page` 的 padding-bottom），让最底一张卡也能滚到可点位置。 */
+/* ★ P2 **二次修复（关键那一步）**：z-index 只是必要条件 —— 实测菜单 `popRect.bottom = 1074`
+   而视口仅 932 ⇒ 菜单**下半截在视口之外**，后 3 项（置顶/停用/删除组合）点不到，
+   这与"被底导遮住"不同，**提高 z-index 无效**。
+   ⇒ `FavoriteCard` 在**打开那一刻**量测按钮下方空间：不足以容纳菜单时给 `.fav-menu` 打
+     `data-up="1"`，菜单改为 **`bottom:100%` 向上弹**（近底部卡片正解）。 */
+.fav-menu[data-up="1"] .fav-menu__pop {
+  top: auto;
+  bottom: 100%;
+}
 .fav-menu__pop {
   position: absolute;
   right: 0;
   top: 100%;
-  z-index: 10;
+  z-index: 40;
   min-width: 168px;
   padding: var(--space-1);
   display: flex;
@@ -3321,6 +3335,342 @@ button[aria-disabled="true"] {
 }
 .btn--danger:disabled {
   opacity: 0.5;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   ★ S3（v2.3.0）：组合编排编辑器（08 §C.3 —— 纵向流程图 + 五档分段选择器）
+   ══════════════════════════════════════════════════════════════════ */
+
+/* 顶栏：返回 / 命名 / 保存 */
+.editor-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+.editor-bar__name {
+  flex: 1;
+  min-width: 0;
+  min-height: 44px;
+  font-size: var(--text-md);
+  font-weight: var(--fw-emphasize);
+}
+
+/* 纵向流程图 */
+.combo-flow {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+.combo-flow__dot {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  margin-top: 6px;
+  border-radius: 50%;
+  border: var(--frame-w) solid var(--border-strong);
+  background: var(--surface);
+}
+.combo-flow__dot--end {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.combo-node {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding-left: var(--space-2);
+  border-left: 2px solid var(--border);
+}
+.combo-node--end {
+  border-left-color: transparent;
+}
+.combo-node__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.combo-node__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.combo-node__role {
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.combo-node__label {
+  font-size: var(--text-md);
+  font-weight: var(--fw-emphasize);
+  color: var(--fg);
+}
+/* 站点行：未指定=虚线（自动）· 已指定=实线主描边（手改） */
+.combo-node__pick {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 44px;
+  padding: 0 var(--space-3);
+  border: var(--frame-w) dashed var(--border-2);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  color: var(--muted);
+  text-align: left;
+}
+.combo-node__pick.is-manual {
+  border-style: solid;
+  border-color: var(--border-strong);
+  color: var(--fg);
+  font-weight: var(--fw-emphasize);
+}
+.combo-node__pick span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.combo-node__del {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--danger);
+}
+/* ＋ 插入换乘（虚线 + 加号） */
+.combo-insert {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  min-height: 44px;
+  border: var(--frame-w) dashed var(--border-2);
+  border-radius: var(--radius-card);
+  background: transparent;
+  color: var(--accent);
+  font-size: var(--text-sm);
+  font-weight: var(--fw-emphasize);
+}
+.combo-insert:disabled {
+  color: var(--meta);
+  border-color: var(--border);
+}
+
+/* 步行段（复合段）：未编排用虚线 */
+.combo-seg {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+}
+.combo-seg--auto {
+  border-style: dashed;
+}
+.combo-seg--transfer {
+  background: var(--surface-2);
+  border-color: transparent;
+}
+.combo-seg__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.combo-seg__role {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+.combo-seg__reset {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--accent);
+}
+.combo-seg__fields {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+.combo-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+}
+.combo-field__inp {
+  width: 76px;
+  min-height: 40px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.combo-lock {
+  min-height: 40px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-chip);
+  background: transparent;
+  color: var(--muted);
+}
+.combo-lock.is-on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* 「自动 / 手改」标记（08 §C.3(b)：灰度 = 系统给的 / 实色 = 你定的） */
+.combo-state {
+  padding: 1px 6px;
+  border-radius: var(--radius-chip);
+  background: var(--surface-2);
+  color: var(--meta);
+}
+.combo-state--manual {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* 五档分段选择器（等宽 5 格；选中/已改格 = 主描边） */
+.combo-speed {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.combo-speed + .combo-speed {
+  margin-top: var(--space-4);
+}
+.combo-speed__title {
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+.combo-speed__row {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 4px;
+}
+.combo-speed__cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-height: 52px;
+  padding: 6px 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-chip);
+  background: var(--surface);
+  color: var(--muted);
+}
+.combo-speed__cell.is-manual {
+  border-color: var(--border-strong);
+  background: var(--surface-2);
+  color: var(--fg);
+  font-weight: var(--fw-emphasize);
+}
+/* 档 3 = 基准档（改动会影响全局，用主色内描边标出） */
+.combo-speed__cell.is-base {
+  outline: var(--frame-w) solid var(--accent);
+  outline-offset: -3px;
+}
+.combo-speed__tier {
+  font-size: var(--text-2xs);
+}
+.combo-speed__val {
+  font-size: var(--text-sm);
+  font-weight: var(--fw-emphasize);
+  font-variant-numeric: tabular-nums;
+}
+.combo-speed__val em {
+  font-style: normal;
+  font-size: var(--text-2xs);
+  color: var(--muted);
+  margin-left: 1px;
+}
+.combo-speed__hint {
+  margin: 0;
+}
+
+/* 预览条（改一项即更新；不请求服务端） */
+.editor-preview {
+  margin-top: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-card);
+  background: var(--surface-2);
+}
+
+/* 桌面：流程图限宽（避免拉成超宽一条） */
+@media (min-width: 1024px) {
+  .combo-flow {
+    max-width: 560px;
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   ★ S4（v2.3.0）：组合的现场计算方案列表（复用 .rc 卡）
+   ══════════════════════════════════════════════════════════════════ */
+.combo-plans {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+/* ★ 「当下最快」= **第 1 张**（排序 = 总用时含步行升序，与 /nav 同口径；08 §C.4 / F9）
+   —— 只高亮第 1 张，不做金/红「最佳」角标（避开营销味） */
+.combo-plans .rc:first-of-type {
+  border: 2px solid var(--accent);
+  box-shadow: var(--shadow-hard);
+}
+.rc-best-tag {
+  margin-right: var(--space-1);
+  padding: 1px 8px;
+  border-radius: var(--radius-chip);
+  background: var(--accent);
+  color: #fff;
+  font-weight: var(--fw-emphasize);
+}
+/* 「已保存」角标（按 fingerprint 命中） */
+.fav-saved-badge {
+  padding: 1px 8px;
+  border-radius: var(--radius-chip);
+  background: var(--surface-2);
+  color: var(--muted);
+  font-weight: var(--fw-emphasize);
+}
+
+/* 降级：已保存快照（「历史记录，可能已变化」） */
+.combo-snap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  padding: var(--space-3);
+  border: var(--frame-w) dashed var(--border-2);
+  border-radius: var(--radius-card);
+}
+.combo-snap__title {
+  color: var(--warn);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+.combo-snap__body {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+.combo-snap__min {
+  font-size: var(--text-xl);
+  font-weight: var(--fw-emphasize);
+  color: var(--fg);
+}
+.combo-snap .btn {
+  align-self: flex-start;
 }
 
 

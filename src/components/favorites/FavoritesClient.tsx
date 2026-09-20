@@ -1,24 +1,22 @@
 "use client";
 
 /**
- * 收藏页客户端（src/components/favorites/FavoritesClient.tsx；★ v2.3.0 S2：组合列表）
+ * 收藏页客户端（src/components/favorites/FavoritesClient.tsx；v2.3.0 S2 列表 + S3 编辑器 + S4 现场计算）
  *
- * ── 本段（S2 最小段）───────────────────────────────────────────────────
- *   · 列表读 **`useCombos()`**（组合模型），**彻底去掉 v1（`useFavorites`）依赖**
- *     ⇒ 与 `FavoriteButton` 一起，S1→S2 的「v1/v2 双写窗口」消除；
- *   · 组合卡（`FavoriteCard`）+ 摘要行（「N 段编排 · 最近 X 分 · 线路标签」）；
- *   · ⋯菜单：重命名 / 置顶 / 停用 / **删除组合（带确认弹窗）**；
- *   · 排序：置顶 → 启用 → 最近使用/更新 降序（**停用沉底**，08 §C.2）；
- *   · 空态 + 只读降级（沿用既有文案与骨架守卫）。
+ * ── 三种视图（无新路由 ⇒ 不动 middleware 白名单）──────────────────────
+ *   · **列表**（默认）：组合卡 + 摘要行 + ⋯菜单（编辑编排/重命名/置顶/停用/删除）
+ *   · **编辑器**（S3）：`editing` 非空 → `ComboEditor` 全屏
+ *   · **方案列表**（S4）：`viewing` 非空 → `ComboPlans` 全屏（现场算多方案 + 角标 + 降级）
  *
- * ── 本段**未做**（下一段交付，如实标注）────────────────────────────────
- *   · 「编辑编排」菜单项（= S3 编辑器）——**故意不放死按钮**；
- *   · 点组合卡 → **现场实时算多方案**（= S4）：本段先按 `query` 落 `/nav`（现网主路径，行为可预期）。
+ * ── ★ S4：点组合卡 = **现场实时算**（不再跳 `/nav`）─────────────────────
+ *   07 §2：`chain/walk/tiers` 只在有自定义编排时传参；缺省 = v2.2.0 行为逐字节一致。
  */
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Icon from "@/components/ui/Icon";
 import FavoriteCard from "./FavoriteCard";
+import ComboEditor from "./ComboEditor";
+import ComboPlans from "./ComboPlans";
 import { useCombos } from "@/lib/favorites/useCombos";
 import type { Combo } from "@/lib/favorites/types";
 
@@ -33,6 +31,10 @@ export default function FavoritesClient({ colors = {} }: { colors?: Record<strin
   const router = useRouter();
   const c = useCombos();
   const [notice, setNotice] = useState("");
+  /** ★ S3：正在编辑的组合（非空 → 全屏编辑器） */
+  const [editing, setEditing] = useState<Combo | null>(null);
+  /** ★ S4：正在查看方案的组合（非空 → 全屏方案列表） */
+  const [viewing, setViewing] = useState<Combo | null>(null);
   const combos = useMemo(() => [...c.combos].sort(order), [c.combos]);
 
   /** 行内轻提示（不弹模态） */
@@ -58,6 +60,28 @@ export default function FavoritesClient({ colors = {} }: { colors?: Record<strin
     );
   }
 
+  // ── ★ S3：编辑器全屏 ──
+  if (editing) {
+    const fresh = c.combos.find((x) => x.id === editing.id) ?? editing;
+    return (
+      <ComboEditor
+        combo={fresh}
+        colors={colors}
+        readOnly={c.readOnly}
+        onClose={() => {
+          setEditing(null);
+          flash("已保存编排");
+        }}
+      />
+    );
+  }
+
+  // ── ★ S4：方案列表全屏（现场算）──
+  if (viewing) {
+    const fresh = c.combos.find((x) => x.id === viewing.id) ?? viewing;
+    return <ComboPlans combo={fresh} colors={colors} onExit={() => setViewing(null)} />;
+  }
+
   function open(combo: Combo) {
     if (combo.disabled) {
       flash("这条组合已停用，可在 ⋯ 里启用");
@@ -65,8 +89,8 @@ export default function FavoritesClient({ colors = {} }: { colors?: Record<strin
     }
     // 记录最近使用（排序 / 清理依据）
     c.update(combo.id, { lastUsedAt: Date.now() });
-    // ⚠️ S2 最小段：先落 /nav（按 query 重新规划）；S4 将改为「带 chain/walk/tiers 现场算多方案」
-    router.push(`/nav?${combo.query}`);
+    // ★ S4：不再跳 /nav —— 就地**现场算多方案**（带 chain/walk/tiers）
+    setViewing(combo);
   }
 
   return (
@@ -118,6 +142,7 @@ export default function FavoritesClient({ colors = {} }: { colors?: Record<strin
               colors={colors}
               readOnly={c.readOnly}
               onOpen={open}
+              onEdit={(x) => setEditing(x)}
               onRename={(id, name) => {
                 c.update(id, { name, nameEdited: true });
                 flash("已重命名");

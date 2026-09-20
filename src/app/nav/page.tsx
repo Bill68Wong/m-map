@@ -17,8 +17,6 @@ import { getPool } from "@/lib/db";
 import { parseNavParams } from "@/lib/nav/nav-params";
 import { planNav } from "@/lib/nav/nav-service";
 import { endpointOf } from "@/lib/favorites/types";
-import type { NavPoint } from "@/lib/nav/types";
-import type { SchoolZone } from "@/lib/recommend/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -55,7 +53,10 @@ export default async function Page({
       </header>
 
       <Suspense fallback={<ResultSkeleton />}>
-        <ResultSection query={p.query} origin={p.origin} dest={p.dest} zone={p.zone} limit={p.limit} />
+        {/* ★ S5：把**整份已解析参数**传给结果区 —— 使 `chain/walk/tiers`（自定义站链 / 步行覆盖 /
+            五档覆盖）能透传到 `planNav`；**不传时缺省行为与 v2.2.0 逐字节一致**（ADR-005）。
+            用「传整个 p」而不是逐个透传，避免以后新增参数再漏一处。 */}
+        <ResultSection p={p} />
       </Suspense>
 
       <ComplianceBar />
@@ -63,20 +64,13 @@ export default async function Page({
   );
 }
 
-async function ResultSection({
-  query,
-  origin,
-  dest,
-  zone,
-  limit,
-}: {
-  query: string;
-  origin: NavPoint;
-  dest: NavPoint;
-  zone: SchoolZone | null;
-  limit: number;
-}) {
-  const result = await planNav(getPool(), { origin, dest, zone, limit });
+/**
+ * ★ S5：接收**整份已解析参数**（`parseNavParams` 的返回类型）—— 站链/步行/五档覆盖随之自动透传。
+ * ⚠️ `planNav` 的三个参数均为**可选**：未提供时行为与 v2.2.0 完全一致。
+ */
+async function ResultSection({ p }: { p: NonNullable<ReturnType<typeof parseNavParams>> }) {
+  const { query, origin, dest, zone, limit, chain, walk, tiers } = p;
+  const result = await planNav(getPool(), { origin, dest, zone, limit, chain, walk, tiers });
   return <NavResultClient query={query} initial={result} origin={origin} dest={dest} />;
 }
 

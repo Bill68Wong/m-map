@@ -49,6 +49,12 @@ import {
   IconRefresh,
   IconSearch,
   IconTrash,
+  IconArrowBackUp,
+  IconDots,
+  IconGripVertical,
+  IconPencil,
+  IconPinned,
+  IconPlus,
   IconTrain,
   IconWalk,
   IconX,
@@ -96,6 +102,13 @@ const REGISTRY: Record<string, any> = {
   trash: IconTrash,
   lock: IconLock,
   download: IconDownload,
+  /* ★ S3（08 §C.6 图标增补）：组合卡 / 编排编辑器用（Tabler 同库，stroke=2 方头方角不变） */
+  add: IconPlus,
+  edit: IconPencil,
+  more: IconDots,
+  dragHandle: IconGripVertical,
+  pinTop: IconPinned,
+  undo: IconArrowBackUp,
 };
 
 export type IconName = keyof typeof REGISTRY;
