@@ -1,6 +1,7 @@
 "use client";
 
 import RouteStack from "./RouteStack";
+import Icon from "./ui/Icon";
 
 export interface PlanStat {
   plan_id: number;
@@ -72,7 +73,8 @@ export default function StatsClient({
             href="/api/export"
             download
           >
-            ⬇ CSV
+            <Icon name="download" size={20} />
+            导出 CSV
           </a>
         </div>
         <p className="t-label t-muted" style={{ marginTop: 6, lineHeight: 1.6 }}>
@@ -118,7 +120,9 @@ export default function StatsClient({
                       <p className="t-body" style={{ lineHeight: 1.5 }}>
                         {p.route_code && (p.board_name || p.alight_name) ? (
                           <>
-                            <span aria-hidden>{p.route_code.startsWith("LRT-") ? "🚈" : "🚌"}</span>{" "}
+                            <span aria-hidden>
+                              <Icon name={p.route_code.startsWith("LRT-") ? "lrt" : "bus"} size={16} />
+                            </span>{" "}
                             <span>
                               {p.board_name || "—"}
                               <span className="t-muted"> → </span>
@@ -153,7 +157,14 @@ export default function StatsClient({
                         className={done ? "t-ok" : "t-muted"}
                         style={{ fontSize: 12, fontWeight: 700 }}
                       >
-                        {done ? "✓ 达标" : `${p.n}/${GOAL}`}
+                        {done ? (
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: 3 }}>
+                            <Icon name="check" size={16} />
+                            达标
+                          </span>
+                        ) : (
+                          `${p.n}/${GOAL}`
+                        )}
                       </span>
                     </span>
                   </div>
@@ -194,7 +205,7 @@ export default function StatsClient({
 
       {!dbError && summary && summary.n === 0 && (
         <p className="t-body t-muted t-center" style={{ margin: "auto 0" }}>
-          还没有完成过计时——先去首页走一趟完整通勤吧 🚌
+          还没有完成过计时——先去首页走一趟完整通勤吧。
         </p>
       )}
 

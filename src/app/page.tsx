@@ -1,25 +1,31 @@
 /**
- * 首页 = 全澳导航搜索页（src/app/page.tsx，v1.3.0 · T04，重写）
+ * 首页 = 全屏地图 + 分步搜索（src/app/page.tsx，M Map 改版 S2 重构）
  *
- * 新首页：**地图（上半屏）+ 搜索框（下方）**；旧首页（`HomeClient`）原样迁到 `/commute`。
- *   ① 页壳 + 骨架：SSR 直出（`NavShell` 立即渲染骨架/占位）；
- *   ② 地图占位：`NavMap` 自带 `aspect-ratio` 占位（防跳动）；
- *   ③ 地图 JS：懒加载（客户端 `loadAMap`），**不阻塞**页壳；
- *   ④ 地图失败 → 静态占位 + 重试，**搜索与出发照常**（§Q7）。
- * 路线结果在 `/nav`（点「出发」跳转）。
+ * ── 本次改造（Spec R1/R2/R4）───────────────────────────────────────────
+ *   · **全屏地图**（`fixed`；底部让出「合规条 + 底部导航」带，保证高德 Logo/审图号可见）；
+ *   · 顶部浮层 = 品牌字标 `M Map` + 定位按钮 + 目的地搜索条（点开分步弹层）；
+ *   · **移除**旧大标题「澳门出行」与「通勤计时（旧版）」首页入口（旧计时改由 `/about` 进入）；
+ *   · 底导两 tab（首页 / 路线收藏）。
  *
- * 设计：docs/设计-全澳导航-v1-20260918.md §2.E / §11.1
+ * ── 地点对收藏回放（PRD §7.5 / 02 §2.3）───────────────────────────────
+ *   `/favorites` 点「地点对」→ `/?<query>` → 本页解析出起终点**预填**，进入「可出发」态
+ *   （**不自动跳结果页**，由用户确认后点「出发」）。
+ *
+ * ── 保留的能力 ────────────────────────────────────────────────────────
+ *   · 地图懒加载、失败不阻塞（§Q7）；站点图层、实时报站信息卡；「起点不记忆」（R5）。
  */
-import Link from "next/link";
+import BottomNav from "@/components/BottomNav";
 import ComplianceBar from "@/components/nav/ComplianceBar";
 import NavShell from "@/components/nav/NavShell";
 import { getPool } from "@/lib/db";
+import { parseNavParams } from "@/lib/nav/nav-params";
+import type { NavPoint } from "@/lib/nav/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const preferredRegion = "sin1";
 
-/** 线路码 → 主题色（供搜索结果的「线路候选」行渲染 `.route-stack`，§11.6） */
+/** 线路码 → 主题色（供搜索结果/收藏的线路标签渲染，§11.6） */
 async function loadRouteColors(): Promise<Record<string, string>> {
   try {
     const res = await getPool().query(`SELECT code, color FROM routes WHERE color IS NOT NULL`);
@@ -31,23 +37,28 @@ async function loadRouteColors(): Promise<Record<string, string>> {
   }
 }
 
-export default async function Home() {
+export default async function Home({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   // ★ JS Key 由服务端以 prop 传入（JS Key 本身可公开；安全密钥只在 /_AMapService 代理里）
   const jsKey = (process.env.AMAP_JS_KEY ?? "").trim();
   const colors = await loadRouteColors();
 
+  // 地点对收藏回放：URL 带 `fromLng…&toLng…` → 预填起终点（进「可出发」态）
+  const sp = await searchParams;
+  const parsed = parseNavParams(sp);
+  const initialFrom: NavPoint | null = parsed?.origin ?? null;
+  const initialTo: NavPoint | null = parsed?.dest ?? null;
+
   return (
-    <main className="page nav-home">
-      <header className="nav-home__head">
-        <h1 className="h-title">澳门出行</h1>
-        <Link href="/commute" className="nav-home__legacy link-hit t-label">
-          通勤计时（旧版）›
-        </Link>
-      </header>
-
-      <NavShell jsKey={jsKey} colors={colors} />
-
-      <ComplianceBar />
-    </main>
+    <>
+      <NavShell jsKey={jsKey} colors={colors} initialFrom={initialFrom} initialTo={initialTo} />
+      <div className="home-chrome">
+        <ComplianceBar />
+        <BottomNav />
+      </div>
+    </>
   );
 }

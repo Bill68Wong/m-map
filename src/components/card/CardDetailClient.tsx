@@ -17,6 +17,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { LrtEtaInline } from "@/components/LrtEta";
 import RouteStack from "@/components/RouteStack";
+import Icon from "@/components/ui/Icon";
 import { macauClock, Row, TierBadge } from "@/components/RoutePieces";
 import CardDevActions from "./CardDevActions";
 import StationStrip from "./StationStrip";
@@ -94,7 +95,8 @@ export default function CardDetailClient({
       <main className="page rc-detail">
         <div className="rc-top">
           <Link href={`/recommend?from=${fromSlug}&to=${toSlug}${zone ? `&zone=${encodeURIComponent(zone)}` : ""}`} className="btn btn--text btn--sm">
-            ← 返回
+            <Icon name="back" size={20} />
+            返回
           </Link>
         </div>
         <div className="card rc-empty">
@@ -126,10 +128,12 @@ export default function CardDetailClient({
           href={`/recommend?from=${fromSlug}&to=${toSlug}${zone ? `&zone=${encodeURIComponent(zone)}` : ""}`}
           className="btn btn--text btn--sm"
         >
-          ← 返回
+          <Icon name="back" size={20} />
+          返回
         </Link>
         <button className="btn btn--text btn--sm" onClick={() => void refresh()} disabled={busy}>
-          {busy ? "…" : "↻ 刷新"}
+          <Icon name="refresh" size={20} />
+          {busy ? "刷新中…" : "刷新"}
         </button>
       </div>
 
@@ -251,7 +255,9 @@ export default function CardDetailClient({
             本站台其他可達路線
             <span className="rc-sub">（{data.reports.length} 条 · 点击展开）</span>
           </span>
-          <span className="rc-strip__caret">{openFold ? "▲" : "▼"}</span>
+          <span className="rc-strip__caret">
+            <Icon name={openFold ? "caretUp" : "caretDown"} size={16} />
+          </span>
         </button>
 
         {openFold && (
@@ -277,7 +283,7 @@ export default function CardDetailClient({
                   )}
                   {rp.href && (
                     <Link className="rc-report__link" href={rp.href} aria-label={`看 ${lineNameOf(rp.route)} 详情`}>
-                      ›
+                      <Icon name="forward" size={20} />
                     </Link>
                   )}
                 </span>

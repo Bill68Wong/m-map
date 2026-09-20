@@ -21,10 +21,12 @@
  *   ⚠️ 改写时**逐句保持语义等价**，未增删任何权利义务表述。
  */
 import Link from "next/link";
+import Icon from "@/components/ui/Icon";
+import BottomNav from "@/components/BottomNav";
 import { DSAT_UA } from "@/lib/dsat/ua";
 
 export const metadata = {
-  title: "关于 · MUST登校",
+  title: "关于",
   description: "数据来源、计算方法与非商业声明",
 };
 
@@ -56,10 +58,11 @@ export default function AboutPage() {
   const today = `${macau.getUTCFullYear()}-${p(macau.getUTCMonth() + 1)}-${p(macau.getUTCDate())}`;
 
   return (
-    <main className="page">
+    <main className="page page--with-nav">
       <header className="rc-top">
         <Link href="/" className="btn btn--text btn--sm">
-          ← 返回
+          <Icon name="back" size={20} />
+          返回
         </Link>
       </header>
 
@@ -67,8 +70,18 @@ export default function AboutPage() {
         关于本专案
       </h1>
       <p className="t-label t-muted" style={{ marginBottom: 16 }}>
-        MUST登校 · 澳門科技大學校园通勤巴士／轻轨报站工具
+        M Map · 澳門巴士／轻轨全澳导航
       </p>
+
+      {/* ★ M Map 改版 R3：旧版计时入口从首页移到这里（`/commute` 保留不改） */}
+      <section className="card" style={{ padding: "16px 16px 18px" }}>
+        <H2>旧版功能</H2>
+        <P>旧版「通勤计时」依旧可用，入口已从首页移到这里。</P>
+        <Link href="/commute" className="btn btn--outline btn--sm" style={{ marginTop: 10 }}>
+          <Icon name="timer" size={20} />
+          通勤计时（旧版）
+        </Link>
+      </section>
 
       <section className="card" style={{ padding: "16px 16px 18px" }}>
         <H2>一、非商业声明</H2>
@@ -77,7 +90,7 @@ export default function AboutPage() {
           专案与其数据仅供本人通勤参考。
         </P>
         <P>
-          ⚠️ 交通事務局使用条款明确禁止未经书面授权的商业性用途。若未来考虑任何形式的变现，
+          注意：交通事務局使用条款明确禁止未经书面授权的商业性用途。若未来考虑任何形式的变现，
           将先取得官方书面授权。
         </P>
       </section>
@@ -163,7 +176,7 @@ export default function AboutPage() {
           ]}
         />
         <P>
-          ⚠️ 上述数值<b>均为估算，可能有误差</b>，亦可能因路况、班次调整而失效。请以现场实际情况为准。
+          注意：上述数值<b>均为估算，可能有误差</b>，亦可能因路况、班次调整而失效。请以现场实际情况为准。
           跨境的行程<b>不计通关时间</b>。
         </P>
       </section>
@@ -196,6 +209,8 @@ export default function AboutPage() {
           </a>
         </P>
       </section>
+
+      <BottomNav />
     </main>
   );
 }

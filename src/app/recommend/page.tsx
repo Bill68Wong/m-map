@@ -13,6 +13,7 @@
  */
 import { Suspense } from "react";
 import RecommendClient from "@/components/RecommendClient";
+import Icon from "@/components/ui/Icon";
 import { isAuthed } from "@/lib/auth-server";
 import { getPool } from "@/lib/db";
 import { PLACE_SHORT } from "@/lib/home-plans-shared";
@@ -81,8 +82,14 @@ function RecommendSkeleton({ from, to, zone }: { from: string; to: string; zone:
   return (
     <main className="page">
       <div className="rc-top">
-        <span className="btn btn--text btn--sm">← 返回</span>
-        <span className="btn btn--text btn--sm">↻ 刷新</span>
+        <span className="btn btn--text btn--sm">
+          <Icon name="back" size={20} />
+          返回
+        </span>
+        <span className="btn btn--text btn--sm">
+          <Icon name="refresh" size={20} />
+          刷新
+        </span>
       </div>
       <h1 className="h-headline rc-title">
         {to === "school" ? (

@@ -23,6 +23,7 @@
  */
 import { usePathname } from "next/navigation";
 import Link from "next/link";
+import Icon from "@/components/ui/Icon";
 import { useDevMode, writeDevMode } from "@/lib/dev-mode";
 
 export default function DevModeToggle({
@@ -56,7 +57,8 @@ export default function DevModeToggle({
             background: "var(--outline)",
           }}
         />
-        开发者模式：需口令 🔒
+        开发者模式：需口令
+        <Icon name="lock" size={16} />
       </Link>
     );
   }

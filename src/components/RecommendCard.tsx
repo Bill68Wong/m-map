@@ -20,6 +20,7 @@
 import { useRouter } from "next/navigation";
 import { LrtEtaInline } from "./LrtEta";
 import RouteStack from "./RouteStack";
+import Icon from "./ui/Icon";
 import { macauClock, Row, TierBadge } from "./RoutePieces";
 import { buildCardHref } from "@/lib/recommend/card-link";
 import { usePressGuard } from "@/lib/use-press-guard";
@@ -36,6 +37,7 @@ export default function RecommendCard({
   delayMs,
   hrefOverride,
   origin,
+  cardAction,
 }: {
   card: CardData;
   /** 线路码 → 主题色（服务端下发） */
@@ -57,6 +59,11 @@ export default function RecommendCard({
   hrefOverride?: string;
   /** ★ v1.3.0：来源徽章 —— 'local' = 本地补漏（中性文案「其他组合」，§B.5）；'amap' 不显示 */
   origin?: "amap" | "local";
+  /**
+   * ★ M Map 改版 S5：卡脚右侧**附加动作槽**（如「收藏此方案」按钮）。
+   * 槽内点击**不冒泡**到整卡（否则会误触发进详情）。
+   */
+  cardAction?: React.ReactNode;
 }) {
   const router = useRouter();
   /** ★ v1.1.8：整卡可点 + 列表要滚动 → 位移 >8px 或长按 >700ms 判为滚动，不触发跳转 */
@@ -212,7 +219,20 @@ export default function RecommendCard({
       )}
 
       <div className="rc-foot">
-        <span className="rc-hint">点击看详情 ›</span>
+        <span className="rc-hint">
+          点击看详情
+          <Icon name="forward" size={16} />
+        </span>
+        {cardAction && (
+          <span
+            className="rc-foot__action"
+            onClick={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
+            onKeyDown={(e) => e.stopPropagation()}
+          >
+            {cardAction}
+          </span>
+        )}
       </div>
     </div>
   );

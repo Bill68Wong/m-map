@@ -7,6 +7,7 @@
  * ⚠️ 本文件**不写 `"use client"`**：三个都是纯展示（无 hooks、无事件），
  *    server component 与 client component 都能直接 import。
  */
+import Icon from "@/components/ui/Icon";
 import type { CatchTier } from "@/lib/recommend/types";
 
 /** 澳门时刻 HH:MM（与服务端 hhmm 同口径：+8h 后取当日余秒） */
@@ -43,7 +44,13 @@ export function Row({
   return (
     <div className={`rc-row rc-row--${dot}${last ? " rc-row--last" : ""}`}>
       <span className={`rc-dot rc-dot--${dot}`} aria-hidden="true">
-        {dot === "walk" ? "🚶" : dot === "wait" ? "🚏" : dot === "transfer" ? "↕" : ""}
+        {dot === "walk" ? (
+          <Icon name="walk" size={16} />
+        ) : dot === "wait" ? (
+          <Icon name="busStop" size={16} />
+        ) : dot === "transfer" ? (
+          <Icon name="expandVertical" size={16} />
+        ) : null}
       </span>
       <span className="rc-text">{main}</span>
       {aside}

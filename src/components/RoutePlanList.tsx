@@ -1,6 +1,7 @@
 "use client";
 
 import RouteStack from "./RouteStack";
+import Icon from "./ui/Icon";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import type { PlanRow } from "@/lib/home-plans-shared";
@@ -75,9 +76,10 @@ export default function RoutePlanList({
                 ) : p.board_name ? (
                   <>
                     <span aria-hidden>
-                      {((p.leg_routes?.[0]?.[0] ?? p.route_codes?.[0] ?? "").startsWith("LRT-")
-                        ? "🚈"
-                        : "🚌")}
+                      <Icon
+                        name={(p.leg_routes?.[0]?.[0] ?? p.route_codes?.[0] ?? "").startsWith("LRT-") ? "lrt" : "bus"}
+                        size={16}
+                      />
                     </span>{" "}
                     {/* v0.20.5：只写上车站（各线下车站不同，写下车站会误导） */}
                     <span>{p.board_name}</span>{" "}

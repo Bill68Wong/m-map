@@ -12,6 +12,7 @@
  */
 import { useState } from "react";
 import RouteStack from "@/components/RouteStack";
+import Icon from "@/components/ui/Icon";
 
 export interface ReachFoldItem {
   /** 线路码 */
@@ -38,7 +39,9 @@ export default function StationReachFold({
     <div className="rc-fold">
       <button className="rc-fold__head" type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
         本站台其他线路 · <b>{items.length}</b> 条
-        <span className="rc-strip__caret">{open ? "▲" : "▼"}</span>
+        <span className="rc-strip__caret">
+          <Icon name={open ? "caretUp" : "caretDown"} size={16} />
+        </span>
       </button>
       {open && (
         <div className="rc-fold__body">

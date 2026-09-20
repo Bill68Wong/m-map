@@ -9,15 +9,24 @@
  * · `emptyReason` → 各自的空状态（§11.4，简体）；
  * · 卡片点击 → `/nav/detail?<同参数>&plan=<planId>`（`hrefBuilder`）。
  */
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import RecommendCards from "@/components/RecommendCards";
+import FavoriteButton from "@/components/favorites/FavoriteButton";
+import { endpointOf } from "@/lib/favorites/types";
+import { snapshotOfCard } from "@/lib/favorites/snapshot";
+import { takeNavNotice } from "@/lib/nav/nav-notice";
 import type { RecommendCard } from "@/lib/recommend/types";
+import type { NavPoint } from "@/lib/nav/types";
 import type { NavOutput } from "@/lib/nav/nav-service";
 
 export interface NavResultClientProps {
   /** 当前查询串（原样转发到详情页 + 刷新用） */
   query: string;
   initial: NavOutput;
+  /** 起点（收藏用；SSR 已解析） */
+  origin: NavPoint;
+  /** 目的地（收藏用） */
+  dest: NavPoint;
 }
 
 const LOCAL_PLAN_BASE = 900_000;
@@ -29,10 +38,16 @@ const EMPTY_TEXT: Record<string, { title: string; body: string }> = {
   amap_unavailable: { title: "路网数据暂时不可用", body: "本地也没能算出可用路线。请稍后重试。" },
 };
 
-export default function NavResultClient({ query, initial }: NavResultClientProps) {
+export default function NavResultClient({ query, initial, origin, dest }: NavResultClientProps) {
   const [data, setData] = useState<NavOutput>(initial);
   const [refreshing, setRefreshing] = useState(false);
   const [err, setErr] = useState("");
+  /** ★ S5：收藏页跳来的「已重新规划」一次性提示（sessionStorage，不新增 URL 参数） */
+  const [notice, setNotice] = useState("");
+
+  useEffect(() => {
+    setNotice(takeNavNotice());
+  }, []);
 
   const refresh = useCallback(async () => {
     setRefreshing(true);
@@ -90,6 +105,11 @@ export default function NavResultClient({ query, initial }: NavResultClientProps
           路网数据暂时不可用，以下为本地推算结果
         </div>
       )}
+      {notice && (
+        <div className="nav-inline-notice t-label" role="status">
+          {notice}
+        </div>
+      )}
       {err && <div className="nav-inline-err t-label">{err}</div>}
 
       {empty ? (
@@ -115,6 +135,21 @@ export default function NavResultClient({ query, initial }: NavResultClientProps
           missed={data.missed}
           hrefBuilder={hrefBuilder}
           originOf={originOf}
+          /* ★ S5 收藏入口 ①：每张方案卡的书签按钮（存 query + fingerprint） */
+          cardAction={(card) => {
+            const snap = snapshotOfCard(card);
+            return (
+              <FavoriteButton
+                kind="plan"
+                entry="card"
+                from={endpointOf(origin)}
+                to={endpointOf(dest)}
+                query={query}
+                fingerprint={snap.fingerprint}
+                snapshot={snap}
+              />
+            );
+          }}
         />
       )}
     </div>

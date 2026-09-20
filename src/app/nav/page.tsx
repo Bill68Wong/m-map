@@ -11,9 +11,12 @@ import { redirect } from "next/navigation";
 import { Suspense } from "react";
 import ComplianceBar from "@/components/nav/ComplianceBar";
 import NavResultClient from "@/components/nav/NavResultClient";
+import FavoriteButton from "@/components/favorites/FavoriteButton";
+import Icon from "@/components/ui/Icon";
 import { getPool } from "@/lib/db";
 import { parseNavParams } from "@/lib/nav/nav-params";
 import { planNav } from "@/lib/nav/nav-service";
+import { endpointOf } from "@/lib/favorites/types";
 import type { NavPoint } from "@/lib/nav/types";
 import type { SchoolZone } from "@/lib/recommend/types";
 
@@ -35,11 +38,20 @@ export default async function Page({
     <main className="page nav-page">
       <header className="nav-page__top">
         <Link href="/" className="btn btn--text btn--sm">
-          ← 返回
+          <Icon name="back" size={20} />
+          返回
         </Link>
         <span className="nav-page__od t-label">
           {p.origin.label} <span className="t-muted">→</span> {p.dest.label}
         </span>
+        {/* ★ 收藏入口 ④（地点对）：顶部 OD 栏 */}
+        <FavoriteButton
+          kind="place"
+          entry="odbar"
+          from={endpointOf(p.origin)}
+          to={endpointOf(p.dest)}
+          query={p.query}
+        />
       </header>
 
       <Suspense fallback={<ResultSkeleton />}>
@@ -65,7 +77,7 @@ async function ResultSection({
   limit: number;
 }) {
   const result = await planNav(getPool(), { origin, dest, zone, limit });
-  return <NavResultClient query={query} initial={result} />;
+  return <NavResultClient query={query} initial={result} origin={origin} dest={dest} />;
 }
 
 /** 结果区骨架（形状与卡片一致 → 零布局跳动，§11.1） */

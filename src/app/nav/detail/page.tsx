@@ -14,12 +14,16 @@ import ComplianceBar from "@/components/nav/ComplianceBar";
 import StationStrip from "@/components/card/StationStrip";
 import RouteStack from "@/components/RouteStack";
 import StationReachFold from "@/components/nav/StationReachFold";
+import FavoriteButton from "@/components/favorites/FavoriteButton";
+import Icon from "@/components/ui/Icon";
 import { LrtEtaInline } from "@/components/LrtEta";
 import { Row, TierBadge, macauClock } from "@/components/RoutePieces";
 import { getPool } from "@/lib/db";
 import { parseNavParams } from "@/lib/nav/nav-params";
 import { planNav } from "@/lib/nav/nav-service";
 import { buildStrips } from "@/lib/nav/strips";
+import { endpointOf } from "@/lib/favorites/types";
+import { snapshotOfCard } from "@/lib/favorites/snapshot";
 import { rangeText } from "@/lib/recommend/catch-up";
 import { fetchStationLive } from "@/lib/recommend/live";
 import { loadStatics, type RecStatic } from "@/lib/recommend/query";
@@ -46,7 +50,8 @@ export default async function Page({
     <main className="page rc-detail">
       <div className="rc-top">
         <Link href={backHref} className="btn btn--text btn--sm">
-          ← 返回路线
+          <Icon name="back" size={20} />
+          返回路线
         </Link>
         <span className="nav-page__od t-label">
           {p.origin.label} <span className="t-muted">→</span> {p.dest.label}
@@ -61,6 +66,7 @@ export default async function Page({
           limit={Math.max(p.limit, 10)}
           planId={p.planId}
           backHref={backHref}
+          query={p.query}
         />
       </Suspense>
 
@@ -76,6 +82,7 @@ async function DetailSection({
   limit,
   planId,
   backHref,
+  query,
 }: {
   origin: NavPoint;
   dest: NavPoint;
@@ -83,6 +90,8 @@ async function DetailSection({
   limit: number;
   planId?: number;
   backHref: string;
+  /** 规范化查询串（收藏用；不含 plan） */
+  query: string;
 }) {
   const pool = getPool();
   const result = await planNav(pool, { origin, dest, zone, limit });
@@ -105,6 +114,8 @@ async function DetailSection({
   const otherRoutes = lastAlightMain ? otherRoutesAt(st, lastAlightMain, card.rides.map((r) => r.route)) : [];
   // ★ 【5】折叠栏「本站台其他线路」的实时报站（巴士）；失败不阻塞（收敛为空）
   const foldLive = lastAlightMain ? await foldLiveAt(pool, st, lastAlightMain, otherRoutes, result.generatedAt) : {};
+  // ★ S5：本方案可用于收藏（存 query + fingerprint，不落 planId）
+  const favSnap = snapshotOfCard(card);
 
   return (
     <>
@@ -120,6 +131,17 @@ async function DetailSection({
         {/* ⚠️ Server Component：**只能传可序列化的 `colors`**，不能传 `colorOf` 函数（RSC 边界） */}
         <RouteStack codes={card.rides.map((r) => r.route)} colors={result.colors} size="sm" />
         {result.degraded && <span className="nav-degraded nav-degraded--inline t-label">本地推算</span>}
+        {/* ★ 收藏入口 ②（方案）：详情头部 */}
+        <FavoriteButton
+          kind="plan"
+          entry="detail"
+          from={endpointOf(origin)}
+          to={endpointOf(dest)}
+          query={query}
+          fingerprint={favSnap.fingerprint}
+          snapshot={favSnap}
+          withLabel
+        />
       </div>
 
       <div className="rc-line">

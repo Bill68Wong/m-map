@@ -14,6 +14,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import DevModeToggle from "./DevModeToggle";
 import RecommendCards from "./RecommendCards";
+import Icon from "./ui/Icon";
 import { useDevMode } from "@/lib/dev-mode";
 import type { RecommendCard, SchoolZone } from "@/lib/recommend/types";
 
@@ -144,11 +145,12 @@ export default function RecommendClient({
     <main className="page">
       <header className="rc-top">
         <Link href="/" className="btn btn--text btn--sm" aria-label="返回首頁">
-          ← 返回
+          <Icon name="back" size={20} />
+          返回
         </Link>
         <button className="btn btn--text btn--sm" onClick={() => void refresh()} disabled={busy}>
           <span className={busy ? "anim-spin" : ""} style={{ display: "inline-block" }}>
-            ↻
+            <Icon name="refresh" size={20} />
           </span>{" "}
           {busy ? "更新中…" : "刷新"}
         </button>

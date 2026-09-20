@@ -8,6 +8,7 @@
  */
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import Icon from "@/components/ui/Icon";
 import { writeDevMode } from "@/lib/dev-mode";
 
 export default function LoginForm({
@@ -63,14 +64,13 @@ export default function LoginForm({
       >
         <div
           className="icon-badge"
-          style={{ width: 64, height: 64, fontSize: 28, marginBottom: 16 }}
+          style={{ width: 64, height: 64, marginBottom: 16 }}
         >
-          🚌
+          <Icon name="bus" size={24} />
         </div>
         <h1 className="h-headline t-center" style={{ marginBottom: 4 }}>
           MUST登校
-        </h1>
-        <p className="t-label t-muted t-center" style={{ marginBottom: 28 }}>
+        </h1>        <p className="t-label t-muted t-center" style={{ marginBottom: 28 }}>
           请输入访问口令
           <br />
           <span style={{ opacity: 0.75 }}>开发者模式与数据页需要口令</span>

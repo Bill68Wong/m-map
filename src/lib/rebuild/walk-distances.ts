@@ -253,7 +253,7 @@ export async function rebuildWalkDistances(
     ok: healthOk,
     verdict:
       snaps.length === 0
-        ? "（暂无数据，无法判定）"
+        ? "（无数据，无法判定）"
         : healthOk
           ? `✅ 坐标系约定正确（吸附中位数 ${Math.round(snapMedian)}m ≤ ${SNAP_MEDIAN_LIMIT_M}m）`
           : `🔴 吸附中位数 ${Math.round(snapMedian)}m > ${SNAP_MEDIAN_LIMIT_M}m —— 坐标系约定可能有误，**应弃用 API 距离**`,

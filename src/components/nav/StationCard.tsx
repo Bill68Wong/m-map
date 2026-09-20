@@ -18,6 +18,7 @@
  */
 import { useEffect, useState } from "react";
 import RouteStack from "@/components/RouteStack";
+import Icon from "@/components/ui/Icon";
 
 export interface StationCardStation {
   /** 主码 */
@@ -48,7 +49,7 @@ interface EtaResponse {
 
 /** 报站文案（简体）：ok=false→暂无数据；无车→暂无在途车；0 站→即将到站；否则「还有 N 站 · 约 M 分」 */
 function etaText(it: EtaItem): string {
-  if (!it.ok) return "暂无数据";
+  if (!it.ok) return "这条线路暂时取不到报站";
   if (it.stopsAway === null) return "暂无在途车";
   if (it.stopsAway === 0) return "即将到站";
   return `还有 ${it.stopsAway} 站 · 约 ${it.etaMin ?? 0} 分`;
@@ -94,7 +95,7 @@ export default function StationCard({
       <div className="nav-station-card__head">
         <span className="nav-station-card__name">{station.name || station.code}</span>
         <button className="nav-station-card__close" type="button" aria-label="关闭" onClick={onClose}>
-          ✕
+          <Icon name="close" size={20} />
         </button>
       </div>
 
