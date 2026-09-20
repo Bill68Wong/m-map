@@ -55,8 +55,8 @@ export interface TierOverride {
 
 /** 最多 3 个换乘（4 段，07 §1.2） */
 export const MAX_TRANSFERS = 3;
-/** 站链节点上限 = 换乘数 + 1 */
-export const MAX_CHAIN_STEPS = MAX_TRANSFERS + 1;
+/** 站链节点上限：4 段 = 5 个节点（board / transfer… / alight，节点数 = 段数 + 1） */
+export const MAX_CHAIN_STEPS = MAX_TRANSFERS + 2;
 
 const TIERS: readonly TierNumber[] = [1, 2, 3, 4, 5];
 const KINDS: readonly ChainStepKind[] = ["board", "transfer", "alight"];
