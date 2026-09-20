@@ -5,23 +5,22 @@
  *
  * ── ★ v1.1.8 精简（用户 2026-09-16 口径）──────────────────────────────
  * 外卡片只留「决策坐哪条线」必需的：
- *   步行 → 坐的車 → 步行 · 總時長 · 到達時刻 · 最近能趕上的那班的**報站 + 趕車分檔** ·
+ *   步行 → 坐的車 → 步行 · 總時長 · 到達時刻 · 最近能趕上的那班的**報站 + 趕车分档** ·
  *   **上車地點** · 後續班次（一班一行、字號比本班小）。
- * 全部细节（换乘、逐站、站台其他线路、文字指引）**移到详情页** —— 点卡片即进 `/card`。
+ * 全部细节（换乘、逐站、站台其他线路、文字指引）**移到详情页**。
  *
- * 点击行为（v1.1.8 改）：**一律 `router.push` 到详情页**，不再分流。
- *   · 旧行为：开发者模式 → 建计时会话；否则 → 就地展开文字指引。两者**都已移走**。
- *   · 建会话现在只在详情页的开发者按钮里（`card/CardDevActions.tsx`）。
- *   · `.rc--dev` 绿点保留，表示「进详情页后能開計時」。
- *
- * 信息层级参照 Google Maps 的路线条目、排版密度参照 M3 —— 颜色全走现有令牌，
- * 跟随 `prefers-color-scheme`。
+ * ── ★ 修复包 v2.2.1 ──────────────────────────────────────────────────
+ *   · B1（合规收口）：去掉「估算」字样，改以**弱化样式**（`.rc-val--est`）作**独立标示**；
+ *     乘车分钟统一 `Math.round` 取整（步行分钟本批不动）。
+ *   · B2：线路标签改传**分段结构** `segments` —— 段内并列用白斜杠 `/`、段间换乘用箭头 `→`。
+ *   · B3：来源徽章 `其他組合` → **`本地补充`**（简体 + 与「来自高德」成对）。
+ *   · FIX-02：后续班次文案 → 「后续班车还有 N 站」。
  */
 import { useRouter } from "next/navigation";
 import { LrtEtaInline } from "./LrtEta";
 import RouteStack from "./RouteStack";
 import Icon from "./ui/Icon";
-import { macauClock, Row, TierBadge } from "./RoutePieces";
+import { EtaText, macauClock, Row, TierBadge } from "./RoutePieces";
 import { buildCardHref } from "@/lib/recommend/card-link";
 import { usePressGuard } from "@/lib/use-press-guard";
 import type { RecommendCard as CardData, SchoolZone } from "@/lib/recommend/types";
@@ -57,7 +56,7 @@ export default function RecommendCard({
    * 传了则**不再**走旧 `buildCardHref`（旧链路零影响）。
    */
   hrefOverride?: string;
-  /** ★ v1.3.0：来源徽章 —— 'local' = 本地补漏（中性文案「其他组合」，§B.5）；'amap' 不显示 */
+  /** ★ v1.3.0 / B3：来源徽章 —— 'local' = 本地补漏（中性文案「本地补充」）；'amap' 不显示 */
   origin?: "amap" | "local";
   /**
    * ★ M Map 改版 S5：卡脚右侧**附加动作槽**（如「收藏此方案」按钮）。
@@ -71,6 +70,12 @@ export default function RecommendCard({
   const colorOf = (c: string) => colors[c] ?? null;
   const first = card.rides[0];
   const multi = card.rides.length > 1;
+  /**
+   * ★ B2：线路标签的**分段结构** —— 每段 = 该段主干线 + 段内并行线（`parallelRoutes`）。
+   * `parallelRoutes` 生产者待接（见 `types.ts` 注释）；为空时退化为「一段一码」，
+   * 段间仍会渲染换乘箭头 `→`（比旧版"两码相邻无分隔"更明确）。
+   */
+  const routeSegments = card.rides.map((r) => ({ codes: [r.route, ...(r.parallelRoutes ?? [])] }));
 
   function onClick() {
     if (press.isGuarded()) return;
@@ -120,8 +125,9 @@ export default function RecommendCard({
           预计 <b>{macauClock(card.arriveAt)}</b> 到达
           {card.crossBorder && <span className="rc-warn"> · 不含通关</span>}
         </span>
-        {origin === "local" && <span className="rc-badge-local">其他組合</span>}
-        <RouteStack codes={card.rides.map((r) => r.route)} colorOf={colorOf} size="sm" />
+        {/* ★ B3：来源标注（与 POI 的「来自高德」成对）；★ B2：分段线路标签 */}
+        {origin === "local" && <span className="rc-badge-local">本地补充</span>}
+        <RouteStack segments={routeSegments} colorOf={colorOf} size="sm" />
       </div>
 
       {/* ── 时间线（精简版：步行 → 坐的車 → 步行）── */}
@@ -130,14 +136,14 @@ export default function RecommendCard({
           dot="walk"
           main={
             <>
-              步行 <b>{card.walkOut.minutes}</b> 分
-              {card.walkOut.estimated && <span className="rc-est">估算</span>}
+              步行{" "}
+              <b className={card.walkOut.estimated ? "rc-val--est" : undefined}>{card.walkOut.minutes}</b> 分
               {first?.tierHint && <span className="rc-sub">（{first.tierHint}）</span>}
             </>
           }
         />
 
-        {/* 报站 + 赶车分档（只在首段） */}
+        {/* 报站 + 赶车分档（只在首段）—— ★ 站数 N /「即将到站」加粗 + 青花蓝 */}
         {first && (first.waitMin > 0 || first.liveText || !!first.liveDepartures?.length) && (
           <Row
             dot="wait"
@@ -152,7 +158,7 @@ export default function RecommendCard({
                   directionName={null}
                 />
               ) : (
-                <>{first.liveText || `等 ${first.waitMin} 分`}</>
+                <EtaText text={first.liveText || `等 ${first.waitMin} 分`} />
               )
             }
             aside={first.tierText ? <TierBadge tier={first.tier} tierText={first.tierText} /> : null}
@@ -167,22 +173,32 @@ export default function RecommendCard({
               <>
                 <span className="rc-board">上车 · {first.boardLabel}</span>
                 <span className="rc-sub">
-                  {multi ? `共 ${card.rides.length} 段 · 详情见路线图` : `下车 · ${first.alightLabel}（行车 ${first.minutes} 分）`}
+                  {multi
+                    ? `共 ${card.rides.length} 段 · 详情见路线图`
+                    : /* ★ B5.2：乘车时长取值规约见 `types.ts:416` —— 轻轨段豁免取整（有 rideSecText 用秒级串），巴士段照常取整 */
+                      `下车 · ${first.alightLabel}（行车 ${
+                        first.kind === "lrt" && first.rideSecText ? first.rideSecText : `${Math.round(first.minutes)} 分`
+                      }）`}
                 </span>
               </>
             }
           />
         )}
 
-        {/* 乘车（多段压成一行）*/}
+        {/* 乘车（单段用秒级规约；多段合并仍用 minutes 合计取整 —— 规格见 types.ts:416）*/}
         <Row
           dot="ride"
           main={
             <>
-              {/* ★ 【4】全站统一：单条线路也用 `.route-stack`（RouteStack 内已处理「单块不斜切」），
-                  不再用 `.rc-route` 胶囊（与多线标签风格不一致）。 */}
-              <RouteStack codes={card.rides.map((r) => r.route)} colorOf={colorOf} size="sm" />
-              <b>{card.rides.reduce((s, r) => s + r.minutes, 0)}</b> 分
+              {/* ★ B2：段内并列 = 白斜杠 `/`；段间换乘 = 箭头 `→`（03 §G.1~G.4） */}
+              <RouteStack segments={routeSegments} colorOf={colorOf} size="sm" />
+              {multi || !first ? (
+                <>
+                  <b>{Math.round(card.rides.reduce((s, r) => s + r.minutes, 0))}</b> 分
+                </>
+              ) : (
+                <b>{first.kind === "lrt" && first.rideSecText ? first.rideSecText : `${Math.round(first.minutes)} 分`}</b>
+              )}
             </>
           }
         />
@@ -191,8 +207,8 @@ export default function RecommendCard({
           last
           main={
             <>
-              步行 <b>{card.walkIn.minutes}</b> 分
-              {card.walkIn.estimated && <span className="rc-est">估算</span>}
+              步行{" "}
+              <b className={card.walkIn.estimated ? "rc-val--est" : undefined}>{card.walkIn.minutes}</b> 分
               {" → "}
               {card.walkIn.toLabel}
               {toSlug === "school" && zone ? `（${zone} 座）` : ""}
@@ -207,7 +223,7 @@ export default function RecommendCard({
           {card.altBuses!.map((a, k) => (
             <div className="rc-altrow" key={k}>
               <span>
-                后面还有 <b>{a.stopsAway}</b> 站 · {a.waitText}
+                后续班车还有 <b>{a.stopsAway}</b> 站 · {a.waitText}
               </span>
               <span className="rc-altrow__right">
                 全程 {a.totalMin} 分

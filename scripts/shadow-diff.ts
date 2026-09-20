@@ -90,7 +90,6 @@ async function main() {
   const st = await loadStatics(pool);
   const map = await loadStationMap(pool);
   const validRoutes = new Set<string>(st.routeIdx.dirsOf.keys());
-  const bridgeCtx = { map, validRoutes, routeIdx: st.routeIdx };
 
   // 站点地理（主码去重 WGS）
   const stRes = await pool.query(`SELECT code, lat, lng FROM stations WHERE lat IS NOT NULL AND lng IS NOT NULL`);
@@ -109,6 +108,9 @@ async function main() {
       }
     }
   }
+
+  // ★ v2.3.0：`BridgeContext` 需带 `geo`（§3.7 同名站二次加固）—— 故移到 geo 构建之后
+  const bridgeCtx = { map, validRoutes, routeIdx: st.routeIdx, geo };
 
   // 地点坐标（WGS → GCJ）
   const pcRes = await pool.query(

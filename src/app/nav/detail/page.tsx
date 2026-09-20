@@ -17,7 +17,7 @@ import StationReachFold from "@/components/nav/StationReachFold";
 import FavoriteButton from "@/components/favorites/FavoriteButton";
 import Icon from "@/components/ui/Icon";
 import { LrtEtaInline } from "@/components/LrtEta";
-import { Row, TierBadge, macauClock } from "@/components/RoutePieces";
+import { EtaText, Row, TierBadge, macauClock } from "@/components/RoutePieces";
 import { getPool } from "@/lib/db";
 import { parseNavParams } from "@/lib/nav/nav-params";
 import { planNav } from "@/lib/nav/nav-service";
@@ -149,8 +149,8 @@ async function DetailSection({
           dot="walk"
           main={
             <>
-              步行 <b>{card.walkOut.minutes}</b> 分
-              {card.walkOut.estimated && <span className="rc-est">估算</span>}
+              步行{" "}
+              <b className={card.walkOut.estimated ? "rc-val--est" : undefined}>{card.walkOut.minutes}</b> 分
               {" → "}
               {card.walkOut.toLabel}
             </>
@@ -161,7 +161,8 @@ async function DetailSection({
             dot="wait"
             main={
               /* ★ 【5】与卡片口径一致：轻轨首段的倒计时由客户端每秒重算（`LrtEtaInline`）；
-                 巴士用服务端下发的报站文案（「还有 N 站 · 约 X~Y 分」= 距站信息 + 时间）。 */
+                 巴士用服务端下发的报站文案（「还有 N 站 · 约 X~Y 分」= 距站信息 + 时间）。
+                 ★ 修复包 v2.2.1：站数 N /「即将到站」加粗 + 青花蓝（与站点信息卡同款）。 */
               first.kind === "lrt" && first.liveDepartures?.length ? (
                 <LrtEtaInline
                   lineCode={first.route}
@@ -171,7 +172,7 @@ async function DetailSection({
                   directionName={null}
                 />
               ) : (
-                <>{first.liveText || `等 ${first.waitMin} 分`}</>
+                <EtaText text={first.liveText || `等 ${first.waitMin} 分`} />
               )
             }
             aside={first.tierText ? <TierBadge tier={first.tier} tierText={first.tierText} /> : null}
@@ -200,8 +201,8 @@ async function DetailSection({
                `card.walkIn.toLabel` = 下车站带名标签（如「C653 金峰南岸/金譽峰」）；
                `dest.label` = 目的地名。繁体站名 + 简体连接词。 */
             <>
-              步行 <b>{card.walkIn.minutes}</b> 分
-              {card.walkIn.estimated && <span className="rc-est">估算</span>}
+              步行{" "}
+              <b className={card.walkIn.estimated ? "rc-val--est" : undefined}>{card.walkIn.minutes}</b> 分
               {" → "}
               <b>{card.walkIn.toLabel}</b>
               {" → "}

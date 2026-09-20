@@ -13,12 +13,17 @@
  *   `fromCode` `toCode`（选填，如 place slug：home/school/hengqin/gate）
  *   `zone`（B/C|N/O|R）· `limit`（默认 5）· `nocache=1`（绕过 `transit_cache`）
  *
+ * ★ v2.3.0（07 §2.1 / 05-Spec §5 修订）：追加**可选**参数 `chain` / `walk` / `tiers`
+ *   （编码一律 `encodeURIComponent(JSON.stringify(<结构>))`）—— 承载用户自定义站链与步行参数。
+ *   **缺省（不传）行为与 v2.2.0 完全一致**（向后兼容硬约束）；参数存在但非法 → 400。
+ *
  * 鉴权：`/api/nav` 在 middleware 白名单（`PUBLIC_PREFIXES`，见 T04）。
  * 幂等：只写 `transit_cache`（缓存，属正常）、`dsat_call_logs`（记账，属正常）。
  */
 import { NextRequest, NextResponse } from "next/server";
 import { getPool } from "@/lib/db";
 import { planNav } from "@/lib/nav/nav-service";
+import { decodeChain, decodeTiers, decodeWalk, type ChainStep, type TierOverride, type WalkOverride } from "@/lib/nav/combo-params";
 import type { NavPoint, NavPointKind } from "@/lib/nav/types";
 import { SCHOOL_ZONES, type SchoolZone } from "@/lib/recommend/types";
 
@@ -70,8 +75,31 @@ export async function GET(req: NextRequest) {
   const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(20, Math.trunc(limitRaw)) : 5;
   const noCache = sp.get("nocache") === "1" || sp.get("nocache") === "true";
 
+  // ★ v2.3.0：可选参数 `chain` / `walk` / `tiers`——存在但非法 → 400（不静默降级）
+  let chain: ChainStep[] | undefined;
+  let walk: WalkOverride | undefined;
+  let tiers: TierOverride | undefined;
+  const chainRaw = sp.get("chain");
+  if (chainRaw !== null) {
+    const d = decodeChain(chainRaw);
+    if (!d.ok) return NextResponse.json({ ok: false, error: d.error }, { status: 400 });
+    chain = d.chain;
+  }
+  const walkRaw = sp.get("walk");
+  if (walkRaw !== null) {
+    const d = decodeWalk(walkRaw);
+    if (!d.ok) return NextResponse.json({ ok: false, error: d.error }, { status: 400 });
+    walk = d.walk;
+  }
+  const tiersRaw = sp.get("tiers");
+  if (tiersRaw !== null) {
+    const d = decodeTiers(tiersRaw);
+    if (!d.ok) return NextResponse.json({ ok: false, error: d.error }, { status: 400 });
+    tiers = d.tiers;
+  }
+
   try {
-    const r = await planNav(getPool(), { origin, dest, zone, limit, noCache });
+    const r = await planNav(getPool(), { origin, dest, zone, limit, noCache, chain, walk, tiers });
     return NextResponse.json(
       {
         ok: true,

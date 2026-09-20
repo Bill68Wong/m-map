@@ -61,6 +61,8 @@ export function buildStrips(card: RecommendCard, ctx: StripBuildCtx): SegmentStr
       alightLabel: ride.alightLabel,
       stops,
       rideMin: ride.minutes,
+      // ★ v2.3.0（B5.2）：秒级乘车时长直接从卡片腿回填（口径一致：仅 LRT_RIDE_SEC_FIXED 线非空）
+      rideSecText: ride.rideSecText,
       transferAfter,
     };
   });

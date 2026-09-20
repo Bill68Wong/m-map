@@ -9,7 +9,11 @@ import type { Metadata } from "next";
 import BottomNav from "@/components/BottomNav";
 import ComplianceBar from "@/components/nav/ComplianceBar";
 import FavoritesClient from "@/components/favorites/FavoritesClient";
+import ComboSeeder from "@/components/favorites/ComboSeeder";
 import { getPool } from "@/lib/db";
+import { queryPlaceCoords } from "@/lib/place-coords";
+import { HOME_SLUG, PAIR_ORDER } from "@/lib/home-plans-shared";
+import type { SeedPlaceCoord } from "@/lib/favorites/presets";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -32,10 +36,26 @@ async function loadRouteColors(): Promise<Record<string, string>> {
   }
 }
 
+/**
+ * 默认组合的端点坐标（★ v2.3.0 / 07 §1.4）：**只能服务端取**（pg + WGS84→GCJ-02）。
+ * 取 `home` + `PAIR_ORDER` 三个地点（含澳科大各座区行 —— 座区**不写死**，由客户端选）。
+ * 失败 → 空数组（前端 `ComboSeeder` 会跳过注入，不影响本页其余功能）。
+ */
+async function loadPlaceCoords(): Promise<SeedPlaceCoord[]> {
+  try {
+    const rows = await queryPlaceCoords({ slugs: [HOME_SLUG, ...PAIR_ORDER] });
+    return rows.map((r) => ({ slug: r.slug, name: r.name, zone: r.zone, lng: r.lng, lat: r.lat, label: r.label }));
+  } catch {
+    return [];
+  }
+}
+
 export default async function FavoritesPage() {
-  const colors = await loadRouteColors();
+  const [colors, placeCoords] = await Promise.all([loadRouteColors(), loadPlaceCoords()]);
   return (
     <main className="page page--with-nav">
+      {/* ★ 默认组合种子注入（幂等；纯副作用组件，无 UI） */}
+      <ComboSeeder coords={placeCoords} />
       <FavoritesClient colors={colors} />
       <ComplianceBar />
       <BottomNav />

@@ -38,12 +38,14 @@ function emptyResp(mode: "type" | "enter"): PoiSuggestResponse {
 /** 解析入参（GET 用 query；POST 先 query 再 body 兜底） */
 async function parseParams(
   req: NextRequest,
-): Promise<{ q: string; mode: "type" | "enter"; lat?: number; lng?: number }> {
+): Promise<{ q: string; mode: "type" | "enter"; lat?: number; lng?: number; forceAmap: boolean }> {
   const sp = req.nextUrl.searchParams;
   let q = sp.get("q") ?? "";
   let modeRaw = sp.get("mode");
   let lat = numOrUndef(sp.get("lat"));
   let lng = numOrUndef(sp.get("lng"));
+  // ★ 修复包 v2.2.1-B7：显式「强制走高德」开关（点「点搜索确认」行时由前端下发）
+  let forceAmap = sp.get("forceAmap") === "1" || sp.get("forceAmap") === "true";
 
   if (req.method === "POST") {
     try {
@@ -53,6 +55,7 @@ async function parseParams(
         if (!modeRaw && typeof body.mode === "string") modeRaw = body.mode;
         if (lat === undefined && typeof body.lat === "number") lat = body.lat;
         if (lng === undefined && typeof body.lng === "number") lng = body.lng;
+        if (!forceAmap && (body.forceAmap === true || body.forceAmap === 1)) forceAmap = true;
       }
     } catch {
       /* 无 body / 非法 JSON → 忽略，用 query */
@@ -64,11 +67,12 @@ async function parseParams(
     mode: modeRaw === "enter" ? "enter" : "type",
     lat,
     lng,
+    forceAmap,
   };
 }
 
 async function handle(req: NextRequest): Promise<NextResponse> {
-  const { q, mode, lat, lng } = await parseParams(req);
+  const { q, mode, lat, lng, forceAmap } = await parseParams(req);
 
   if (!q) return NextResponse.json(emptyResp(mode), { headers: NO_STORE });
 
@@ -77,7 +81,7 @@ async function handle(req: NextRequest): Promise<NextResponse> {
   const userPos = lat !== undefined && lng !== undefined ? { lat, lng } : undefined;
 
   try {
-    const r = await suggest(q, { mode, userPos });
+    const r = await suggest(q, { mode, userPos, forceAmap });
     return NextResponse.json(r, { headers: NO_STORE });
   } catch (e) {
     // 不阻塞：搜索失败也返回 200 空结果，避免下拉区报错

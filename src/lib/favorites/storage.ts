@@ -17,11 +17,25 @@
  *   超出时按 `pinned`（保留）→ `lastUsedAt ?? updatedAt` **最旧优先剔除**。
  */
 import {
+  COMBO_CAP,
+  COMBO_NAME_MAX,
   FAVORITES_CAP,
+  FAVORITES_KEY_V2,
   FAVORITES_SCHEMA_VERSION,
+  FAVORITES_SCHEMA_VERSION_V2,
+  comboDefaultName,
+  comboDedupeKey,
+  type ChainStepKind,
+  type Combo,
+  type ComboChainStep,
+  type ComboPlan,
+  type ComboTierNumber,
+  type ComboTiers,
+  type ComboWalk,
   type FavoriteEndpoint,
   type FavoriteItem,
   type FavoritesFile,
+  type FavoritesFileV2,
   type PlaceFavorite,
   type PlanFavorite,
   type PlanSnapshot,
@@ -262,4 +276,387 @@ export function newId(): string {
     /* ignore */
   }
   return `f_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   ★ v2 存储（v2.3.0 · 07 §1.1 / §1.3 / §1.4）
+   键 `must.favorites.v2` —— 「组合 Combo → 组合下方案 ComboPlan」两级；
+   读时**一次性**从 v1 迁移（**v1 键不删**，留作回滚/审计）。
+   ══════════════════════════════════════════════════════════════════════════ */
+
+export interface ReadCombosResult {
+  file: FavoritesFileV2;
+  available: boolean;
+  readOnly: boolean;
+  /** 本次读取是否发生了 v1 → v2 迁移 */
+  migrated?: boolean;
+  /** 迁移被中止 / 写入失败的原因（→ 上层提示「本次只读」） */
+  migrateError?: string;
+}
+
+export function emptyFileV2(): FavoritesFileV2 {
+  return { schemaVersion: FAVORITES_SCHEMA_VERSION_V2, updatedAt: 0, combos: [] };
+}
+
+const CHAIN_KINDS = new Set<string>(["board", "transfer", "alight"]);
+
+/** 组合下方案校验（坏 → null） */
+function sanitizeComboPlan(raw: unknown, now: number): ComboPlan | null {
+  if (!raw || typeof raw !== "object") return null;
+  const p = raw as Record<string, unknown>;
+  if (typeof p.fingerprint !== "string" || !p.fingerprint) return null;
+  const createdAt = typeof p.createdAt === "number" && Number.isFinite(p.createdAt) ? p.createdAt : now;
+  const out: ComboPlan = {
+    id: typeof p.id === "string" && p.id ? p.id : newId(),
+    fingerprint: p.fingerprint,
+    snapshot: sanitizeSnapshot(p.snapshot, p.fingerprint, createdAt),
+    createdAt,
+    updatedAt: typeof p.updatedAt === "number" && Number.isFinite(p.updatedAt) ? p.updatedAt : createdAt,
+  };
+  if (typeof p.note === "string" && p.note.trim()) out.note = p.note.slice(0, 40);
+  if (p.pinned === true) out.pinned = true;
+  return out;
+}
+
+/**
+ * 站链校验（**坏 → 整条链丢弃**，安全回落到「自动选线」）。
+ * 规则同 `combo-params.decodeChain`：2~5 节点 · 首 `board` / 末 `alight` / 中间 `transfer` · 每节点须有 `code`。
+ */
+function sanitizeChain(raw: unknown): ComboChainStep[] | undefined {
+  if (!Array.isArray(raw) || raw.length < 2 || raw.length > 5) return undefined;
+  const out: ComboChainStep[] = [];
+  for (let i = 0; i < raw.length; i++) {
+    const it = raw[i] as Record<string, unknown> | null;
+    if (!it || typeof it !== "object" || Array.isArray(it)) return undefined;
+    const kind = String(it.kind ?? "");
+    const want = i === 0 ? "board" : i === raw.length - 1 ? "alight" : "transfer";
+    if (!CHAIN_KINDS.has(kind) || kind !== want) return undefined;
+    const code = typeof it.code === "string" ? it.code.trim() : "";
+    if (!code) return undefined;
+    const step: ComboChainStep = {
+      kind: kind as ChainStepKind,
+      code,
+      label: typeof it.label === "string" && it.label ? it.label : code,
+    };
+    if (typeof it.lng === "number" && Number.isFinite(it.lng)) step.lng = it.lng;
+    if (typeof it.lat === "number" && Number.isFinite(it.lat)) step.lat = it.lat;
+    if (Array.isArray(it.routes)) {
+      const rs = it.routes.filter((r): r is string => typeof r === "string" && !!r.trim());
+      if (rs.length) step.routes = rs;
+    }
+    out.push(step);
+  }
+  return out;
+}
+
+/** 步行覆盖校验（越界项**丢该字段**，不废整条） */
+function sanitizeWalk(raw: unknown): ComboWalk | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const o = raw as Record<string, unknown>;
+  const walk: ComboWalk = {};
+  for (const k of ["seg1", "seg2"] as const) {
+    const s = o[k];
+    if (!s || typeof s !== "object") continue;
+    const r = s as Record<string, unknown>;
+    const seg: NonNullable<ComboWalk["seg1"]> = {};
+    if (typeof r.distanceM === "number" && Number.isFinite(r.distanceM) && r.distanceM >= 0 && r.distanceM <= 20000) {
+      seg.distanceM = r.distanceM;
+    }
+    if (typeof r.minutes === "number" && Number.isFinite(r.minutes) && r.minutes >= 0 && r.minutes <= 180) {
+      seg.minutes = r.minutes;
+    }
+    if (typeof r.link === "boolean") seg.link = r.link;
+    if (Object.keys(seg).length) walk[k] = seg;
+  }
+  return Object.keys(walk).length ? walk : undefined;
+}
+
+/** 五档覆盖校验（范围同 `combo-params`：速度 0.5~6 m/s、用时 0~120 分） */
+function sanitizeTiers(raw: unknown): ComboTiers | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const o = raw as Record<string, unknown>;
+  const tiers: ComboTiers = {};
+  for (const k of ["speedMps", "minutes"] as const) {
+    const m = o[k];
+    if (!m || typeof m !== "object") continue;
+    const src = m as Record<string, unknown>;
+    const dst: Partial<Record<ComboTierNumber, number>> = {};
+    const min = k === "speedMps" ? 0.5 : 0;
+    const max = k === "speedMps" ? 6 : 120;
+    for (const t of [1, 2, 3, 4, 5] as const) {
+      const v = src[String(t)];
+      if (typeof v === "number" && Number.isFinite(v) && v >= min && v <= max) dst[t] = v;
+    }
+    if (Object.keys(dst).length) tiers[k] = dst;
+  }
+  return Object.keys(tiers).length ? tiers : undefined;
+}
+
+/** 组合校验（坏 → null，静默剔除） */
+function sanitizeCombo(raw: unknown, now: number): Combo | null {
+  if (!raw || typeof raw !== "object") return null;
+  const c = raw as Record<string, unknown>;
+  const from = sanitizeEndpoint(c.from);
+  const to = sanitizeEndpoint(c.to);
+  if (!from || !to) return null;
+  if (typeof c.query !== "string" || !c.query.trim()) return null;
+  const createdAt = typeof c.createdAt === "number" && Number.isFinite(c.createdAt) ? c.createdAt : now;
+  const out: Combo = {
+    id: typeof c.id === "string" && c.id ? c.id : newId(),
+    type: "combo",
+    name:
+      typeof c.name === "string" && c.name.trim()
+        ? c.name.trim().slice(0, COMBO_NAME_MAX)
+        : comboDefaultName(from, to),
+    from,
+    to,
+    query: c.query,
+    plans: (Array.isArray(c.plans) ? c.plans : [])
+      .map((p) => sanitizeComboPlan(p, now))
+      .filter((p): p is ComboPlan => !!p),
+    createdAt,
+    updatedAt: typeof c.updatedAt === "number" && Number.isFinite(c.updatedAt) ? c.updatedAt : createdAt,
+  };
+  const chain = sanitizeChain(c.chain);
+  if (chain) out.chain = chain;
+  const walk = sanitizeWalk(c.walk);
+  if (walk) out.walk = walk;
+  const tiers = sanitizeTiers(c.tiers);
+  if (tiers) out.tiers = tiers;
+  if (c.isDefault === true) out.isDefault = true;
+  if (c.nameEdited === true) out.nameEdited = true;
+  if (c.disabled === true) out.disabled = true;
+  if (c.pinned === true) out.pinned = true;
+  if (typeof c.lastUsedAt === "number" && Number.isFinite(c.lastUsedAt)) out.lastUsedAt = c.lastUsedAt;
+  return out;
+}
+
+/** 组合去重：同 `query` 合并为一个（保留较新者，**方案按 fingerprint 合并、不丢**） */
+function dedupeCombos(combos: Combo[]): Combo[] {
+  const map = new Map<string, Combo>();
+  for (const c of combos) {
+    const k = comboDedupeKey(c);
+    const prev = map.get(k);
+    if (!prev) {
+      map.set(k, c);
+      continue;
+    }
+    const keep = (c.updatedAt ?? 0) >= (prev.updatedAt ?? 0) ? c : prev;
+    const other = keep === c ? prev : c;
+    const fps = new Set(keep.plans.map((p) => p.fingerprint));
+    map.set(k, { ...keep, plans: [...keep.plans, ...other.plans.filter((p) => !fps.has(p.fingerprint))] });
+  }
+  return [...map.values()];
+}
+
+/** 组合上限护栏（置顶保留 + 其余按「最近使用」最旧优先剔除） */
+export function pruneCombosToCap(combos: Combo[], cap = COMBO_CAP): Combo[] {
+  if (combos.length <= cap) return combos;
+  const pinned = combos.filter((c) => c.pinned);
+  const rest = combos.filter((c) => !c.pinned);
+  const recency = (c: Combo) => c.lastUsedAt ?? c.updatedAt ?? c.createdAt ?? 0;
+  rest.sort((a, b) => recency(b) - recency(a)); // 新 → 旧
+  const keepRest = Math.max(0, cap - Math.min(pinned.length, cap));
+  return [...pinned, ...rest.slice(0, keepRest)];
+}
+
+/**
+ * **v1 → v2 迁移（纯函数）** —— 07 §1.3 / 06 §3.5。
+ *
+ * 映射：`PlaceFavorite → Combo(plans:[])`；`PlanFavorite → 按 query 归入同一 Combo 的 ComboPlan`
+ * （同 query 已由某 `PlaceFavorite` 建过 Combo 则**复用**，不重复建）。
+ * 命名：v1 `note` **优先**作为新名（无损用户既有命名）；无 note 用默认名。
+ *
+ * ★ **守恒校验（条目不减少）**：`#comboPlan === #plan` 且 `#combo ≥ #place`；否则 `ok:false`
+ *   ⇒ 调用方**中止迁移、保留 v1**（防半迁移，07 §1.3 / 风险 #1）。
+ *   ⚠️ 07 §1.3 的字面表述是「`#place + #plan` vs `#combo + #comboPlan` 必须**相等**」——
+ *      该等式对**「只有方案、没有地点对」的 query 不成立**（此时必须新建 Combo，`#combo` 会多于 `#place`）。
+ *      故此处实现为上面两条**等价且更强**的「无丢失」判据（多出的 Combo 只可能来自 plan 分组）。
+ */
+export function migrateV1(v1: FavoritesFile): { ok: true; combos: Combo[] } | { ok: false; reason: string } {
+  const now = Date.now();
+  const combos: Combo[] = [];
+  const byQuery = new Map<string, Combo>();
+  const placeCount = v1.items.filter((i) => i.type === "place").length;
+  const planCount = v1.items.filter((i) => i.type === "plan").length;
+
+  // ① 地点对 → Combo（plans: []）
+  for (const it of v1.items) {
+    if (it.type !== "place") continue;
+    const note = it.note?.trim();
+    const c: Combo = {
+      id: it.id,
+      type: "combo",
+      name: (note || comboDefaultName(it.from, it.to)).slice(0, COMBO_NAME_MAX),
+      from: it.from,
+      to: it.to,
+      query: it.query,
+      plans: [],
+      createdAt: it.createdAt,
+      updatedAt: it.updatedAt,
+    };
+    if (note) c.nameEdited = true; // v1 note 被当作名称 ⇒ 视为用户命名，后续不被默认名覆盖
+    if (it.pinned) c.pinned = true;
+    if (it.lastUsedAt !== undefined) c.lastUsedAt = it.lastUsedAt;
+    combos.push(c);
+    byQuery.set(it.query, c);
+  }
+
+  // ② 方案 → 按 query 归入 Combo（复用已有 or 新建）
+  for (const it of v1.items) {
+    if (it.type !== "plan") continue;
+    let c = byQuery.get(it.query);
+    if (!c) {
+      const note = it.note?.trim();
+      c = {
+        id: it.id,
+        type: "combo",
+        name: (note || comboDefaultName(it.from, it.to)).slice(0, COMBO_NAME_MAX),
+        from: it.from,
+        to: it.to,
+        query: it.query,
+        plans: [],
+        createdAt: it.createdAt,
+        updatedAt: it.updatedAt,
+      };
+      if (note) c.nameEdited = true;
+      if (it.pinned) c.pinned = true;
+      combos.push(c);
+      byQuery.set(it.query, c);
+    }
+    const plan: ComboPlan = {
+      id: it.id,
+      fingerprint: it.fingerprint,
+      snapshot: it.snapshot,
+      createdAt: it.createdAt,
+      updatedAt: it.updatedAt,
+    };
+    if (it.note?.trim()) plan.note = it.note.trim().slice(0, 40);
+    if (it.pinned) plan.pinned = true;
+    c.plans.push(plan);
+  }
+
+  // ③ 守恒校验（无丢失）
+  const merged = dedupeCombos(combos);
+  const outPlans = merged.reduce((n, c) => n + c.plans.length, 0);
+  if (outPlans !== planCount) {
+    return { ok: false, reason: `方案条目不守恒（v1 ${planCount} → v2 ${outPlans}）` };
+  }
+  if (merged.length < placeCount) {
+    return { ok: false, reason: `组合条目减少（v1 地点对 ${placeCount} → v2 组合 ${merged.length}）` };
+  }
+  void now;
+  return { ok: true, combos: merged };
+}
+
+/**
+ * 默认组合种子注入（幂等，07 §1.4）。
+ * 仅当 `file.seedVersion < version` 时，补「**同名不存在**」的默认组合，然后置位。
+ * 用户删掉的默认组合**不再复活**（seedVersion 已置位）。
+ */
+export function applySeed(
+  file: FavoritesFileV2,
+  seeds: Combo[],
+  version: number,
+): { file: FavoritesFileV2; added: number } {
+  const cur = file.seedVersion ?? 0;
+  if (cur >= version) return { file, added: 0 };
+  const names = new Set(file.combos.map((c) => c.name));
+  const queries = new Set(file.combos.map((c) => comboDedupeKey(c)));
+  const add = seeds.filter((s) => !names.has(s.name) && !queries.has(comboDedupeKey(s)));
+  return {
+    file: { ...file, seedVersion: version, updatedAt: Date.now(), combos: [...file.combos, ...add] },
+    added: add.length,
+  };
+}
+
+/**
+ * 读取组合。**读优先 `must.favorites.v2`**；缺失时从 v1 迁移（v1 键不删）。
+ * · 写失败（隐私/配额）→ **不写、不删 v1**，本次会话**只读降级**（返回已迁移数据 + `readOnly`）。
+ * · 迁移守恒校验不过 → **中止迁移、保留 v1**，只读。
+ */
+export function readCombos(): ReadCombosResult {
+  if (typeof window === "undefined") return { file: emptyFileV2(), available: false, readOnly: false };
+  const available = isStorageAvailable();
+  if (!available) return { file: emptyFileV2(), available: false, readOnly: true };
+
+  let raw: string | null = null;
+  try {
+    raw = window.localStorage.getItem(FAVORITES_KEY_V2);
+  } catch {
+    return { file: emptyFileV2(), available: false, readOnly: true };
+  }
+
+  if (raw) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      console.warn("[favorites] v2 文件解析失败（已忽略，不覆盖原数据）");
+      return { file: emptyFileV2(), available: true, readOnly: true };
+    }
+    if (!parsed || typeof parsed !== "object") return { file: emptyFileV2(), available: true, readOnly: true };
+    const obj = parsed as Record<string, unknown>;
+    const ver = typeof obj.schemaVersion === "number" ? obj.schemaVersion : 0;
+    // F4：未知更高版本 → 只读不写
+    if (ver > FAVORITES_SCHEMA_VERSION_V2) return { file: emptyFileV2(), available: true, readOnly: true };
+
+    const now = Date.now();
+    const rawCombos = Array.isArray(obj.combos) ? obj.combos : [];
+    const combos = pruneCombosToCap(
+      dedupeCombos(rawCombos.map((c) => sanitizeCombo(c, now)).filter((c): c is Combo => !!c)),
+    );
+    const file: FavoritesFileV2 = {
+      schemaVersion: FAVORITES_SCHEMA_VERSION_V2,
+      updatedAt: typeof obj.updatedAt === "number" ? obj.updatedAt : 0,
+      combos,
+    };
+    if (obj.migratedFrom === "v1") file.migratedFrom = "v1";
+    if (typeof obj.seedVersion === "number" && Number.isFinite(obj.seedVersion)) file.seedVersion = obj.seedVersion;
+    // 自愈：坏条被剔除 → 回写（避免脏数据长期滞留）
+    if (combos.length !== rawCombos.length) writeCombos(file);
+    return { file, available: true, readOnly: false };
+  }
+
+  // ── 无 v2 键 → 尝试从 v1 迁移 ──
+  const v1 = readFavorites();
+  if (!v1.available) return { file: emptyFileV2(), available: false, readOnly: true };
+  if (!v1.file.items.length) return { file: emptyFileV2(), available: true, readOnly: false };
+  const mig = migrateV1(v1.file);
+  if (!mig.ok) {
+    console.warn("[favorites] v1→v2 迁移中止（保留 v1）:", mig.reason);
+    return { file: emptyFileV2(), available: true, readOnly: true, migrateError: mig.reason };
+  }
+  const file: FavoritesFileV2 = {
+    schemaVersion: FAVORITES_SCHEMA_VERSION_V2,
+    updatedAt: Date.now(),
+    migratedFrom: "v1",
+    combos: mig.combos,
+  };
+  const w = writeCombos(file);
+  if (!w.ok) {
+    // 写失败 ⇒ 不写、不删 v1；本次会话只读降级（数据仍可展示）
+    return { file, available: true, readOnly: true, migrateError: w.error ?? "写入失败" };
+  }
+  return { file, available: true, readOnly: false, migrated: true };
+}
+
+/**
+ * 写入组合（含去重 + 上限清理）。
+ * `try/catch` 包住 `setItem`（隐私模式 / 配额满）→ `{ok:false}`，不崩 UI。
+ */
+export function writeCombos(file: FavoritesFileV2): { ok: boolean; error?: string } {
+  if (typeof window === "undefined") return { ok: false, error: "非浏览器环境" };
+  const next: FavoritesFileV2 = {
+    ...file,
+    schemaVersion: FAVORITES_SCHEMA_VERSION_V2,
+    updatedAt: Date.now(),
+    combos: pruneCombosToCap(dedupeCombos(file.combos)),
+  };
+  try {
+    window.localStorage.setItem(FAVORITES_KEY_V2, JSON.stringify(next));
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
 }

@@ -235,6 +235,18 @@ export interface AmapPlanLeg {
   mappedBoard: string | null;
   mappedAlight: string | null;
   mappedHops: [string, string][] | null;
+  /**
+   * ★ v2.3.0（B2）：**同一段内其余并行线的原始高德线路名**（`buslines[1..]`）。
+   *   仅保留**名字**、**不保留 polyline**（02 §6 坑#2：show_fields 含 polyline 会掉方案数）。
+   *   由 `parsePlan` 从 `segments[].bus.buslines` 挂上；`bridgeLeg` 再经 `routeCodeOf` 映射成
+   *   本库线码填入 `RideSegment.parallelRoutes`。
+   */
+  parallelNames?: string[];
+  /**
+   * ★ v2.3.0（B2）：**同一段内并行线的本库线码**（由 `bridgeLeg` 从 `parallelNames` 经
+   *   `routeCodeOf` 映射、去重、剔除主干线自身后填入；映射不出则不填）。
+   */
+  parallelRoutes?: string[];
 }
 
 /** 方案内的换乘步行（相邻 leg 之间的高德 walking 段） */

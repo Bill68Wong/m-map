@@ -226,8 +226,16 @@ export function parsePlan(
       }
       pending = { dist: 0, dur: 0 };
       seenBus = true;
-      // 同段可能多条并行线 → 取首条作为骨架（§B.2）
-      legs.push(legOf(bls[0]));
+      // 同段可能多条并行线 → 取首条作为骨架（§B.2）；★ v2.3.0：其余线的**原始名**挂腿（B2）
+      const leg = legOf(bls[0]);
+      if (bls.length > 1) {
+        const parallelNames = bls
+          .slice(1)
+          .map((b) => b.name ?? "")
+          .filter(Boolean);
+        if (parallelNames.length) leg.parallelNames = parallelNames;
+      }
+      legs.push(leg);
     }
   }
   if (!seenBus) {

@@ -104,17 +104,27 @@ export default function PoiSearchBox({
     setQ(value.label);
   }, [value]);
 
-  async function query(keyword: string, mode: "type" | "enter") {
+  /**
+   * 搜索。
+   * @param forceAmap ★ 修复包 v2.2.1-B7：强制走高德（跳过服务端「本地已有带坐标命中就短路」）
+   * @returns 响应对象（供调用方判定/自动选中）；无关键字或失败 → null
+   */
+  async function query(
+    keyword: string,
+    mode: "type" | "enter",
+    forceAmap = false,
+  ): Promise<PoiSuggestResponse | null> {
     const s = keyword.trim();
     if (!s) {
       setResp(null);
       setOpen(false);
-      return;
+      return null;
     }
     setLoading(true);
     setErr("");
     try {
       const sp = new URLSearchParams({ q: s.slice(0, 50), mode });
+      if (forceAmap) sp.set("forceAmap", "1");
       if (userPos) {
         sp.set("lat", String(userPos.lat));
         sp.set("lng", String(userPos.lng));
@@ -123,9 +133,11 @@ export default function PoiSearchBox({
       const json = (await res.json()) as PoiSuggestResponse;
       setResp(json);
       setOpen(true);
+      return json;
     } catch {
       setErr("搜索暂不可用，请稍后再试");
       setOpen(true);
+      return null;
     } finally {
       setLoading(false);
     }
@@ -149,10 +161,25 @@ export default function PoiSearchBox({
     setOpen(false);
   }
 
-  // 本地命中但无坐标 → 点【搜索】走高德确认坐标
-  function pickPending(name: string) {
+  /**
+   * ★ 修复包 v2.2.1-B7（FIX-10）：点「点搜索确认」行 —— 本地命中但**无坐标**。
+   *
+   * 旧实现用**同一个查询串**再发一次 `mode=enter`，而服务端规则是「本地已有**带坐标**命中
+   * 就短路、不调高德」——该查询恒有本地带坐标命中（如 M70/M71）⇒ 高德**永不触发**、
+   * 返回逐字节相同、`setQ(name)` 又把输入设成同一文本 ⇒ **点击表现为完全无反应**（目的地从未写入）。
+   *
+   * 现改为：**强制走高德**（`forceAmap=1`）→ 拿到坐标后**自动选中最佳一条** ⇒ 一次点击即写入目的地。
+   * 高德也无结果 → 保留下拉并给行内灰字提示（不再静默无反应）。
+   */
+  async function pickPending(name: string) {
     setQ(name);
-    void query(name, "enter");
+    const json = await query(name, "enter", true);
+    const top = json?.results?.[0];
+    if (top) {
+      pick(top);
+      return;
+    }
+    setErr("这条地点暂时确认不到坐标 · 换个说法试试");
   }
 
   const results = resp?.results ?? [];

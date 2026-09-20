@@ -16,6 +16,17 @@
 import { OVERHEAD_SEC, SPEED_RATIO, TIER_TEXT, tier1EffRatio, type CatchTier } from "./types";
 
 /**
+ * ★ v2.3.0：**组合级五档覆盖**（`/api/nav` 可选参数 `tiers` 的运行时形态）。
+ *   · `ratio[k]` —— 覆盖 `SPEED_RATIO[k]`（档 1 覆盖 `tier1EffRatio`）；由 `tiers.speedMps` 派生；
+ *   · `requiredSec[k]` —— 直接覆盖该档所需秒数；由 `tiers.minutes` 派生。
+ *   **缺省（undefined）= 模块默认常量，行为与 v2.2.0 完全一致**。
+ */
+export interface TierSpeedOverride {
+  ratio?: Partial<Record<CatchTier, number>>;
+  requiredSec?: Partial<Record<CatchTier, number>>;
+}
+
+/**
  * 以某档速度走完给定基准时长，所需秒数。
  *
  * ★ v1.2.0：新增可选参数 `walkDistanceM` —— **档 1 用它做随距离衰减**。
@@ -27,13 +38,23 @@ import { OVERHEAD_SEC, SPEED_RATIO, TIER_TEXT, tier1EffRatio, type CatchTier } f
  *   ⚠️ 档 2~5 **不受距离影响** —— 2.0 m/s 是小跑（有氧强度，真的能跑 1 公里），
  *      模型没算错，不需要修正 ✓（详见 docs/步行速度五档-文献依据-20260918.md §7.7）
  *
+ * ★ v2.3.0：新增可选参数 `ov`（组合级覆盖，07 §2.5）。缺省 = 走下面默认常量。
+ *
  * @param baseMin       该段步行的「正常走」基准时长（分钟）
  * @param tier          档位
  * @param walkDistanceM 该段步行路径距离（米）；`null`/缺省 = 未知，档 1 退回线性
+ * @param ov            组合级五档覆盖（`tiers` 参数派生）；缺省 = 默认常量
  */
-export function requiredSec(baseMin: number, tier: CatchTier, walkDistanceM?: number | null): number {
+export function requiredSec(
+  baseMin: number,
+  tier: CatchTier,
+  walkDistanceM?: number | null,
+  ov?: TierSpeedOverride,
+): number {
+  const direct = ov?.requiredSec?.[tier];
+  if (direct !== undefined) return direct;
   const base = Math.max(0, baseMin * 60 - OVERHEAD_SEC);
-  const ratio = tier === 1 ? tier1EffRatio(walkDistanceM) : SPEED_RATIO[tier];
+  const ratio = tier === 1 ? (ov?.ratio?.[1] ?? tier1EffRatio(walkDistanceM)) : (ov?.ratio?.[tier] ?? SPEED_RATIO[tier]);
   return OVERHEAD_SEC + base * ratio;
 }
 
@@ -44,11 +65,17 @@ export function requiredSec(baseMin: number, tier: CatchTier, walkDistanceM?: nu
  * @param baseMin       该段步行的「正常走」基准时长（分钟）
  * @param waitSec       车辆到站剩余（秒，**区间下限**）
  * @param walkDistanceM 该段步行距离（米）；用于档 1 的随距离衰减
+ * @param ov            组合级五档覆盖（`tiers` 参数派生）；缺省 = 默认常量
  */
-export function pickCatchTier(baseMin: number, waitSec: number, walkDistanceM?: number | null): CatchTier | null {
+export function pickCatchTier(
+  baseMin: number,
+  waitSec: number,
+  walkDistanceM?: number | null,
+  ov?: TierSpeedOverride,
+): CatchTier | null {
   for (let k = 5; k >= 1; k--) {
     const t = k as CatchTier;
-    if (requiredSec(baseMin, t, walkDistanceM) <= waitSec) return t;
+    if (requiredSec(baseMin, t, walkDistanceM, ov) <= waitSec) return t;
   }
   return null;
 }
@@ -69,11 +96,17 @@ export function tierTextOf(tier: CatchTier): string {
  *
  * @param baseMin 该段步行的「正常走」基准时长（分钟）—— 必须与卡面显示的同一份
  * @param walkDistanceM 该段步行距离（米）；档 1 的差额会随距离变化（v1.2.0）
+ * @param ov 组合级五档覆盖（`tiers` 参数派生）；缺省 = 默认常量
  * @returns 档 3~5（无需加速）或差额 < 30 秒 → `""`（不占版面）
  */
-export function tierHintOf(baseMin: number, tier: CatchTier, walkDistanceM?: number | null): string {
+export function tierHintOf(
+  baseMin: number,
+  tier: CatchTier,
+  walkDistanceM?: number | null,
+  ov?: TierSpeedOverride,
+): string {
   if (tier >= 3) return "";
-  const saveSec = requiredSec(baseMin, 3) - requiredSec(baseMin, tier, walkDistanceM);
+  const saveSec = requiredSec(baseMin, 3, undefined, ov) - requiredSec(baseMin, tier, walkDistanceM, ov);
   if (saveSec < 30) return "";
   const m = Math.round((saveSec / 60) * 10) / 10;
   // ★ P1-2：界面文案**一律简体**（站名/线路名才用繁体）

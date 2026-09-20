@@ -29,6 +29,32 @@ export function TierBadge({ tier, tierText }: { tier: CatchTier | null; tierText
   return <span className={`rc-tier rc-tier--${tier}`}>{tierText}</span>;
 }
 
+/**
+ * 报站文案高亮（修复包 v2.2.1 · 第 4 条）
+ *
+ * 把「还有 **N** 站」里的站数 N、以及「**即将到站**」用 `<b>` + 青花蓝（`.t-accent`）突出 ——
+ * 「还有几站」是通勤决策的关键数字，扫描时应第一眼可见。
+ * 其余文案原样透传（轻轨「HH:MM 開出」、巴士第 2 段起「按班次间隔推算」等）。
+ *
+ * ⚠️ 只高亮「数字 + 站」这一处（不误伤「约 4~6 分」里的数字）。
+ */
+export function EtaText({ text }: { text: string }) {
+  const parts = text.split(/(\d+(?=\s*站)|即将到站)/g);
+  return (
+    <>
+      {parts.map((p, i) =>
+        /^\d+$/.test(p) || p === "即将到站" ? (
+          <b className="t-accent" key={i}>
+            {p}
+          </b>
+        ) : (
+          p
+        ),
+      )}
+    </>
+  );
+}
+
 /** 时间线一行：圆点 + 竖线 + 内容 */
 export function Row({
   dot,

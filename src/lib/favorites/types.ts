@@ -166,3 +166,141 @@ export function savedAtText(ms: number): string {
   const p = (n: number) => String(n).padStart(2, "0");
   return `保存于 ${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}`;
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   ★ v2（v2.3.0 · 07 §1 / 06 §3.7）：两级模型「组合 Combo → 组合下方案 ComboPlan」
+   ══════════════════════════════════════════════════════════════════════════
+   · **组合 = "去哪"**（一个 OD + 可选站链/参数）；**组合下方案 = "怎么走"**（被显式存下的一条指纹+快照）
+   · **「多方案」不是存储**：点组合卡 → 现场实时算出的候选列表；`ComboPlan` 只是其子集
+   · 复用（不重写）：`FavoriteEndpoint` / `PlanSnapshot` / `planFingerprint` / `endpointOf` / `savedAtText`
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/** 站链节点种类：上车 / 换乘 / 下车 */
+export type ChainStepKind = "board" | "transfer" | "alight";
+
+/**
+ * 站链节点（与 `src/lib/nav/combo-params.ts` 的 `ChainStep` **结构一致**）。
+ * ⚠️ 此处**故意不 import** `combo-params`（保持本模块零依赖、纯类型）——由消费方做结构兼容。
+ * `routes?` = 该「上车/换乘」节点容许的**并行线路候选**（D1 段内并行）。
+ */
+export interface ComboChainStep {
+  kind: ChainStepKind;
+  /** 站码（可为站台码如 `T373/1`） */
+  code?: string;
+  label: string;
+  lng?: number;
+  lat?: number;
+  routes?: string[];
+}
+
+/** 步行覆盖（单段）：`link=false` 表示距离与时长**不联动**（各自独立，07 §2.5） */
+export interface ComboWalkSeg {
+  distanceM?: number;
+  minutes?: number;
+  link?: boolean;
+}
+/** 两段步行覆盖：seg1 = 出发地→上车站；seg2 = 下车站→目的地 */
+export interface ComboWalk {
+  seg1?: ComboWalkSeg;
+  seg2?: ComboWalkSeg;
+}
+
+export type ComboTierNumber = 1 | 2 | 3 | 4 | 5;
+/** 五档覆盖：`speedMps` 覆盖派生速度；`minutes` 直接覆盖该档用时 */
+export interface ComboTiers {
+  speedMps?: Partial<Record<ComboTierNumber, number>>;
+  minutes?: Partial<Record<ComboTierNumber, number>>;
+}
+
+/** 组合下**已保存方案**（≈ v1 `PlanFavorite` 去 OD 化；指纹真源同 `planFingerprint`） */
+export interface ComboPlan {
+  id: string;
+  /** 复用 `planFingerprint`（唯一真源） */
+  fingerprint: string;
+  /** 采集时快照（**只作离线/降级展示**，不作真值；含 `capturedAt` → 「保存于 MM-DD」） */
+  snapshot: PlanSnapshot;
+  note?: string;
+  createdAt: number;
+  updatedAt: number;
+  pinned?: boolean;
+}
+
+/** 组合 = 一对「出发地 → 目的地」+ 可选站链/参数 + 已保存方案 */
+export interface Combo {
+  id: string;
+  type: "combo";
+  /** ≤24 字；默认「出发地 label → 目的地 label」 */
+  name: string;
+  from: FavoriteEndpoint;
+  to: FavoriteEndpoint;
+  /** = `parseNavParams().query`（**不含 plan**，也不含 chain/walk/tiers）—— 重算锚点 */
+  query: string;
+  /** 站链；空/缺省 = 自动选线 */
+  chain?: ComboChainStep[];
+  walk?: ComboWalk;
+  tiers?: ComboTiers;
+  /** 组合下已保存方案（0..N） */
+  plans: ComboPlan[];
+  /** 旧计时预设内置（可被用户删除） */
+  isDefault?: boolean;
+  /** 用户改过名 → 默认名不再覆盖（07 §1.1 落定要点） */
+  nameEdited?: boolean;
+  /**
+   * ★ S2：**已停用**（08 §C.2 停用态）—— 灰字、排序沉底、不参与「点卡即算」；
+   * 仅作静默停用（08 §E7：**不新增任何"该功能已下线"告知**）。
+   */
+  disabled?: boolean;
+  createdAt: number;
+  updatedAt: number;
+  pinned?: boolean;
+  lastUsedAt?: number;
+}
+
+/** v2 顶层文件（键 `must.favorites.v2`） */
+export interface FavoritesFileV2 {
+  schemaVersion: 2;
+  updatedAt: number;
+  /** 迁移来源标记（仅作审计） */
+  migratedFrom?: "v1";
+  /** 默认组合种子版本（幂等键，07 §1.4） */
+  seedVersion?: number;
+  combos: Combo[];
+}
+
+export const FAVORITES_KEY_V2 = "must.favorites.v2";
+export const FAVORITES_SCHEMA_VERSION_V2 = 2 as const;
+/** 组合上限（沿用 v1 的 200 量级） */
+export const COMBO_CAP = 200;
+/** 组合名上限（06 §3.2） */
+export const COMBO_NAME_MAX = 24;
+
+/** 组合默认名：`出发地 → 目的地`（06 §3.2；超长截断到 24 字） */
+export function comboDefaultName(from: { label: string }, to: { label: string }): string {
+  return `${from.label} → ${to.label}`.slice(0, COMBO_NAME_MAX);
+}
+
+/** 组合去重键：按 `query`（同一 OD 只应有一个组合，07 §1.2） */
+export function comboDedupeKey(c: { query: string }): string {
+  return `combo:${c.query}`;
+}
+
+/**
+ * 规范化查询串（与 `parseNavParams().query` **逐字节一致**）—— 组合的 `query` 由此生成。
+ * ★ 唯一真源：`StepSheet.queryOf` 已按同格式实现，S4/S5 统一改调本函数。
+ * ⚠️ `chain/walk/tiers` **不进 query**（它们由 `combo-params` 的 `encodeComboParam` 单独拼）。
+ */
+export function comboQueryOf(from: FavoriteEndpoint, to: FavoriteEndpoint): string {
+  const sp = new URLSearchParams({
+    fromLng: String(from.lng),
+    fromLat: String(from.lat),
+    toLng: String(to.lng),
+    toLat: String(to.lat),
+    fromLabel: from.label,
+    toLabel: to.label,
+    fromKind: from.kind,
+    toKind: to.kind,
+  });
+  if (from.code) sp.set("fromCode", from.code);
+  if (to.code) sp.set("toCode", to.code);
+  return sp.toString();
+}

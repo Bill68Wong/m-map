@@ -44,26 +44,50 @@ interface LrtEtaData {
 }
 
 /**
- * v0.18.4：轻轨到站留白——真实站台灯在列车进站后不会立刻显示下一班，会留白片刻；
- * 且轻轨实际到站可能比时刻表延迟，立刻切「下一班」容易误导。
- * 规则：某班时刻表到点后的 45s 内不显示任何班次（留白静默），之后才显示下一班。
+ * ★ 逐线「到站窗口」（修复包 v2.2.1-B5 / 07 §3.6 · D5）——**替换原先写死的 45s 与 <60s 阈值**。
+ *
+ * 判定式（2026-09-20 裁定）：**现正到达 ⇔ `depMs - pre ≤ now ≤ depMs + post`**
+ *   —— ★ **闭区间（含边界）**；窗口外 → 显示「下一班 X 分钟 / 还有 X 分 Y 秒」。
+ *   · 石排湾 `post` **保留 45s**（用户只提"关门时间"偏移）；
+ *   · 横琴 `pre=0`（+40s 关门偏移，即窗口只在发车后才开）；
+ *   · ⚠️ 窗口**只作用于到站判定与显示**，**不改** `depMs`（时刻表绝对发车时刻）。
  */
-const ARRIVAL_GAP_MS = 45_000;
+const LRT_ARRIVAL_WINDOW: Record<string, { pre: number; post: number }> = {
+  "LRT-氹仔线": { pre: 30_000, post: 30_000 },
+  "LRT-石排湾线": { pre: 5_000, post: 45_000 },
+  "LRT-横琴线": { pre: 0, post: 40_000 },
+};
 
-/** 选取要显示的下一班；「上一班刚过点 ≤45s」→ 返回 null（留白期） */
-function pickNext(dep: LrtDeparture[], nowMs: number): LrtDeparture | null {
-  if (!dep.length) return null;
-  const firstGone = nowMs - dep[0].depMs;
-  if (firstGone <= 0) return dep[0]; // 第一班还没到点
-  if (firstGone < ARRIVAL_GAP_MS) return null; // 刚过点 → 留白
-  return dep.find((d) => d.depMs - nowMs > 0) ?? null;
+/** 未知/新增线路的兜底窗口（贴近旧行为：无 pre、post = 旧 45s 留白） */
+const LRT_WINDOW_FALLBACK: { pre: number; post: number } = { pre: 0, post: 45_000 };
+
+/** 取该线的到站窗口（对简/繁「橫琴/横琴」等写法做包含式兜底匹配） */
+function windowOf(lineCode: string): { pre: number; post: number } {
+  const exact = LRT_ARRIVAL_WINDOW[lineCode];
+  if (exact) return exact;
+  const key = Object.keys(LRT_ARRIVAL_WINDOW).find((k) => {
+    const bare = k.replace(/^LRT-/, "");
+    return lineCode.includes(bare) || lineCode === bare;
+  });
+  if (key) return LRT_ARRIVAL_WINDOW[key];
+  // 秒级线（石排湾/横琴的繁体写法）优先级高于整分线
+  if (tickSecLine(lineCode)) return LRT_ARRIVAL_WINDOW["LRT-横琴线"];
+  return LRT_WINDOW_FALLBACK;
 }
 
-/** 是否处于「班次刚过点 ≤45s」的留白期（渲染静默用） */
-function arrivalGapActive(dep: LrtDeparture[], nowMs: number): boolean {
-  if (!dep.length) return false;
-  const firstGone = nowMs - dep[0].depMs;
-  return firstGone >= 0 && firstGone < ARRIVAL_GAP_MS;
+/** 选「当前要展示的班次」= 第一个**窗口尚未结束**的班次（`depMs + post ≥ now`） */
+function pickNext(
+  dep: LrtDeparture[],
+  nowMs: number,
+  w: { pre: number; post: number },
+): LrtDeparture | null {
+  if (!dep.length) return null;
+  return dep.find((d) => d.depMs + w.post >= nowMs) ?? null;
+}
+
+/** 该班是否处于「现正到达」窗口（★ 闭区间，含边界） */
+function inArrivalWindow(d: LrtDeparture, nowMs: number, w: { pre: number; post: number }): boolean {
+  return nowMs >= d.depMs - w.pre && nowMs <= d.depMs + w.post;
 }
 
 /** 澳门自然日 ymd（GMT+8，本地纯算） */
@@ -164,8 +188,8 @@ export default function LrtEta({
         }
         return;
       }
-      // v0.18.4：上一班到点后 45s 留白（pickNext 返回 null → 上报 null，不写快照）
-      const nxtDep = pickNext(dep, nowMs);
+      // ★ B5：与显示同口径 —— 逐线到站窗口（闭区间）；窗口内仍返回该班（不提前滚到下一班）
+      const nxtDep = pickNext(dep, nowMs, windowOf(data.lineCode));
       if (!nxtDep) {
         if (lastReportedRemain.current !== null) {
           lastReportedRemain.current = null;
@@ -207,15 +231,17 @@ export default function LrtEta({
 
   // —— 渲染 ——
   const nowMs = data ? Date.now() + serverOffsetMs.current : 0;
-  // v0.18.4：班次选择统一走 pickNext（到点后 45s 留白，不立刻切下一班）
-  const nxtDep = data ? pickNext(data.departures, nowMs) : null;
-  const gapSilent = !!data && data.state === "running" && arrivalGapActive(data.departures, nowMs);
+  // ★ B5：逐线到站窗口（闭区间）；班次选择 = 第一个「窗口尚未结束」的班次（depMs + post ≥ now）
+  const win = windowOf(data?.lineCode || route || "");
+  const nxtDep = data ? pickNext(data.departures, nowMs, win) : null;
   const sndDep = (() => {
     if (!data || !nxtDep) return null;
     const i = data.departures.indexOf(nxtDep);
     return data.departures[i + 1] ?? null;
   })();
   const remainMs = nxtDep ? nxtDep.depMs - nowMs : null;
+  /** ★ B5：现正到达 ⇔ `depMs - pre ≤ now ≤ depMs + post`（**闭区间，含边界**） */
+  const arriving = !!nxtDep && inArrivalWindow(nxtDep, nowMs, win);
   // v0.15.1：石排湾/横琴线秒级读秒（氹仔线维持整分显示）
   const tickSec = !!data && tickSecLine(data.lineCode);
   // floor：60_000ms 整恰好 60s（1 分 0 秒）；<60s 时不会出现「0 分 60 秒」（ceil 陷阱）
@@ -282,19 +308,16 @@ export default function LrtEta({
                   ? "今日已收车"
                   : "该方向暂无时刻数据"}
         </p>
-      ) : gapSilent ? (
-        /* v0.18.4：列车到站后 45s 留白——什么都不显示（同真实站台灯），
-           占位空档保持卡片高度稳定，避免来回跳动 */
-        <div style={{ height: 72 }} aria-hidden="true" />
       ) : !nxtDep ? (
         <p className="t-body t-muted" style={{ lineHeight: 1.7, textAlign: "center", marginTop: 4 }}>
           该方向暂无时刻数据
         </p>
       ) : (
         <div style={{ marginTop: 2 }}>
-          {/* v0.15.2：秒级线路（石排湾/横琴）<60s → 大字仍是秒数，上方叠加闪烁「现正到达」徽章；
-              氹仔线无秒精度 → 大字仍由「下一班 X 分钟」切换为「现正到达」flash */}
-          {tickSec && remainMs !== null && remainMs < 60_000 && (
+          {/* ★ B5：秒级线（石排湾/横琴）在**到站窗口内**保留秒数，上方叠加「现正到达」徽章；
+              氹仔线无秒精度 → 大字由「下一班 X 分钟」切换为「现正到达」flash。
+              窗口 = 逐线 `LRT_ARRIVAL_WINDOW`（★ 闭区间，含边界）—— 替换原先写死的 <60s 阈值与 45s 留白。 */}
+          {tickSec && arriving && (
             <p
               className="t-accent t-strong"
               style={{
@@ -310,16 +333,14 @@ export default function LrtEta({
           )}
           {/* 下一班大数字 */}
           <p
-            className={`t-accent eta-big${
-              !tickSec && remainMs !== null && remainMs < 60_000 ? " eta-big--flash" : ""
-            }`}
+            className={`t-accent eta-big${!tickSec && arriving ? " eta-big--flash" : ""}`}
             style={{ textAlign: "center", margin: "4px 0 0" }}
           >
             {tickSec
               ? `还有 ${Math.floor(totalSec! / 60)} 分 ${totalSec! % 60} 秒`
-              : remainMs !== null && remainMs >= 60_000
-                ? `下一班 ${Math.floor(remainMs / 60_000)} 分钟`
-                : "现正到达"}
+              : arriving
+                ? "现正到达"
+                : `下一班 ${Math.max(0, Math.floor((remainMs ?? 0) / 60_000))} 分钟`}
           </p>
           {/* 副行：方向 + 绝对时刻 */}
           <p
@@ -410,23 +431,23 @@ export function LrtEtaInline({
   if (!mounted) return <span className="rc-live rc-live--dim">—</span>;
 
   const nowMs = Date.now();
-  const nxt = pickNext(dep, nowMs);
+  const w = windowOf(lineCode);
+  const nxt = pickNext(dep, nowMs, w);
   const sec = tickSecLine(lineCode);
-  // 到站留白期（上一班刚过点 ≤45s）：与站台灯一致，静默不显示
-  if (!nxt) {
-    return <span className="rc-live rc-live--dim">{arrivalGapActive(dep, nowMs) ? "" : "今日已收车"}</span>;
-  }
+  // ★ B5：窗口内 = 「现正到达」；整日无后续班次 → 今日已收车（不再用写死的 45s 留白）
+  if (!nxt) return <span className="rc-live rc-live--dim">今日已收车</span>;
   const remainMs = nxt.depMs - nowMs;
+  const arriving = inArrivalWindow(nxt, nowMs, w);
   const totalSec = Math.max(0, Math.floor(remainMs / 1000));
   return (
     <span className="rc-live">
       {sec
-        ? totalSec < 60
+        ? arriving
           ? "现正到达"
           : `还有 ${Math.floor(totalSec / 60)} 分 ${totalSec % 60} 秒`
-        : remainMs >= 60_000
-          ? `下一班 ${Math.floor(remainMs / 60_000)} 分钟`
-          : "现正到达"}
+        : arriving
+          ? "现正到达"
+          : `下一班 ${Math.max(0, Math.floor(remainMs / 60_000))} 分钟`}
       <span className="rc-live__sub">
         {directionName ? `往${directionName} · ` : ""}
         {nxt.clock} 开出
