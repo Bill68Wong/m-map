@@ -244,9 +244,11 @@ export function walkSegKeysOf(combo: Combo, plan: ComboPlan): Set<string> {
   return keys;
 }
 
-/** 端点 label → place slug（与 `presets.slugOfEndpoint` 同口径） */
+/** 端点 label → place slug（与 `presets.slugOfEndpoint` 同口径）
+ *  ⚠️ v2.4.1：校名已繁体化，但**必须同时认简体与简称** —— 用户浏览器里 v2.4.0 写入的
+ *    组合 label 是简体「澳门科技大学」，只认繁体会让旧组合的步行钥匙错位。 */
 function endpointSlug(label: string): string {
-  if (label.includes("澳门科技大学") || label.includes("澳科大")) return "school";
+  if (label.includes("澳門科技大學") || label.includes("澳门科技大学") || label.includes("澳科大")) return "school";
   if (label.includes("橫琴") || label.includes("横琴")) return "hengqin";
   if (label.includes("關閘") || label.includes("关闸")) return "gate";
   return "home";

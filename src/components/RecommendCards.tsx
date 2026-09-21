@@ -1,16 +1,20 @@
 "use client";
 
 /**
- * 自动选线 · 卡片列表（src/components/RecommendCards.tsx，v1.0.0）
+ * 自动选线 · 卡片列表（src/components/RecommendCards.tsx，v1.0.0；★ v2.4.1 删两个透传参数）
  *
- * 只负责渲染：把 `RecommendCard[]` 铺成一组大卡，并统一注入线路色 / 开发者模式 / 座区。
+ * 只负责渲染：把 `RecommendCard[]` 铺成一组大卡，并统一注入线路色 / 座区。
  * 数据来源由父级决定（SSR 首屏来自 server 组件；刷新后来自 `/api/recommend`）。
+ *
+ * ★ v2.4.1：**删除 `originOf` 与 `devMode` 两个透传参数** ——
+ *   用户要求卡面「不再标注方案来源」且「删除右上角的绿色圆点」，
+ *   `RecommendCard` 已不再渲染这两者 ⇒ 本层的透传（及其 `useDevMode` 调用）一并删除，
+ *   避免留下"传了但下游不用"的死参数。调用方（`NavResultClient`）同步移除 `originOf`。
  *
  * 空状态：深度时段多数线路已收班 / 无在途车 → 0 张卡时给明确原因与出口，
  *   不留白屏（计划 §7.1）。
  */
 import RecommendCard from "./RecommendCard";
-import { useDevMode } from "@/lib/dev-mode";
 import type { RecommendCard as CardData, SchoolZone } from "@/lib/recommend/types";
 
 /** UI 目标卡数（用户门槛：点首页卡 2 秒内看到 5 张）；实际不足时给出原因说明 */
@@ -25,7 +29,6 @@ export default function RecommendCards({
   excluded = [],
   missed = [],
   hrefBuilder,
-  originOf,
   cardAction,
 }: {
   cards: CardData[];
@@ -40,15 +43,11 @@ export default function RecommendCards({
   missed?: string[];
   /** ★ v1.3.0（全澳导航）：覆盖点击跳转（如 `/nav/detail?…`） */
   hrefBuilder?: (card: CardData) => string;
-  /** ★ v1.3.0：来源（本地补漏 → 卡片带中性徽章「其他组合」） */
-  originOf?: (card: CardData) => "amap" | "local";
-  /** ★ M Map 改版 S5：每张卡的附加动作槽（如「收藏此方案」） */
+  /** 头部附加角标（如「当下最快」「已保存」）；★ v2.4.1 从底部动作槽移到卡片头部 */
   cardAction?: (card: CardData, rank: number) => React.ReactNode;
 }) {
-  const devMode = useDevMode();
-
   // 剔除原因（分两类：没车 vs 赶不上）—— 合并成一个数组只用于文案拼接
-  // ★ P1-2（T05 修复）：界面文案**一律简体**（站名/线路名才用繁体）—— 旧版此处是简繁混排 bug
+  // ★ P1-2（T05 修复）：界面文案**一律简体**（站名/线路名才用繁体；校名「澳門科技大學」属地名）
   const reasons: string[] = [];
   if (excluded.length > 0) reasons.push(`${excluded.length} 条线路无实时车辆`);
   if (missed.length > 0) reasons.push(`${missed.length} 条路线赶不上首班车`);
@@ -85,13 +84,11 @@ export default function RecommendCards({
           key={`${c.planId}-${c.rides.map((r) => `${r.route}${r.alight}`).join("_")}`}
           card={c}
           colors={colors}
-          devMode={devMode}
           zone={zone}
           rank={i + 1}
           fromSlug={fromSlug}
           toSlug={toSlug}
           hrefOverride={hrefBuilder?.(c)}
-          origin={originOf?.(c)}
           cardAction={cardAction?.(c, i + 1)}
           /* ★ v1.1.8：入场错峰（原先 5 张卡同时同速上浮，既没方向感也白花一次动画预算） */
           delayMs={i * 40}

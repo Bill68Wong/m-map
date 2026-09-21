@@ -45,7 +45,7 @@
  *
  *   ★ 结论：**保留本条 ①「首段赶不上 → 整条剔除」不动**；「后续车次」一律走 `altBuses`。
  *
- * ⚠️ zone（澳门科技大学座区）判据是 `slug === "school"`，**与方向无关** ——
+ * ⚠️ zone（澳門科技大學座区）判据是 `slug === "school"`，**与方向无关** ——
  *    去程的 `walkIn` 与回程的 `walkOut` 都会吃到它（`walk_times` 本来就是
  *    `(place, 站主码, zone)` 合并键、不分出发/到达）。
  *
@@ -228,8 +228,18 @@ export interface ModelContext {
   placeIds: Record<string, number>;
   /** 站码 → 显示名（巴士带站号前缀） */
   nameOf: Map<string, string>;
-  /** 澳门科技大学座区（★ 只要**任一侧**是 school 就生效，与出发/到达方向无关） */
+  /** 澳門科技大學座区（★ 只要**任一侧**是 school 就生效，与出发/到达方向无关） */
   zone: SchoolZone | null;
+  /**
+   * ★ v2.4.1：**目的地的展示名**（如「澳門科技大學（B/C 座）」、任意 POI 名）。
+   *
+   * 为什么需要它：末段步行（`walkIn`）的终点文案必须写**目的地**而不是下车站，
+   * 而目的地名**不能靠 slug 反查** —— 全澳导航链路对非预设地点会把它兜底成
+   * `"place"`（见 `nav-service.ts#slugOf`），`PLACE_SHORT["place"]` 查不到，
+   * 结果会把 slug 原文 `"place"` 直接印到卡片上（实测已复现）。
+   * ⇒ 由调用方（导航 / 推荐服务）显式传入真实地名；缺省时回落 `placeLabelOf(slug)`。
+   */
+  destLabel?: string;
   /** route → 实时视图 */
   live: Map<string, RouteLive>;
   /** 被排除的线路（无在途车 / 已收车 / 站序缺失）→ 静默剔除计数器 */
@@ -291,15 +301,30 @@ function pickBoardable(lv: BusLive, walkMin: number, walkDistM?: number | null, 
 
 /**
  * 步行视图。
- * @param dir 'out'（起点→上车站）/ 'in'（下车站→目的地）—— 仅 `walkResolver` 分支用到
+ * @param dir 'out'（起点→上车站）/ 'in'（下车站→目的地）
  */
 function walkView(ctx: ModelContext, slug: string, station: string, dir: "out" | "in"): WalkLegView {
+  /**
+   * ★ v2.4.1 修复（用户实测：「下车站之后的步行显示成『步行 → 车站』，应为『步行 → 终点』」）
+   *
+   * `toLabel` 必须**按方向**取名字：
+   *   · `out`（出发地 → 上车站）→ 这段步行走向**车站** ⇒ 车站名；
+   *   · `in` （下车站 → 目的地）→ 这段步行走向**目的地** ⇒ `placeLabelOf(slug)`（学校侧带座区）。
+   *
+   * ❌ 原实现两条分支都取车站侧（`info.toLabel` 与 `labelOf(ctx, station)` **都是车站名**），
+   *   故末行渲染为「步行 5 分 → C653 金峰南岸」而非目的地。
+   * ⚠️ 目的地名**优先取 `ctx.destLabel`**（调用方传入的真实地名），
+   *   仅在缺省时才回落 `placeLabelOf(slug)` —— 因为导航链路的 slug 可能是 `"place"` 这类
+   *   兜底值，直接查表会把 slug 原文印上卡片（实测复现过 `步行 6 分 → place`）。
+   */
+  const destName = dir === "in" ? ctx.destLabel || placeLabelOf(ctx, slug) : null;
+
   // ★ v1.3.0 接缝：有 walkResolver（全澳导航）→ 用高德几何（短距修正后 ÷84）
   if (ctx.walkResolver) {
     const info = dir === "out" ? ctx.walkResolver.out(mainCodeOf(station)) : ctx.walkResolver.in(mainCodeOf(station));
     return {
       minutes: Math.round(info.minutes * 10) / 10,
-      toLabel: info.toLabel || labelOf(ctx, station),
+      toLabel: destName || info.toLabel || labelOf(ctx, station),
       level: info.estimated ? 3 : 1,
       estimated: info.estimated,
       samples: info.samples,
@@ -315,7 +340,7 @@ function walkView(ctx: ModelContext, slug: string, station: string, dir: "out" |
   return {
     // 取一位小数：样本均值是原始浮点（5.8388888888888895），直接上屏破坏可读性
     minutes: Math.round(r.minutes * 10) / 10,
-    toLabel: labelOf(ctx, station),
+    toLabel: destName || labelOf(ctx, station),
     level: r.level,
     estimated: r.level >= 3,
     samples: r.samples,
@@ -325,7 +350,7 @@ function walkView(ctx: ModelContext, slug: string, station: string, dir: "out" |
 
 /** place 展示名：学校侧带上座区（起点/终点都用它，保证两个方向都能看到座区） */
 function placeLabelOf(ctx: ModelContext, slug: string): string {
-  if (slug === "school" && ctx.zone) return `澳门科技大学（${ctx.zone} 座）`;
+  if (slug === "school" && ctx.zone) return `澳門科技大學（${ctx.zone} 座）`;
   return PLACE_SHORT[slug] ?? slug;
 }
 
@@ -558,7 +583,7 @@ export function modelOption(seed: OptionSeed, ctx: ModelContext): ModeledOption 
   const hints: string[] = [];
   hints.push(
     seed.fromSlug === "school" && ctx.zone
-      ? `从澳门科技大学（${ctx.zone} 座）步行出发，在 ${labelOf(ctx, first.board)} 上车，乘 ${first.route}`
+      ? `从澳門科技大學（${ctx.zone} 座）步行出发，在 ${labelOf(ctx, first.board)} 上车，乘 ${first.route}`
       : `在 ${labelOf(ctx, first.board)} 上车，乘 ${first.route}`,
   );
   for (let i = 0; i + 1 < segs.length; i++) {

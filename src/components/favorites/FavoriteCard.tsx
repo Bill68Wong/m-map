@@ -1,34 +1,34 @@
 "use client";
 
 /**
- * 收藏 · **组合卡**（src/components/favorites/FavoriteCard.tsx；★ v2.3.0 S2 重写 / S3 补「编辑编排」）
+ * 收藏 · **组合卡**（src/components/favorites/FavoriteCard.tsx；★ v2.3.0 S2 重写 · v2.4.1 精简）
  *
- * ── 规格（08 §C.2）────────────────────────────────────────────────────
+ * ── 规格（08 §C.2 · ★ v2.4.1 精简后）──────────────────────────────────
  *   · 卡 = `--radius-card` 10px + **1.5px `--border-strong`** 框 + `--shadow-hard-sm`；**整卡可点**；
- *   · 左侧 **OD 图标对**（origin → arrowRight → destination，均已注册）；
- *   · 命名 = `--text-lg` 17px / 600 / -0.005em（超长单行省略）；
- *   · 摘要行 = `--text-sm` 13px / `--muted`：「**N 段编排 · 最近 X 分 · 线路标签**」；
- *   · 右侧 ⋯ 菜单（`.fav-menu` 复用）：**编辑编排** / 重命名 / 置顶 / 停用 / 删除组合。
- *   · 停用态：整体 `--meta` + 摘要显示「已停用」（**排序沉底由列表页负责**），点击提示去 ⋯ 里启用。
+ *   · **卡内只留一行**：组合名（`--text-lg` 17px / 600 / 超长单行省略）。
+ *     默认名即「起点 → 终点」；用户改过名则显示自定义名 —— 这正是「仅保留**一个**
+ *     起终点信息」的另一层含义：**不再额外渲染图标版 OD 行**。
+ *   · 停用态：名字转 `--meta`，并在下方补一行「已停用」（**排序沉底由列表页负责**）。
+ *   · 右侧 ⋯ 菜单（`.fav-menu` 复用）：编辑编排 / 重命名 / 置顶 / 停用 / 删除组合。
  *
- * ── ★ FA-A.4（关键）───────────────────────────────────────────────────
- *   **不得预展示易失的实时时长** —— 摘要里的「最近 X 分」取**已保存方案的快照**
- *   （`snapshot.totalMin`，文案标「最近」），**不是**实时重算值。
+ * ── ★ v2.4.1 删掉了什么（请勿"顺手加回来"）────────────────────────────
+ *   · **图标 OD 行**（origin → arrowRight → destination）—— 与名字行重复表达起终点；
+ *   · **摘要行**（「N 段编排 · 最近 X 分 · 线路标签」）—— 与「点开组合即见实时方案」重复。
+ *   ⚠️ 摘要行原先承载的 **FA-A.4** 约束（不得预展示易失的实时时长）随之**自然失效**：
+ *      卡上已无任何时长。若将来要把时长加回卡片，**必须重新遵守 FA-A.4**（只显示快照值）。
  *
  * ── ★ 删除确认弹窗（06 §3.6 / FA-A.13，必做）──────────────────────────
  *   显示 ① **组合名** ② **影响**（将删 N 条已保存方案 · 不可恢复）③ 危险按钮在右、
  *   **默认焦点在「取消」**（防误删）、Esc = 取消、点遮罩 = 取消。
  *
- * ⚠️ 文案一律**简体**；站名/线路名保留繁体。
+ * ⚠️ 文案一律**简体**；站名/线路名保留繁体（校名「澳門科技大學」属**地名**，用繁体）。
  */
 import { useEffect, useState } from "react";
 import Icon from "@/components/ui/Icon";
-import RouteStack from "@/components/RouteStack";
 import type { Combo } from "@/lib/favorites/types";
 
 export interface FavoriteCardProps {
   combo: Combo;
-  colors: Record<string, string>;
   readOnly: boolean;
   onOpen: (combo: Combo) => void;
   /** ★ S3：打开编排编辑器（⋯ 菜单「编辑编排」） */
@@ -42,22 +42,8 @@ export interface FavoriteCardProps {
 /** 组合默认名（与 `comboDefaultName` 同口径；此处内联避免再 import 一个纯函数） */
 const defaultName = (c: Combo) => `${c.from.label} → ${c.to.label}`;
 
-/** 摘要里的线路标签：取**最近一条已保存方案**快照的 legs 前缀 */
-function routeCodesOf(c: Combo): string[] {
-  const latest = [...c.plans].sort((a, b) => (b.snapshot.capturedAt ?? 0) - (a.snapshot.capturedAt ?? 0))[0];
-  if (!latest) return [];
-  return latest.snapshot.legs.map((l) => l.split(" ")[0]).filter(Boolean).slice(0, 3);
-}
-
-/** 最近一条已保存方案的时长（**快照值**，非实时） */
-function latestMinOf(c: Combo): number | null {
-  const latest = [...c.plans].sort((a, b) => (b.snapshot.capturedAt ?? 0) - (a.snapshot.capturedAt ?? 0))[0];
-  return latest ? Math.round(latest.snapshot.totalMin) : null;
-}
-
 export default function FavoriteCard({
   combo,
-  colors,
   readOnly,
   onOpen,
   onEdit,
@@ -81,9 +67,8 @@ export default function FavoriteCard({
     return () => window.removeEventListener("keydown", onKey);
   }, [confirming]);
 
-  const codes = routeCodesOf(combo);
-  const latestMin = latestMinOf(combo);
-  const segCount = combo.chain?.length ? combo.chain.length : 0;
+  // ★ v2.4.1：卡片精简后，原先为摘要行算的三个派生值（codes / latestMin / segCount）
+  //   已无使用者 ⇒ 一并删除（`routeCodesOf` / `latestMinOf` 两个辅助函数亦已移除）。
 
   return (
     <>
@@ -92,30 +77,17 @@ export default function FavoriteCard({
         data-fav-id={combo.id}
       >
         <button type="button" className="fav-combo__main" onClick={() => onOpen(combo)} aria-label={`打开组合 ${combo.name}`}>
+          {/**
+           * ★ v2.4.1 精简（用户口径）：「每个组合卡片**仅保留一个『起点→终点』信息**与省略号工具栏」。
+           *   · 原先卡上同时有**两处**起终点（下方 `__od` 图标行 + 本行文字）⇒ 重复，已删图标行；
+           *   · 摘要行（N 段编排 / 最近 X 分 / 线路标签）一并删除。
+           *   ⚠️ 保留**文字行**（而非图标行）是用户明确的选择 —— 它的另一层含义：
+           *      若用户给组合改过名，卡上显示的就是**他自己起的名字**。
+           */}
           <span className="fav-combo__name">{combo.name || defaultName(combo)}</span>
-          <span className="fav-combo__od">
-            <Icon name="origin" size={16} />
-            <span className="fav-combo__end">{combo.from.label}</span>
-            <Icon name="arrowRight" size={16} />
-            <Icon name="destination" size={16} />
-            <span className="fav-combo__end">{combo.to.label}</span>
-          </span>
-          <span className="fav-combo__summary">
-            {combo.disabled ? (
-              <span className="fav-combo__off">已停用</span>
-            ) : (
-              <>
-                <span>{segCount ? `${segCount} 段编排` : "未编排"}</span>
-                {/* ★ FA-A.4：这里只显示**已保存快照**的时长，且标「最近」——不是实时值 */}
-                {latestMin !== null && <span>· 最近 {latestMin} 分</span>}
-                {codes.length > 0 ? (
-                  <RouteStack codes={codes} colors={colors} size="sm" />
-                ) : (
-                  <span>· 暂无保存方案</span>
-                )}
-              </>
-            )}
-          </span>
+          {/* ★ 停用态：原来挂在已删的摘要行里 ⇒ **必须**在此保留可见标记，
+              否则「已停用」将完全无提示（卡片与正常态一模一样，用户会以为坏掉） */}
+          {combo.disabled && <span className="fav-combo__off">已停用</span>}
         </button>
 
         {/* ⋯ 菜单 */}

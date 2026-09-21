@@ -43,10 +43,10 @@ export interface ActiveSession {
 /** 起点 place（宿舍/擎天匯）slug */
 export const HOME_SLUG = "home";
 
-/** place slug → 首页/选择页展示短名（v2.4.0 校名统一「澳门科技大学」；口岸名沿用用户定稿口径） */
+/** place slug → 首页/选择页展示短名（v2.4.0 校名统一「澳門科技大學」；口岸名沿用用户定稿口径） */
 export const PLACE_SHORT: Record<string, string> = {
   home: "擎天匯",
-  school: "澳门科技大学",
+  school: "澳門科技大學",
   hengqin: "橫琴口岸",
   gate: "關閘（拱北口岸）",
 };
@@ -54,7 +54,7 @@ export const PLACE_SHORT: Record<string, string> = {
 /** 方向对顺序（首页分行顺序）：宿舍 ⇄ 學校 / 橫琴口岸 / 關閘（拱北口岸） */
 export const PAIR_ORDER = ["school", "hengqin", "gate"] as const;
 
-/** 「擎天匯 → 澳门科技大学」方向标题 */
+/** 「擎天匯 → 澳門科技大學」方向标题 */
 export function dirLabel(from: string, to: string): string {
   return `${PLACE_SHORT[from] ?? from} → ${PLACE_SHORT[to] ?? to}`;
 }

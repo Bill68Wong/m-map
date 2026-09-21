@@ -17,7 +17,7 @@ const SCHOOL_ZONE_VALUES = ["B/C", "N/O", "R"];
  *   · route  实乘线路码（覆盖 plan_legs.route_options[0]；多线同方向时用户点的是哪条）
  *   · board  实际上车站码（覆盖分段 from_station，DSAT 方向推导用）
  *   · alight 实际下车站码（覆盖分段 to_station）
- *   · zone   澳门科技大学座区（B/C | N/O | R）→ 落 from_zone / to_zone（哪侧是 school 就记哪侧）
+ *   · zone   澳門科技大學座区（B/C | N/O | R）→ 落 from_zone / to_zone（哪侧是 school 就记哪侧）
  * ⚠️ 一个都不传时，本接口行为与 v0.28.x **完全一致**（老入口 /routes 不传参 → 走老逻辑）。
  */
 export async function POST(req: NextRequest) {
@@ -79,7 +79,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // v1.0.0：座区 → from_zone / to_zone（哪一侧是澳门科技大学就记哪一侧）。
+    // v1.0.0：座区 → from_zone / to_zone（哪一侧是澳門科技大學就记哪一侧）。
     // ⚠️ 只在传了 zone 时才多查一次方向（不带 zone 的老路径查询条数不变）
     let fromZone: string | null = null;
     let toZone: string | null = null;

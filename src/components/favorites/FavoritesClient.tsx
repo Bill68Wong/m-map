@@ -139,7 +139,7 @@ export default function FavoritesClient({ colors = {} }: { colors?: Record<strin
           <Icon name="bookmark" size={24} className="fav-empty__icon" />
           <p className="fav-empty__title">还没存过路线</p>
           <p className="fav-empty__body t-body t-muted">
-            在路线结果页点书签图标收藏一条方案；或在首页选定目的地后，保存「家 → 澳门科技大学」这样的常用路线。
+            在路线结果页点书签图标收藏一条方案；或在首页选定目的地后，保存「家 → 澳門科技大學」这样的常用路线。
           </p>
           <button type="button" className="btn btn--primary" onClick={() => router.push("/")}>
             去规划路线
@@ -162,7 +162,6 @@ export default function FavoritesClient({ colors = {} }: { colors?: Record<strin
             <FavoriteCard
               key={combo.id}
               combo={combo}
-              colors={colors}
               readOnly={c.readOnly}
               onOpen={open}
               onEdit={(x) => setEditing(x)}

@@ -38,7 +38,7 @@ async function loadRouteColors(): Promise<Record<string, string>> {
 
 /**
  * 默认组合的端点坐标（★ v2.3.0 / 07 §1.4）：**只能服务端取**（pg + WGS84→GCJ-02）。
- * 取 `home` + `PAIR_ORDER` 三个地点（含澳门科技大学各座区行 —— 座区**不写死**，由客户端选）。
+ * 取 `home` + `PAIR_ORDER` 三个地点（含澳門科技大學各座区行 —— 座区**不写死**，由客户端选）。
  * 失败 → 空数组（前端 `ComboSeeder` 会跳过注入，不影响本页其余功能）。
  */
 async function loadPlaceCoords(): Promise<SeedPlaceCoord[]> {

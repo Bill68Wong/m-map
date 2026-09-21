@@ -122,8 +122,12 @@ export default function NavShell({ jsKey, colors = {}, initialFrom = null, initi
           onMapReady={onMapReady}
         />
 
-        {/* 顶部浮层：品牌字标 + 定位按钮 */}
-        <div className="nav-top">
+        {/* 品牌栏：品牌字标 + 定位按钮
+            ★ v2.4.1：从地图**上方**移到地图**下方**（用户要求「首页地图上方仅保留搜索框」）。
+              DOM 仍留在 `.nav-map-wrap` 内（它需要压在地图上），靠 CSS 把定位方向由 top 改为 bottom。
+              ⚠️ 类名同步由 `.nav-top` 改为 `.nav-brandbar` —— 旧名说的是「在顶部」，
+                 与它现在的位置矛盾，不改会误导后续维护。 */}
+        <div className="nav-brandbar">
           <span className="nav-brand">M Map</span>
           <button
             type="button"

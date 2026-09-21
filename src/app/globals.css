@@ -60,7 +60,9 @@
   --fw-emphasize: 600;
   --fw-announce: 700;
   --text-2xs: 11px;
-  --text-xs: 12px;
+  /* ★ v2.4.1：由 12px 提到 13px —— 补偿「禁止整页缩放」（见 layout.tsx viewport）。
+     禁缩放后小字再也不能靠放大读，故把下限抬高一档。 */
+  --text-xs: 13px;
   --text-sm: 13px;
   --text-md: 15px;
   --text-lg: 17px;
@@ -92,10 +94,10 @@
 
   /* 圆角 Radius（上限 10px；按钮不用 pill） */
   --radius-chip: 6px;
-  /* ★ v2.4.0：多码并列组的**墨底衬底**圆角（不再另加 padding ⇒ 只比色块大 1px 发光边） */
-  --radius-group-pad: 7px;
-  /* ★ v2.4.0：组内相邻色块**内侧**圆角（磨圆拼缝）——故意小于 --radius-chip */
-  --radius-chip-inner: 3px;
+  /* ★ v2.4.1：多码并列改「空白斜间隙」后，原先为「墨底衬底」与「内侧圆角」准备的
+     两个变量（--radius-group-pad / --radius-chip-inner）已无使用者 ⇒ 删除。
+     斜切参数改为就地定义在 `.route-stack__group--multi .route-stack__seg` 内
+     （--slash-cut 7px / --slash-bite 4px ⇒ 视觉缝宽 3px）。 */
   --radius-group: 7px;
   --radius-btn: 8px;
   --radius-card: 10px;
@@ -161,7 +163,8 @@
   --fs-title: 16px;
   --fs-body: var(--text-md);
   --fs-label: var(--text-sm);
-  --fs-mini: 12.5px;
+  /* ★ v2.4.1：由 12.5px 提到 13px —— 同上，补偿「禁止整页缩放」 */
+  --fs-mini: 13px;
   --fs-meta: 13.5px;
 
   /* 形状（旧名 → 新圆角；★ 去 pill） */
@@ -860,7 +863,13 @@ button[aria-disabled="true"] {
   width: 100%;
   min-height: 52px;
   padding: 14px 16px;
-  font-size: var(--fs-body);
+  /* ★★ v2.4.1 修复（用户实测「搜索过程中出现异常缩放」）：
+     原为 `var(--fs-body)` = `--text-md` = **15px**，而 **输入框字号 < 16px 时
+     移动端浏览器会在聚焦那一刻自动放大整页**（iOS Safari 的既定行为，为的是让
+     输入内容够大）。把输入框固定到 16px 即**从根上消除**这个自动放大 ——
+     与是否允许整页缩放无关，是最干净的解法。
+     ⚠️ 不要改回 `--fs-body`（除非把 `--text-md` 也提到 16px）。 */
+  font-size: 16px;
   font-family: inherit;
   color: var(--on-surface);
   background: var(--surface-dim);
@@ -1197,18 +1206,6 @@ button[aria-disabled="true"] {
   outline-offset: 2px;
 }
 
-/* 开发者模式：左上角一个小圆点，提示「点卡会进计时」 */
-.rc--dev::after {
-  content: "";
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  width: 7px;
-  height: 7px;
-  border-radius: var(--r-pill);
-  background: var(--ok);
-  opacity: 0.75;
-}
 
 .rc-head {
   display: flex;
@@ -1271,6 +1268,24 @@ button[aria-disabled="true"] {
 .rc-row--last::before {
   display: none;
 }
+
+/* ★ v2.4.1：**附属行**（Row dot="sub"）—— 属于上一行的补充信息，不是独立节点：
+   ① 隐藏圆点/图标（dot 位仍占位，保证与主行不产生横向错位）；
+   ② 内容缩进到与主行文字左对齐（29px = 圆点 20 + gap 9）；
+   ③ 时间线竖线**继续绘制**（::before 的 left:9px 相对行盒，不受 padding 影响）
+      ⇒ 整条时间线仍是连贯的一条。
+   用途：用户新卡片规范里「还有 N 站 · 约多少时间」是**上车站的附属行**。 */
+.rc-row--sub {
+  padding-left: 29px;
+}
+.rc-row--sub .rc-dot {
+  display: none;
+}
+/* 附属行里的「还有 N 站」数字 —— 用户要求**放大**（等车决策的关键数字） */
+.rc-row--sub .t-accent {
+  font-size: 1.25em;
+}
+
 
 .rc-dot {
   flex-shrink: 0;
@@ -1643,6 +1658,16 @@ button[aria-disabled="true"] {
   gap: 6px;
   white-space: nowrap;
 }
+
+/* ★ v2.4.1：后续班次行**左侧**（线路标签 + 「后续班车还有 N 站」）
+   —— 原来这行只有文字，现在前面要带上该班次的线路标签，故需要一个横向容器。 */
+.rc-altrow__left {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
 
 /* ── 详情页壳 ── */
 .rc-detail {
@@ -2294,22 +2319,6 @@ button[aria-disabled="true"] {
 .nav-inline-err {
   color: var(--error);
 }
-/**
- * 「本地补充」来源徽章（修复包 v2.2.1-B3 / 08 §A.2b 三处必改）
- * ① 用字：`其他組合` → `本地补充`（JSX 里改，含繁体「組」违反简体铁律）
- * ② 圆角：`--r-pill` → `--radius-chip`（pill 只留给圆点/头像）
- * ③ 配色：灰底灰字 → **青花蓝**底字 —— 与「来自高德」的**灰底**形成「我们的 / 别家的」对照
- * ⚠️ 类名 `.rc-badge-local` 与 `origin === "local"` 判定**不变**（不动 JSX 结构）
- */
-.rc-badge-local {
-  font-size: var(--text-xs);
-  font-weight: var(--fw-emphasize);
-  padding: 2px 8px;
-  border-radius: var(--radius-chip);
-  background: var(--accent-soft);
-  color: var(--accent);
-  letter-spacing: var(--tracking-mono);
-}
 .rc-strips {
   display: flex;
   flex-direction: column;
@@ -2373,10 +2382,15 @@ button[aria-disabled="true"] {
   border-radius: 0;
 }
 
-/* ── 首页顶部浮层：品牌字标 + 定位按钮 ── */
-.nav-top {
+/* ── 首页品牌栏：品牌字标 + 定位按钮 ──
+   ★ v2.4.1：由地图**上方**移到地图**下方**（用户要求「首页地图上方仅保留搜索框」）。
+   位置 = 地图区域下缘、底部 chrome（合规条 + 底导）之上；
+   这同时符合 Apple HIG「浮层落在拇指区」的建议（单手可及）。
+   ⚠️ `pointer-events: none` 是**必须**的：本栏是一条**通栏**，若吃事件会挡住地图的
+      拖动 / 双指缩放；只让内部两个控件（牌子、按钮）可点。 */
+.nav-brandbar {
   position: fixed;
-  top: calc(var(--space-3) + var(--safe-top));
+  bottom: calc(var(--tabbar-h) + var(--safe-bottom) + var(--compliance-h) + var(--space-3));
   left: 0;
   right: 0;
   padding: 0 var(--space-4);
@@ -2385,6 +2399,10 @@ button[aria-disabled="true"] {
   justify-content: space-between;
   gap: var(--space-2);
   z-index: 20;
+  pointer-events: none;
+}
+.nav-brandbar > * {
+  pointer-events: auto;
 }
 /* 品牌字标（16px/600，是「字标」不是大标题 —— 白底小牌，压在地图上清晰） */
 .nav-brand {
@@ -2415,7 +2433,9 @@ button[aria-disabled="true"] {
 /* ── 顶置目的地搜索条（★ 标牌式；白底 + 蓝框 + 硬投影） ── */
 .nav-searchbar {
   position: fixed;
-  top: calc(60px + var(--safe-top));
+  /* ★ v2.4.1：由 `calc(60px + safe-top)` 提到原品牌栏的位置 ——
+     用户要求「地图上方**仅保留搜索框**」，所以它现在是顶部唯一浮层，可以往上占位。 */
+  top: calc(var(--space-3) + var(--safe-top));
   left: var(--space-4);
   right: var(--space-4);
   min-height: 52px;
@@ -2774,11 +2794,6 @@ button[aria-disabled="true"] {
   z-index: 5;
 }
 
-/* 卡片脚右侧动作槽（收藏入口 ①） */
-.rc-foot__action {
-  display: inline-flex;
-  align-items: center;
-}
 
 /* /nav 一次性「已重新规划」提示条 */
 .nav-inline-notice {
@@ -3067,52 +3082,36 @@ button[aria-disabled="true"] {
   flex-shrink: 0;
 }
 /*
- * ★★ v2.4.0 修复（用户实测：「分色块之前还能显示，现在变成黑黑的一片」「圆角也出了问题」）
+ * ★★ v2.4.1 重构（用户拍板）：多码并列改为「**空白斜间隙**」
  *
- * 根因（两条历史样式**互相打架**）：
- *   · v0.19.1  `.route-stack { border-radius:6px; overflow:hidden }` —— 用**容器裁剪**出圆角；
- *   · v2.2.1  `.route-stack { overflow:visible }` —— 为多段换行不切边改成 visible，
- *     **但孩子身上的 `border-radius` 仍在** ⇒ 容器不再裁剪、每块各带一角 ⇒ 块间露底、
- *     圆角碎裂（用户看到的「圆角出问题」）。
- *   · 同时 `__slash` 是**白字**，只在 `--multi` 的墨底上成立；单码段没有墨底时，
- *     若背景偏白就「白字白底」⇒ 视觉糊成一片（用户看到的「黑黑的一片」实为对比度丢失）。
+ * ── 形态演进史（每一步都由真浏览器实测驱动）───────────────────────────
+ *   v0.19.1：斜切平行四边形 + 负 margin 咬合 ⇒ 斜缝
+ *   v2.2.1 ：按 §G.2 解法 A 改成「独立圆角块 + 白斜杠 + 墨色胶囊底」
+ *   v2.4.0 ：修掉「两码之间夹一整块黑」（把墨底从整组收进斜杠自身）
+ *   ★ v2.4.1：用户明确要求「斜杠应为**空白斜间隙**，而不是真的画一根白斜杠」
+ *     ⇒ **彻底去掉斜杠字符与墨底**，回归「斜切 + 等宽空隙」形态
  *
- * 修法（**只让多码并列那层上墨底**，单码段保持纯净的单一色块）：
- *   ① 外层不再裁剪、由**每个色块自己**出圆角（`__seg` 已有 `border-radius`）；
- *   ② 多码组的**墨底只作斜杠承底**，且**不再留 3px 内边距**（否则 = 黑框）；
- *   ③ 组内相邻色块之间**内侧圆角磨到 3px**（原为 0 = 直角 ⇒ 用户看到的「圆角异常」）；
- *   ④ 白斜杠加**不透明描边**，不再依赖墨底保对比度。
+ * ── 实现要点 ───────────────────────────────────────────────────────────
+ *   · 相邻侧各切一条**互相平行**的斜边（斜率相同）；
+ *   · 负 margin 让两块咬合靠拢 ⇒ 两条平行斜线之间形成**等宽斜缝**；
+ *   · 缝里露出的是**卡片本身的背景色**（白卡 ⇒ 白缝）⇒ 不需要画任何字符。
  *
- * ★★ v2.4.0 二次修正（用户第二轮实测：「两个图标放在一起有奇怪的黑底 + 圆角异常」）
- *   ❌ 我第一轮判断错了：以为是 `padding:3px` 撑出的黑框，把 padding 归零后
- *      **实测截图（`.verify/slash-01-group-crop.png`）仍是两块彩色码之间夹一整块黑**。
- *   ✅ 真正根因：`__slash` 是**插在两块 `__seg` 之间的独立 flex 项**，
- *      而整组铺了 `background: var(--fg)`（近黑）⇒ 两块之间那段间隙露出的就是这层黑底。
- *   ✅ 修法：**组不铺底色**（`transparent`），墨底**收进 `__slash` 自身**（只衬 `/` 一条）；
- *      组内相邻色块内侧圆角从 0 → 3px，避免拼缝出现与两端不一致的方角。
- *
- *   教训（写给自己）：视觉 bug **必须真浏览器截图看**，不能靠读 CSS 推理 ——
- *   第一轮就是「读代码觉得对」而实际没修好，靠 `.verify/e2e-v240-slash.mjs` 截图才暴露。
+ *   ⚠️ 取舍（改之前先读）：斜缝靠背景色当分隔 ⇒ 白卡上清晰；
+ *      但若将来把多码标签放到**深色 / 彩色底**上，缝会几乎看不见
+ *      （这正是 §G.2 当初选墨底的顾虑；v2.4.1 按用户明确要求推翻它）。
  */
 .route-stack__group--multi {
-  /* ★★ v2.4.0 修（用户第二轮实测：「两个图标放在一起有奇怪的黑底」）
-     实测截图（`.verify/slash-01-group-crop.png`）显示：**两块彩色圆角码之间有一整块黑**。
-     根因（比原判断更根本）：`__slash` 是**插在两块 seg 之间的独立 flex 项**，
-     而整组的 `background: var(--fg)`（近黑）铺满全宽 ⇒ 两块之间那段「间隙」露出的
-     就是这层黑底 ⇒ 看起来像「两个图标中间夹了一块黑」。
-     ❌ 而不是原以为的「padding 撑出的黑边框」（padding 已归零，黑块依旧）。
-     ⇒ 正解：**组不再铺底色**；把墨底收进 `__slash` 自己身上（`background: var(--fg)`），
-        只在斜杠脚下留一小条，不再横贯整组。 */
+  /* 不铺底色：缝隙要露出**卡片本身的背景**，而不是我们画上去的一层底 */
   background: transparent;
-  border-radius: var(--radius-group-pad);
+  border-radius: 0;
   padding: 0;
 }
-/* 单码段：**不加墨底**（保持纯色块 + 自身圆角），只在斜切时代码里保证完整包裹 */
+/* 单码组：纯净圆角矩形（不加任何底） */
 .route-stack__group:not(.route-stack__group--multi) {
   border-radius: var(--radius-chip);
   overflow: hidden;
 }
-/* ★ 组内禁用旧斜切（§G.3 反例：斜切梯形）；码回归干净的圆角矩形 */
+/* 组内通用：字号与 padding 统一（单码 / 多码都一样） */
 .route-stack__group .route-stack__seg {
   clip-path: none;
   margin-right: 0;
@@ -3120,43 +3119,30 @@ button[aria-disabled="true"] {
   padding: 3px 8px;
   font-size: 12px;
 }
-/* ★ v2.4.0 修②：组内相邻色块的**内侧圆角磨圆、不对齐**。
-   原做法是内侧 0（直角）⇒ 拼缝两侧是方角，用户看到的「圆角异常」。
-   改为较小的 `--radius-chip-inner`(3px)：拼缝过磨不掉内容，两端外角仍是 6px，
-   ⇒ 整组看起来是靠内的一条圆角胶囊，而不是几个方角硬拼。 */
-.route-stack__group .route-stack__seg:not(:first-child) {
-  border-top-left-radius: var(--radius-chip-inner);
-  border-bottom-left-radius: var(--radius-chip-inner);
+/* ★★ v2.4.1：**仅多码组**用斜切（单码仍是干净圆角矩形，保持不变）─────────
+   斜切 7px · 咬合 4px ⇒ 视觉缝宽 = 7 − 4 = **3px**。
+   两条斜边斜率相同 ⇒ 缝**等宽**，不会一头宽一头窄。 */
+.route-stack__group--multi .route-stack__seg {
+  --slash-cut: 7px;
+  --slash-bite: 4px;
+  border-radius: 0;
+  margin-right: calc(-1 * var(--slash-bite));
+  clip-path: polygon(var(--slash-cut) 0, 100% 0, calc(100% - var(--slash-cut)) 100%, 0 100%);
 }
-.route-stack__group .route-stack__seg:not(:last-child) {
-  border-top-right-radius: var(--radius-chip-inner);
-  border-bottom-right-radius: var(--radius-chip-inner);
+/* 首块：左端竖直（整组从直边开始），只斜右边界 */
+.route-stack__group--multi .route-stack__seg:first-child {
+  clip-path: polygon(0 0, 100% 0, calc(100% - var(--slash-cut)) 100%, 0 100%);
 }
-/* 白斜杠：左右各留 3px（§G.3）；
-   ★★ v2.4.0 最终修法（三轮迭代，每轮都靠真浏览器截图核对）：
-     用户诉求 = 「两块彩色码 + 一个白色斜杠」，**不要任何黑块**。
-     ❌ 第 1 轮：留 `padding:3px` → 黑框；
-     ❌ 第 2 轮：padding 归零，但**整组**仍铺 `var(--fg)` → 两码之间的间隙露黑；
-     ❌ 第 3 轮：墨底收进斜杠自身 → 变成「两码之间一个黑色方块」，仍是黑底；
-     ✅ 第 4 轮（本版）：**彻底不要墨底**（组与斜杠均 `transparent`）。
-        斜杠 = 纯白字符 + **不透明描边**（4 方向 1px 黑 + 1px 下方投影）；
-        无论坐在白卡、灰底还是彩色码旁，都清晰可见，且不产生任何黑块。
-        ⇒ 与 §G.2「整体套墨色组胶囊」原设计意图**有意偏离**：
-          那个胶囊在「块间用斜切留白」的旧形态下才需要（斜切处是连通的），
-          现在两码已是**独立的圆角矩形**，墨底只会变成脏块。 */
-.route-stack__slash {
-  color: #fff;
-  opacity: 1;
-  font-weight: 700;
-  font-size: 12px;
-  line-height: 1;
-  padding: 0 3px;
-  background: transparent;
-  text-shadow:
-    0 1px 2px rgba(0, 0, 0, 0.85),
-    -1px 0 1px rgba(0, 0, 0, 0.7),
-    1px 0 1px rgba(0, 0, 0, 0.7),
-    0 -1px 1px rgba(0, 0, 0, 0.7);
+/* 末块：只斜左边界、右端竖直；并取消负 margin（否则整组尾部会往里缩） */
+.route-stack__group--multi .route-stack__seg:last-child {
+  margin-right: 0;
+  clip-path: polygon(var(--slash-cut) 0, 100% 0, 100% 100%, 0 100%);
+}
+/* 组内只有一条时（兜底）不斜切 */
+.route-stack__group--multi .route-stack__seg:only-child {
+  clip-path: none;
+  border-radius: var(--radius-chip);
+  margin-right: 0;
 }
 /* 段间「换乘箭头」：粗一档 + muted，两侧留 --space-2(8px)（§G.4） */
 .route-stack__arrow {
@@ -3166,10 +3152,11 @@ button[aria-disabled="true"] {
   line-height: 1;
   padding: 0 var(--space-2);
 }
-/* 单段并列 >3 条 → 第 3 条起折叠为 `+N`（§G.4） */
+/* 单段并列 >3 条 → 第 3 条起折叠为 `+N`（§G.4）
+   ★ v2.4.1：墨底已移除 ⇒ 原来的**白字会看不见**，改用实色 `--muted`
+   （它排在最后一个色块之后，底色是卡片背景） */
 .route-stack__more {
-  color: #fff;
-  opacity: 0.92;
+  color: var(--muted);
   font-weight: 700;
   font-size: 12px;
   line-height: 1;
@@ -3351,28 +3338,13 @@ button[aria-disabled="true"] {
 .fav-combo.is-off .fav-combo__name {
   color: var(--meta);
 }
-.fav-combo__od {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
-  font-size: var(--text-sm);
-  color: var(--muted);
-}
-.fav-combo__end {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.fav-combo__summary {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  flex-wrap: wrap;
-  font-size: var(--text-sm);
-  color: var(--muted);
-}
+/* ★ v2.4.1：`.fav-combo__od`（图标版 OD 行）、`.fav-combo__end`、`.fav-combo__summary`
+   三条规则已随卡片精简一并删除（用户口径：卡上**仅保留一个「起点→终点」+ ⋯ 工具栏**）。
+   原先卡内有三行：名（文字）+ od（图标起终点）+ summary（编排/时长/线路标签）——
+   起终点被显示了两次、且摘要与「点开即看」的内容重复。现只剩名一行。 */
 .fav-combo__off {
+  /* 停用标记：原挂在已删的摘要行里 ⇒ 现移到名字下方独立一行（必须保留，否则停用态无任何提示） */
+  font-size: var(--text-sm);
   color: var(--meta);
 }
 

@@ -55,14 +55,19 @@ export function EtaText({ text }: { text: string }) {
   );
 }
 
-/** 时间线一行：圆点 + 竖线 + 内容 */
+/** 时间线一行：圆点 + 竖线 + 内容
+ *
+ * ★ v2.4.1：新增 `"sub"` 形态 —— **附属行**（无图标、内容缩进到与主行文字左对齐）。
+ *   用途：用户新卡片规范里「还有 N 站 · 约多少时间」是**上一行（上车站）的附属信息**，
+ *   不是独立节点 ⇒ 不该再给一个巴士站图标（那会看起来像"又到了一次站"）。
+ */
 export function Row({
   dot,
   main,
   aside,
   last,
 }: {
-  dot: "walk" | "wait" | "ride" | "transfer";
+  dot: "walk" | "wait" | "ride" | "transfer" | "sub";
   main: React.ReactNode;
   aside?: React.ReactNode;
   last?: boolean;
@@ -76,7 +81,7 @@ export function Row({
           <Icon name="busStop" size={16} />
         ) : dot === "transfer" ? (
           <Icon name="expandVertical" size={16} />
-        ) : null}
+        ) : null /* ride / sub：无图标 */}
       </span>
       <span className="rc-text">{main}</span>
       {aside}

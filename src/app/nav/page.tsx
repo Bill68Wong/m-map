@@ -71,7 +71,9 @@ export default async function Page({
 async function ResultSection({ p }: { p: NonNullable<ReturnType<typeof parseNavParams>> }) {
   const { query, origin, dest, zone, limit, chain, walk, tiers } = p;
   const result = await planNav(getPool(), { origin, dest, zone, limit, chain, walk, tiers });
-  return <NavResultClient query={query} initial={result} origin={origin} dest={dest} />;
+  // ★ v2.4.1：不再向客户端透传 origin/dest —— 卡内收藏按钮已按用户要求移除，
+  //   而 /nav 的收藏入口由本页顶部 OD 栏的 <FavoriteButton entry="odbar"> 承担。
+  return <NavResultClient query={query} initial={result} />;
 }
 
 /** 结果区骨架（形状与卡片一致 → 零布局跳动，§11.1） */

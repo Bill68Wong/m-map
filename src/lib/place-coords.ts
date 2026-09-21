@@ -6,7 +6,7 @@
  *   真源 = **`place_coords` JOIN `places`**（坐标为 **WGS84**，带 `zone` 粒度）；
  *   本模块在**服务端**取数 → `wgs84ToGcj02()` 转 GCJ-02（构建 `FavoriteEndpoint` 用）。
  *
- * ── ★ 澳门科技大学座区不写死（裁定 2026-09-20）────────────────────────────────
+ * ── ★ 澳門科技大學座区不写死（裁定 2026-09-20）────────────────────────────────
  *   `school` 有多档 `zone`（B/C · N/O · R）⇒ **原样返回全部 zone 行**，
  *   由消费方按全局 `must.zone` 现有逻辑选择；此处**不固化**某一档。
  *
@@ -24,7 +24,7 @@ export interface PlaceCoordEndpoint {
   slug: string;
   /** 库内地点名（如 `擎天汇 T8`） */
   name: string;
-  /** 澳门科技大学座区（`B/C` | `N/O` | `R`）；非澳门科技大学 place 为 `null` */
+  /** 澳門科技大學座区（`B/C` | `N/O` | `R`）；非澳門科技大學 place 为 `null` */
   zone: string | null;
   /** 经度（GCJ-02） */
   lng: number;

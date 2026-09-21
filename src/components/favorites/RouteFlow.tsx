@@ -28,9 +28,11 @@ import {
   type RouteWalkOv,
 } from "@/lib/favorites/types";
 
-/** 端点 slug 判定（与 `presets.slugOfEndpoint` 同口径；此处独立实现避免循环依赖） */
+/** 端点 slug 判定（与 `presets.slugOfEndpoint` 同口径；此处独立实现避免循环依赖）
+ *  ⚠️ v2.4.1：校名已繁体化，但**必须同时认简体与简称** —— 用户浏览器里 v2.4.0 写入的
+ *    组合 label 是简体「澳门科技大学」，只认繁体会导致旧组合的端点判定失败（步行钥匙错位）。 */
 function slugOf(label: string): string {
-  if (label.includes("澳门科技大学") || label.includes("澳科大")) return "school";
+  if (label.includes("澳門科技大學") || label.includes("澳门科技大学") || label.includes("澳科大")) return "school";
   if (label.includes("橫琴") || label.includes("横琴")) return "hengqin";
   if (label.includes("關閘") || label.includes("关闸")) return "gate";
   return "home";

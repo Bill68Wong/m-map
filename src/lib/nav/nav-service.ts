@@ -453,7 +453,10 @@ export async function planNav(pool: Pool, input: NavInput): Promise<NavOutput> {
     lrtPre: st.lrtPre,
   });
   const liveMs = Date.now() - tLive;
-  const baseCtx = { ...contextFor(st, nowMs, zone, batch.live), tierOverride };
+  // ★ v2.4.1：`destLabel` = 目的地展示名 —— 供 `model.ts` 把末段步行文案写成
+  //   「步行 N 分 → 目的地」。**必须由这里显式传入**：本链路的 `toSlug` 对非预设地点
+  //   会兜底成 `"place"`，模型层靠 slug 反查只能得到 slug 原文。
+  const baseCtx = { ...contextFor(st, nowMs, zone, batch.live), tierOverride, destLabel: dest.label };
 
   // ⑦ 建模
   const tModel = Date.now();

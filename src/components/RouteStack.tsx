@@ -76,21 +76,15 @@ export default function RouteStack({
             </span>
           )}
           <span className={`route-stack__group${list.length > 1 ? " route-stack__group--multi" : ""}`}>
-            {list.slice(0, MAX_PARALLEL).map((c, i) => (
-              <Fragment key={c}>
-                {i > 0 && (
-                  <span className="route-stack__slash" aria-hidden="true">
-                    /
-                  </span>
-                )}
-                <span
-                  className="route-stack__seg"
-                  style={{ background: resolve?.(c) || "var(--primary)" }}
-                  title={lineNameOf(c)}
-                >
-                  {lineNameOf(c)}
-                </span>
-              </Fragment>
+            {list.slice(0, MAX_PARALLEL).map((c) => (
+              <span
+                key={c}
+                className="route-stack__seg"
+                style={{ background: resolve?.(c) || "var(--primary)" }}
+                title={lineNameOf(c)}
+              >
+                {lineNameOf(c)}
+              </span>
             ))}
             {list.length > MAX_PARALLEL && (
               <span

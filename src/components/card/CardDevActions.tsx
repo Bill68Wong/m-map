@@ -16,7 +16,7 @@ export default function CardDevActions({
   zone,
 }: {
   card: CardData;
-  /** 澳门科技大学座区（建会话时要随之上报，供步行统计分座） */
+  /** 澳門科技大學座区（建会话时要随之上报，供步行统计分座） */
   zone: SchoolZone | null;
 }) {
   const router = useRouter();

@@ -3,7 +3,7 @@
  *
  * ── 语义（2026-09-21 拍板扩展）────────────────────────────────────────
  *   · **组合（父）= 一对 from/to**；**路线（子）= 同起点终点下的一条具体走法**；
- *   · **澳门科技大学有 3 个座区**（B/C · N/O · R）= **三个不同目的地**
+ *   · **澳門科技大學有 3 个座区**（B/C · N/O · R）= **三个不同目的地**
  *     ⇒ 「家 ↔ 学校」拆成 **3 去 + 3 回 = 6 个组合**；
  *   · 加上「家 ↔ 横琴口岸」「家 ↔ 關閘」各 2 个 ⇒ **合计 10 个默认组合**。
  *   · 每个组合**预置**若干条路线（照抄旧版「通勤计时」的 14 个在用方案，
@@ -12,7 +12,7 @@
  * ── 端点坐标从哪来 ────────────────────────────────────────────────────
  *   **服务端** `queryPlaceCoords()`（`place_coords` JOIN `places` → `wgs84ToGcj02()`）
  *   ⇒ 由 server component（`/favorites`）取好、作为 props 下发给 `ComboSeeder`。
- *   ★ 澳门科技大学（`school`）有多档 `zone` ⇒ **逐个座区各建一对**（不写死、不落空）。
+ *   ★ 澳門科技大學（`school`）有多档 `zone` ⇒ **逐个座区各建一对**（不写死、不落空）。
  *
  * ⚠️ 纯模块（客户端可 import）：**不得 import 含 pg / next 的模块**。
  */
@@ -39,7 +39,7 @@ import {
 /** 种子版本（增量 = 有新默认组合要补；幂等键）—— v2.4.0：6 → 10 个组合、新增预置路线 */
 export const SEED_VERSION = 2;
 
-/** 澳门科技大学的三个座区（顺序 = 组合生成顺序） */
+/** 澳門科技大學的三个座区（顺序 = 组合生成顺序） */
 export const SCHOOL_ZONES = ["B/C", "N/O", "R"] as const;
 export type SchoolZoneValue = (typeof SCHOOL_ZONES)[number];
 
@@ -47,7 +47,7 @@ export type SchoolZoneValue = (typeof SCHOOL_ZONES)[number];
 export interface SeedPlaceCoord {
   slug: string;
   name: string;
-  /** 澳门科技大学座区（`B/C` | `N/O` | `R`）；其它 place 为 null */
+  /** 澳門科技大學座区（`B/C` | `N/O` | `R`）；其它 place 为 null */
   zone: string | null;
   lng: number;
   lat: number;
@@ -68,7 +68,7 @@ function endpointFor(coords: SeedPlaceCoord[], slug: string, zone: string | null
   return { kind: "place", label: pick.label || pick.name || slug, lng: pick.lng, lat: pick.lat };
 }
 
-/** 座区展示后缀（`澳门科技大学（N/O 座）`）—— 与 `model.ts#placeLabelOf` 同口径 */
+/** 座区展示后缀（`澳門科技大學（N/O 座）`）—— 与 `model.ts#placeLabelOf` 同口径 */
 function zoneLabel(label: string, zone: string): string {
   return `${label}（${zone} 座）`;
 }
@@ -180,7 +180,7 @@ export function buildDefaultComboSeeds(coords: SeedPlaceCoord[], _zone: string |
   for (const z of SCHOOL_ZONES) {
     const school = endpointFor(coords, "school", z);
     if (!school) continue;
-    const schoolLabelled: FavoriteEndpoint = { ...school, label: zoneLabel(school.label || "澳门科技大学", z) };
+    const schoolLabelled: FavoriteEndpoint = { ...school, label: zoneLabel(school.label || "澳門科技大學", z) };
     push(home, schoolLabelled, "home", "school", z);
     push(schoolLabelled, home, "school", "home", z);
   }
@@ -254,10 +254,12 @@ export function comboWalkSegs(combo: Combo): ComboWalkSegRef[] {
   return out;
 }
 
-/** 从端点猜 place slug（`label` 含关键词 → slug；找不到返回 `home`） */
+/** 从端点猜 place slug（`label` 含关键词 → slug；找不到返回 `home`）
+ *  ⚠️ v2.4.1：校名已繁体化，但**必须同时认简体与简称** —— 用户浏览器里 v2.4.0 写入的
+ *    组合 label 是简体「澳门科技大学」，只认繁体会让旧组合的端点判定失败（步行钥匙错位）。 */
 function slugOfEndpoint(ep: FavoriteEndpoint): string {
   const l = ep.label;
-  if (l.includes("澳门科技大学") || l.includes("澳科大")) return "school";
+  if (l.includes("澳門科技大學") || l.includes("澳门科技大学") || l.includes("澳科大")) return "school";
   if (l.includes("橫琴") || l.includes("横琴")) return "hengqin";
   if (l.includes("關閘") || l.includes("关闸")) return "gate";
   return "home";

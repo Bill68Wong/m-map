@@ -8,28 +8,29 @@
  * · `degraded=true` → 卡片区顶部**细提示条**（简体）：「路网数据暂时不可用，以下为本地推算结果」；
  * · `emptyReason` → 各自的空状态（§11.4，简体）；
  * · 卡片点击 → `/nav/detail?<同参数>&plan=<planId>`（`hrefBuilder`）。
+ *
+ * ── ★ v2.4.1 删除（用户要求「移除卡片底部的『点击看详情』与『收藏』按钮」）────
+ *   · **卡内收藏按钮**（`cardAction` 里的 `<FavoriteButton>`）—— 卡片已不再有底部动作槽；
+ *   · **来源徽章**（`originOf`：`planId >= LOCAL_PLAN_BASE ? "local" : "amap"`）——
+ *     用户要求卡面「不再标注方案来源」。
+ *   ⇒ `originOf` / `LOCAL_PLAN_BASE` / `cardAction` 与随之失效的 import 一并删除；
+ *     `origin` / `dest` 两个 prop 原本**只服务于卡内收藏**，故也一并移除。
+ *
+ *   ⚠️ `/nav` 的收藏入口并未消失 —— 顶部 OD 栏那个是独立入口
+ *      （`src/app/nav/page.tsx` 的 `<FavoriteButton entry="odbar">`，不在卡片内），以及
+ *      `/nav/detail` 内的收藏按钮，两者都保留。
  */
 import { useCallback, useEffect, useState } from "react";
 import RecommendCards from "@/components/RecommendCards";
-import FavoriteButton from "@/components/favorites/FavoriteButton";
-import { endpointOf } from "@/lib/favorites/types";
-import { snapshotOfCard, routeSegsOfCard } from "@/lib/favorites/snapshot";
 import { takeNavNotice } from "@/lib/nav/nav-notice";
 import type { RecommendCard } from "@/lib/recommend/types";
-import type { NavPoint } from "@/lib/nav/types";
 import type { NavOutput } from "@/lib/nav/nav-service";
 
 export interface NavResultClientProps {
   /** 当前查询串（原样转发到详情页 + 刷新用） */
   query: string;
   initial: NavOutput;
-  /** 起点（收藏用；SSR 已解析） */
-  origin: NavPoint;
-  /** 目的地（收藏用） */
-  dest: NavPoint;
 }
-
-const LOCAL_PLAN_BASE = 900_000;
 
 const EMPTY_TEXT: Record<string, { title: string; body: string }> = {
   too_close: { title: "距离很近", body: "起点与目的地很近，建议直接步行前往。" },
@@ -38,7 +39,7 @@ const EMPTY_TEXT: Record<string, { title: string; body: string }> = {
   amap_unavailable: { title: "路网数据暂时不可用", body: "本地也没能算出可用路线。请稍后重试。" },
 };
 
-export default function NavResultClient({ query, initial, origin, dest }: NavResultClientProps) {
+export default function NavResultClient({ query, initial }: NavResultClientProps) {
   const [data, setData] = useState<NavOutput>(initial);
   const [refreshing, setRefreshing] = useState(false);
   const [err, setErr] = useState("");
@@ -82,8 +83,6 @@ export default function NavResultClient({ query, initial, origin, dest }: NavRes
     sp.set("plan", String(card.planId));
     return `/nav/detail?${sp.toString()}`;
   };
-  const originOf = (card: RecommendCard): "amap" | "local" =>
-    card.planId >= LOCAL_PLAN_BASE ? "local" : "amap";
 
   const empty = data.cards.length === 0 ? EMPTY_TEXT[data.emptyReason ?? "no_candidate"] : null;
 
@@ -134,23 +133,6 @@ export default function NavResultClient({ query, initial, origin, dest }: NavRes
           excluded={data.excluded}
           missed={data.missed}
           hrefBuilder={hrefBuilder}
-          originOf={originOf}
-          /* ★ S5 收藏入口 ①：每张方案卡的书签按钮（存 query + fingerprint） */
-          cardAction={(card) => {
-            const snap = snapshotOfCard(card);
-            return (
-              <FavoriteButton
-                kind="plan"
-                entry="card"
-                from={endpointOf(origin)}
-                to={endpointOf(dest)}
-                query={query}
-                fingerprint={snap.fingerprint}
-                snapshot={snap}
-                route={routeSegsOfCard(card)}
-              />
-            );
-          }}
         />
       )}
     </div>

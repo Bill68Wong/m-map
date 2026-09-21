@@ -61,7 +61,7 @@ export default function HomeClient({
   const dirCard = (from: string, to: string, count: number, delayMs: number) => (
     <button
       className="press-card anim-fade-up"
-      // v1.0.0：直达自动选线（座区随行；服务端只在涉及澳门科技大学的方向使用它）
+      // v1.0.0：直达自动选线（座区随行；服务端只在涉及澳門科技大學的方向使用它）
       onClick={() => router.push(`/recommend?from=${from}&to=${to}&zone=${encodeURIComponent(zone)}`)}
       style={{ minHeight: 82, animationDelay: `${delayMs}ms` }}
       aria-label={`${dirLabel(from, to)}，${count} 条路线，查看最快路线`}
@@ -125,7 +125,7 @@ export default function HomeClient({
         ))}
       </div>
 
-      {/* 座区：影响涉及澳门科技大学的方向 */}
+      {/* 座区：影响涉及澳門科技大學的方向 */}
       <div style={{ marginTop: 22 }}>
         <ZonePicker value={zone} onChange={setZone} />
       </div>
