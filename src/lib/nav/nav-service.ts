@@ -552,7 +552,13 @@ export async function planNav(pool: Pool, input: NavInput): Promise<NavOutput> {
       const corrected = fixWalkDistance(straightM, null).correctedM;
       nearbyWalkMin = Math.max(1, Math.round(walkMinutes(corrected)));
     } else if (!transitOk) emptyReason = "amap_unavailable";
-    else if (batch.live.size === 0) emptyReason = "no_live";
+    // ★ 2026-09-21 修正：`batch.live.size > 0` 只说明「**至少有一条**线路有实时数据」，
+    //   并不代表候选能用。实测（黑沙海滩 → 十月初五马路，22:00）：live 里确实有 21A/15T，
+    //   但通往该方向的班次**全部收班**（`excluded` 里堆了 26A / 15T…）⇒ 候选被剔光，
+    //   旧逻辑却报 `no_candidate`（「找不到可用路线 · 试试更近的车站」）—— **归因错了** ✗
+    //   只要**有线路因「无在途车 / 已收班」被剔除**，就该报 `no_live`
+    //   （其文案本就写着「这个时段通往该方向的线路大多已收班，或暂时没有在途车辆」）✓
+    else if (batch.live.size === 0 || baseCtx.excluded.length > 0) emptyReason = "no_live";
     else emptyReason = "no_candidate";
   }
 

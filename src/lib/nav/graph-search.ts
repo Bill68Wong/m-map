@@ -241,6 +241,17 @@ export function searchStationPaths(
    */
   const add = (rides: RidePath[], transfers: { at: string; to: string }[]): boolean => {
     const full = (): boolean => results.length >= o.maxCandidates;
+    // ★ 2026-09-21 新增：剔除「同一线路被重复乘坐」的候选。
+    //
+    //   实测事故（黑沙海滩 → 十月初五马路，22:00）：本地枚举产出
+    //   `21A → 15T → 21A` —— 先坐 21A 一站，再乘 15T 折返回去，最后又坐回 21A；
+    //   全程 40~47 分。而当高德的直达方案（26A，28 分）因**该时段已收班**被剔除后，
+    //   这个荒谬组合竟成了**唯一结果** ⇒ 用户看到的就是「一堆绕路的怪方案」。
+    //
+    //   在澳门巴士网络里，同一线路在同一方案里出现两次几乎必然是坏解
+    //   （真实换乘不会「坐回去再坐回来」）⇒ 宁可少给候选，也不给这种解 ✗
+    const routes = rides.map((r) => r.route);
+    if (new Set(routes).size !== routes.length) return !full();
     const k = pathKey({ rides, transfers });
     if (seen.has(k)) return !full(); // 重复：不新增，按当前是否满载决定续/停
     const ck = chainKeyOf(rides);
