@@ -35,6 +35,7 @@ import type { Pool } from "pg";
 import { queryEta, type EtaBus } from "@/lib/dsat/eta";
 import { queryLrtDepartures, type LrtPreload } from "@/lib/lrt/next-departures";
 import { idxsOf } from "./enumerate";
+import { headwayAt, type HeadwayIndex } from "./headway";
 import { lookupHop, type SegmentIndex } from "./segment-lookup";
 import {
   HOP_HI_FACTOR,
@@ -44,6 +45,7 @@ import {
   type OptionSeed,
   type RouteIndex,
   type RouteLive,
+  type WaitEstimate,
 } from "./types";
 
 /**
@@ -185,25 +187,141 @@ function toBusArrival(
  *   · **不设条数上限**：`eta.ts` 的 `rest` 给出第 3 辆起的全部。
  *   · 池内顺序沿用 `eta.ts` 的升序（按站距）→ nearest/second/more 语义不变。
  */
+/** 从 `stops[fromIdx]` 沿该方向走 `steps` 跳的总时长（分钟）；一步都解不出 ⇒ `null` */
+function hopsDurationBetween(
+  segIdx: SegmentIndex,
+  route: string,
+  stops: string[],
+  fromIdx: number,
+  steps: number,
+  todayWeekday: number,
+): number | null {
+  const n = stops.length;
+  if (!n || steps <= 0) return null;
+  let sum = 0;
+  let any = false;
+  for (let k = 0; k < steps; k++) {
+    const a = stops[(fromIdx + k) % n];
+    const b = stops[(fromIdx + k + 1) % n];
+    if (!a || !b) break;
+    sum += lookupHop(segIdx, route, a, b, todayWeekday).minutes;
+    any = true;
+  }
+  return any ? sum : null;
+}
+
+/**
+ * ★ 2026-09-21 新增：**未发车线路的等待时间估算**（区间）。
+ *
+ * ── 解决什么 ──────────────────────────────────────────────────────────
+ *   在起点站等车时，本方向的车**都已发出去** ⇒ `nearest/second/more` 全空 ⇒
+ *   `empty = true` ⇒ 整条方案被剔除（实测：26A 黑沙海灘的 28 分直达被剔，
+ *   只剩 70~83 分的绕路方案）。但**并非真的没车**：
+ *   用「发车间隔（`route_frequency`）」+「**已过站班车**跑了多远」可以反推下一班何时到。
+ *
+ * ── 算法（两级）───────────────────────────────────────────────────────
+ *   ① `basis='passed'`（较准）：取**已过用户站且下游最近**的那辆车（`EtaBus.passed`）
+ *      ⇒ 它从用户站到当前挂载站的逐跳时长 ≈ 它**多久前经过用户站**（`sinceLast`）
+ *      ⇒ 下一班等待 ≈ 发车间隔 − sinceLast，仍以**区间** `[lo−s, hi−s]` 表达（下限截 0）
+ *   ② `basis='headway'`（较粗，降级）：无已过站班车可用（典型＝**在起点站**等车）
+ *      ⇒ 保守给 `[0, hi]`（最多再等一个完整间隔）
+ *
+ * ⚠️ 仅当实车候选全空时才调用（有实车时**零改动**，走原有精确路径）。
+ * ⚠️ 一律**估算**（DSAT 无发车时刻表）⇒ UI 必须写「约 X 到 Y 分钟」。
+ * ⚠️ **暂不参与排序**（两步走的第一步：先展示、观察准确性）。
+ */
+function estimateWait(
+  r: { route: string; dir?: string; nearest?: EtaBus; second?: EtaBus; rest?: EtaBus[] },
+  station: string,
+  idx: RouteIndex,
+  segIdx: SegmentIndex,
+  todayWeekday: number,
+  headway: HeadwayIndex | null,
+  nowMs: number,
+): WaitEstimate | null {
+  if (!headway) return null;
+  // 该线此刻没有班次基准（如 N2 白天停驶、15T 平日不运营）⇒ **不估**（宁缺毋滥）
+  const hit = headwayAt(headway, r.route, nowMs);
+  if (!hit) return null;
+
+  const dir = r.dir ?? "0";
+  const stops = idx.dirStops.get(`${r.route}|${dir}`) ?? [];
+  if (!stops.length) return null;
+  const userIdx = idxsOf(stops, station)[0] ?? -1;
+  if (userIdx < 0) return null;
+
+  // ① 找「刚过用户站」的班车：passed=true 且站序在用户站下游（环线按模运算）
+  const passed = [r.nearest, r.second, ...(r.rest ?? [])].filter((e): e is EtaBus => !!e && e.passed === true);
+  let sinceLastMin: number | null = null;
+  if (passed.length) {
+    const n = stops.length;
+    let bestGap = Number.POSITIVE_INFINITY;
+    for (const e of passed) {
+      const bi = idxsOf(stops, e.atStation)[0] ?? -1;
+      if (bi < 0) continue;
+      const gap = bi > userIdx ? bi - userIdx : bi + n - userIdx;
+      if (gap <= 0 || gap >= bestGap) continue;
+      const mins = hopsDurationBetween(segIdx, r.route, stops, userIdx, gap, todayWeekday);
+      if (mins !== null) {
+        bestGap = gap;
+        sinceLastMin = mins;
+      }
+    }
+  }
+
+  const round1 = (v: number) => Math.round(v * 10) / 10;
+  // ② 降级：无已过站班车 ⇒ 保守区间
+  if (sinceLastMin === null) {
+    return {
+      loMin: 0,
+      hiMin: hit.hi,
+      basis: "headway",
+      headwayLo: hit.lo,
+      headwayHi: hit.hi,
+      span: hit.span,
+    };
+  }
+  // ③ 主线：用「上一班已过去多久」把间隔区间往前推
+  const lo = Math.max(0, hit.lo - sinceLastMin);
+  const hi = Math.max(lo, hit.hi - sinceLastMin);
+  return {
+    loMin: round1(lo),
+    hiMin: round1(hi),
+    basis: "passed",
+    headwayLo: hit.lo,
+    headwayHi: hit.hi,
+    sinceLastMin: round1(sinceLastMin),
+    span: hit.span,
+  };
+}
+
 function buildBusLive(
   r: { route: string; dir?: string; nearest?: EtaBus; second?: EtaBus; rest?: EtaBus[] },
   idx: RouteIndex,
   segIdx: SegmentIndex,
   todayWeekday: number,
+  /** ★ 2026-09-21：以下三个参数供「未发车估算」用（实车为空时才用到） */
+  station: string,
+  headway: HeadwayIndex | null,
+  nowMs: number,
 ): BusLive {
   const dir = r.dir ?? "0";
   const toArr = (e: EtaBus | undefined) =>
     e ? toBusArrival(idx, segIdx, r.route, dir, e, todayWeekday) : null;
   const pool = [r.nearest, r.second, ...(r.rest ?? [])].filter((e): e is EtaBus => !!e && !e.passed);
   const arr = pool.map((e) => toArr(e)).filter((x): x is BusArrival => x !== null);
+  const empty = arr.length === 0;
   return {
     kind: "bus",
     route: r.route,
-    // empty = 该方向**没有一辆还没到站的车**（不在运营时间 / 末班已过）→ 整条方案排除
-    empty: arr.length === 0,
+    // empty = 该方向**没有一辆还没到站的车**（不在运营时间 / 末班已过）
+    //   ★ 2026-09-21：不再等于「整条方案排除」—— 若能量出 waitEstimate，仍可出卡（见 model.ts）
+    empty,
     nearest: arr[0] ?? null,
     second: arr[1] ?? null,
     more: arr.slice(2),
+    // 仅在全空时估算（有实车时不需要，保持原有精确路径）
+    waitEstimate: empty ? estimateWait(r, station, idx, segIdx, todayWeekday, headway, nowMs) ?? undefined : undefined,
   };
 }
 
@@ -235,7 +353,16 @@ export async function fetchLive(
   seeds: OptionSeed[],
   idx: RouteIndex,
   segIdx: SegmentIndex,
-  opts: { todayWeekday: number; nowMs?: number; lrtPre: LrtPreload },
+  opts: {
+    todayWeekday: number;
+    nowMs?: number;
+    lrtPre: LrtPreload;
+    /**
+     * ★ 2026-09-21：**发车间隔索引**（供「未发车估算」用）。
+     * 不传 / 传 null ⇒ 不估算（行为与旧版完全一致）。
+     */
+    headway?: HeadwayIndex | null;
+  },
 ): Promise<LiveBatch> {
   const t0 = Date.now();
   const todayWeekday = opts.todayWeekday;
@@ -313,7 +440,20 @@ export async function fetchLive(
               BUCKET_TIMEOUT_MS,
               key,
             );
-            for (const r of res) put(r.route, b.station, buildBusLive(r, idx, segIdx, todayWeekday));
+            for (const r of res)
+              put(
+                r.route,
+                b.station,
+                buildBusLive(
+                  r,
+                  idx,
+                  segIdx,
+                  todayWeekday,
+                  b.station,
+                  opts.headway ?? null,
+                  opts.nowMs ?? Date.now(),
+                ),
+              );
             dsatCalls += b.routes.length;
           } else {
             const res = await withTimeout(
@@ -441,7 +581,13 @@ export async function fetchStationLive(
         const key = `${b.station}→${b.dest} [${b.routes.join(",")}]`;
         try {
           const res = await withTimeout(queryBusBucket(idx, b), BUCKET_TIMEOUT_MS, key);
-          for (const r of res) out.set(`${r.route}@${b.station}`, buildBusLive(r, idx, segIdx, todayWeekday));
+          // ★ 2026-09-21：站级实时（非路线推荐链路）暂不做「未发车估算」⇒ headway 传 null，
+          //   行为与旧版完全一致（等需要时再接，避免这次改动面扩散）。
+          for (const r of res)
+            out.set(
+              `${r.route}@${b.station}`,
+              buildBusLive(r, idx, segIdx, todayWeekday, b.station, null, Date.now()),
+            );
         } catch {
           // 超时/失败 → 该桶的线路不出现在结果里（调用方按「无实时数据」降级展示）
         }

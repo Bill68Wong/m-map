@@ -405,25 +405,48 @@ export function modelOption(seed: OptionSeed, ctx: ModelContext): ModeledOption 
 
   if (first.kind === "bus") {
     const lv = ctx.live.get(first.route);
-    if (!lv || lv.kind !== "bus" || lv.empty) {
+    if (!lv || lv.kind !== "bus") {
       ctx.excluded.push(first.route);
       return null;
     }
-    busPool = [lv.nearest, lv.second, ...(lv.more ?? [])].filter((x): x is BusArrival => x !== null);
-    const chosen = pickBoardable(lv, wOut.minutes, wOut.distanceM, ctx.tierOverride);
-    chosenBus = chosen;
-    const t0 = chosen ? pickCatchTier(wOut.minutes, chosen.loSec, wOut.distanceM, ctx.tierOverride) : null;
-    if (!chosen || t0 === null) {
-      // 最近两辆在途车都赶不上（连冲刺也不行）→ 不显示这张卡。
-      // 旧行为是「按班距 ÷ 2 估一个等车值」，但卡面同时又写「还有 0 站 · 约 0 分」
-      // 与「本班赶不上」→ 三个数字互相打架，且总用时偏小会把它排到很前面。
-      ctx.missed.push(first.route);
-      return null;
+    if (lv.empty) {
+      // ★ 2026-09-21 新增：本方向**无任何在途车** —— 不再一律剔除。
+      //
+      //   实测事故：在**起点站**等车时，本方向的车都已发出去 ⇒ `empty` ⇒ 整条方案被剔
+      //   （26A 黑沙海灘的 28 分直达被剔，只剩 70~83 分的绕路方案）。
+      //   现在若「未发车估算」（发车间隔 ＋ 已过站班车反推）可用，就用它继续出卡；
+      //   估算不可用（该线此刻无班次基准，如 N2 白天 / 15T 平日）⇒ 维持旧行为（剔除）。
+      const est = lv.waitEstimate;
+      if (!est) {
+        ctx.excluded.push(first.route);
+        return null;
+      }
+      // 等待时间取**区间上限**（产品口径 2026-09-21：宁可信其长，别让用户错过车）
+      boardAtMs = nowMs + est.hiMin * 60_000;
+      // 未发车 ⇒ 不涉及「赶车档位」，按常速（档 3；SPEED_RATIO[3] === 1）
+      tier = 3;
+      liveText = `未发车 · 约 ${est.loMin} 到 ${est.hiMin} 分`;
+      // 无实车可列 ⇒ 后续班次留空（卡片不展示 altBuses）
+      busPool = [];
+      chosenBus = null;
+      waitMin0 = Math.max(0, (boardAtMs - cursor) / 60_000);
+    } else {
+      busPool = [lv.nearest, lv.second, ...(lv.more ?? [])].filter((x): x is BusArrival => x !== null);
+      const chosen = pickBoardable(lv, wOut.minutes, wOut.distanceM, ctx.tierOverride);
+      chosenBus = chosen;
+      const t0 = chosen ? pickCatchTier(wOut.minutes, chosen.loSec, wOut.distanceM, ctx.tierOverride) : null;
+      if (!chosen || t0 === null) {
+        // 最近两辆在途车都赶不上（连冲刺也不行）→ 不显示这张卡。
+        // 旧行为是「按班距 ÷ 2 估一个等车值」，但卡面同时又写「还有 0 站 · 约 0 分」
+        // 与「本班赶不上」→ 三个数字互相打架，且总用时偏小会把它排到很前面。
+        ctx.missed.push(first.route);
+        return null;
+      }
+      boardAtMs = nowMs + chosen.loSec * 1000;
+      tier = t0;
+      liveText = `还有 ${chosen.stopsAway} 站 · ${rangeText(chosen.loSec, chosen.hiSec)}`;
+      waitMin0 = Math.max(0, (boardAtMs - cursor) / 60_000);
     }
-    boardAtMs = nowMs + chosen.loSec * 1000;
-    tier = t0;
-    liveText = `还有 ${chosen.stopsAway} 站 · ${rangeText(chosen.loSec, chosen.hiSec)}`;
-    waitMin0 = Math.max(0, (boardAtMs - cursor) / 60_000);
   } else {
     const lv = ctx.live.get(first.route);
     if (!lv || lv.kind !== "lrt" || lv.state !== "running") {

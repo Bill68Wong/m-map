@@ -35,6 +35,7 @@ import { fetchTransitPlans, type RawPlan, type TransitCacheIo, type AmapTransitR
 import { fetchLive } from "@/lib/recommend/live";
 import { amapPlanToSeed, modelOption, type ModeledOption } from "@/lib/recommend/model";
 import { contextFor, loadStatics, type RecStatic } from "@/lib/recommend/query";
+import { loadHeadway } from "@/lib/recommend/headway";
 import { mainCodeOf } from "@/lib/recommend/segment-lookup";
 import type { AltBusView, OptionSeed, RecommendCard, SchoolZone } from "@/lib/recommend/types";
 import { candidatesToSeeds, chainToCandidates, pathsToCandidates, LOCAL_SUMMARY } from "./enumerate-nav";
@@ -476,6 +477,9 @@ export async function planNav(pool: Pool, input: NavInput): Promise<NavOutput> {
     todayWeekday: weekday,
     nowMs,
     lrtPre: st.lrtPre,
+    // ★ 2026-09-21：发车间隔索引 ⇒ 让「本方向无在途车」的线路也能出卡（估算等待时间，见 live.ts）。
+    //   失败/表不存在 ⇒ loadHeadway 内部已兜底（返回空索引）⇒ 退化为旧行为，不影响出卡。
+    headway: await loadHeadway(pool),
   });
   const liveMs = Date.now() - tLive;
   // ★ v2.4.1：`destLabel` = 目的地展示名 —— 供 `model.ts` 把末段步行文案写成
