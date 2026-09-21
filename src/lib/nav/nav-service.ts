@@ -218,6 +218,15 @@ function makeTransitCacheIo(pool: Pool): TransitCacheIo {
  */
 const MULTI_STRATEGY_WHEN_BELOW = 3;
 
+/**
+ * ★ 2026-09-21：高德 transit 失败后的**重试间隔**（毫秒）。
+ *
+ * 实测高德会「几十秒内时好时坏」（同一查询连测得 正常 / 0 方案 / 正常 三种结果）
+ * ⇒ 失败后稍等再试一次，即可消掉大部分此类抖动，用户不必手动刷新。
+ * 取 350ms：足够让瞬时故障过去，又不会明显拖长请求（Serverless 有 maxDuration 约束）。
+ */
+const TRANSIT_RETRY_DELAY_MS = 350;
+
 /** 补查使用的高德策略（产品指定：7/8） */
 const MULTI_STRATEGIES: readonly number[] = [7, 8];
 
@@ -376,12 +385,28 @@ export async function planNav(pool: Pool, input: NavInput): Promise<NavOutput> {
       transitOk = amapTotal > 0;
       if (transitOk) strategiesUsed.push(0);
     } else {
-      const r = await fetchTransitPlans({ lng: origin.lng, lat: origin.lat }, { lng: dest.lng, lat: dest.lat }, {
-        cache: makeTransitCacheIo(pool),
-        noCache: input.noCache,
-        nowMs,
-        strategy: 0,
-      });
+      const callOnce = () =>
+        fetchTransitPlans(
+          { lng: origin.lng, lat: origin.lat },
+          { lng: dest.lng, lat: dest.lat },
+          {
+            cache: makeTransitCacheIo(pool),
+            noCache: input.noCache,
+            nowMs,
+            strategy: 0,
+          },
+        );
+      let r = await callOnce();
+      // ★ 2026-09-21 新增：高德失败 / 返回 0 方案时，**自动重试一次**。
+      //   实测（黑沙海滩 → 十月初五马路，22:2x）：**同一查询在几十秒内时好时坏** ——
+      //   连测三次分别得到「infocode=10000 正常 / 直接 0 方案 / 又一次正常」，
+      //   用户表现为「刷一下才有结果」。重试一次即可消掉大部分这类抖动。
+      //   成本：偶发多一次 transit 调用（高德 transit 配额充足，非搜索类 5,000/月 那种紧约束）。
+      //   ⚠️ 只重试**一次**：第二次仍失败就照旧降级，避免把请求时长拖爆（Serverless 有 maxDuration）。
+      if (!r.ok) {
+        await new Promise((res) => setTimeout(res, TRANSIT_RETRY_DELAY_MS));
+        r = await callOnce();
+      }
       if (r.ok) {
         transitOk = true;
         fromCache = r.fromCache;
