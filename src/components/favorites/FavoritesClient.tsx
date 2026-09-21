@@ -11,14 +11,14 @@
  * ── ★ S4：点组合卡 = **现场实时算**（不再跳 `/nav`）─────────────────────
  *   07 §2：`chain/walk/tiers` 只在有自定义编排时传参；缺省 = v2.2.0 行为逐字节一致。
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Icon from "@/components/ui/Icon";
 import FavoriteCard from "./FavoriteCard";
 import ComboEditor from "./ComboEditor";
 import ComboPlans from "./ComboPlans";
 import { useCombos } from "@/lib/favorites/useCombos";
-import type { Combo } from "@/lib/favorites/types";
+import { PRUNE_NOTICE_KEY, type Combo } from "@/lib/favorites/types";
 
 /** 排序：置顶优先 → 启用优先（停用沉底）→ 最近使用/更新 降序 */
 function order(a: Combo, b: Combo): number {
@@ -42,6 +42,29 @@ export default function FavoritesClient({ colors = {} }: { colors?: Record<strin
     setNotice(text);
     window.setTimeout(() => setNotice(""), 2400);
   }
+
+  /**
+   * ★ v2.4.0：读「已整理旧版组合」的一次性提示。
+   *
+   * `ComboSeeder` 清掉旧版空壳组合后会写下条数；此处**读一次即删**（只提示一次）。
+   * 为什么要告知：清理的是用户本地数据，**不可悄悄进行** ⇒ 必须让他知道「旧的那几个
+   * 空组合被新版合并/替换了」，否则会以为是 bug 或数据丢了。
+   */
+  useEffect(() => {
+    let n = 0;
+    try {
+      const raw = window.sessionStorage.getItem(PRUNE_NOTICE_KEY);
+      if (raw) {
+        n = Number(raw) || 0;
+        window.sessionStorage.removeItem(PRUNE_NOTICE_KEY); // ★ 读后即删 ⇒ 只提示一次
+      }
+    } catch {
+      /* 隐私模式：拿不到就算了，不影响数据 */
+    }
+    if (n > 0) flash(`已整理 ${n} 个旧版组合（换成按座区细分的常用组合）`);
+    // 仅挂载后跑一次：seed 由 `ComboSeeder`（同页、树中位于本组件之前）在挂载时写入，
+    // React 按树序执行 effect ⇒ 本 effect 读到的必然已是写入后的值
+  }, []);
 
   // ── 首帧（SSR / 未挂载）：骨架，保证服务端与首帧输出一致（F1）──
   if (!c.mounted) {
@@ -116,7 +139,7 @@ export default function FavoritesClient({ colors = {} }: { colors?: Record<strin
           <Icon name="bookmark" size={24} className="fav-empty__icon" />
           <p className="fav-empty__title">还没存过路线</p>
           <p className="fav-empty__body t-body t-muted">
-            在路线结果页点书签图标收藏一条方案；或在首页选定目的地后，保存「家 → 澳科大」这样的常用路线。
+            在路线结果页点书签图标收藏一条方案；或在首页选定目的地后，保存「家 → 澳门科技大学」这样的常用路线。
           </p>
           <button type="button" className="btn btn--primary" onClick={() => router.push("/")}>
             去规划路线

@@ -27,7 +27,7 @@ import {
   savePlanFavorite,
   useCombos,
 } from "@/lib/favorites/useCombos";
-import type { FavoriteEndpoint, PlanSnapshot } from "@/lib/favorites/types";
+import type { FavoriteEndpoint, PlanSnapshot, RouteSeg } from "@/lib/favorites/types";
 
 export type FavoriteEntry = "card" | "detail" | "home" | "odbar";
 
@@ -42,6 +42,8 @@ export interface FavoriteButtonProps {
   fingerprint?: string;
   /** 方案快照（`kind="plan"` 时必填） */
   snapshot?: PlanSnapshot;
+  /** ★ v2.4.0：路线流程图结构（有它才能在收藏页画出纵向流程图） */
+  route?: RouteSeg[];
   /** 入口标识（埋点 / 文案用） */
   entry: FavoriteEntry;
   /** 图标尺寸（默认 20 = 按钮内档） */
@@ -58,6 +60,7 @@ export default function FavoriteButton({
   query,
   fingerprint,
   snapshot,
+  route,
   entry,
   size = 20,
   withLabel = false,
@@ -110,7 +113,7 @@ export default function FavoriteButton({
     }
     const res =
       kind === "plan" && fingerprint && snapshot
-        ? savePlanFavorite({ from, to, query, fingerprint, snapshot })
+        ? savePlanFavorite({ from, to, query, fingerprint, snapshot, route })
         : savePlaceCombo({ from, to, query });
     if (res.ok) flash("已收藏");
     else if (res.reason === "duplicate") flash("已在收藏中");

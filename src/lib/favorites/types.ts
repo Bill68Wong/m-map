@@ -212,6 +212,71 @@ export interface ComboTiers {
   minutes?: Partial<Record<ComboTierNumber, number>>;
 }
 
+/* ── ★ v2.4.0：路线流程图结构（`ComboPlan.route`）───────────────────────
+   为什么需要它：`PlanSnapshot.legs` 只是一串**纯文字**（`"51A 關北→科大"`），
+   画不出「出发地 → 步行 → 上车站 → 线路 → 下车 → 步行 → 目的地」的纵向流程图
+   （缺站码 / 站名 / 换乘落点 / 步行归属）。本结构 = 收藏那一刻的**分段结构快照**，
+   与 `PlanSnapshot` 同源（都来自同一张卡），但保留可渲染的定位信息。
+
+   ⚠️ 合规：**只存站码/站名/段类型**（派生值），**绝不存 polyline / 地图几何**（02 §2.3）。
+   ⚠️ 兼容：老数据没有 `route` 字段 ⇒ 读取端必须容忍缺失（降级为「只有文字摘要」）。
+   ────────────────────────────────────────────────────────────────────── */
+
+/** 路线分段（流程图的一个节点） */
+export interface RouteSeg {
+  /** 段类型：步行（去站/离站）· 乘车 · 换乘（站内）· 通关（口岸，独立计时） */
+  kind: "walk" | "ride" | "transfer" | "border";
+  /** 站码（`walk`/`transfer` 为落点站；`border` 无） */
+  code?: string;
+  /** 站名 / 口岸名（展示用；繁体原文） */
+  label?: string;
+  /** `ride` 专用：线路码（单条；多条并行 ⇒ 用数组的第一条为主码） */
+  route?: string;
+  /** `ride` 专用：并行可选线路（同站上、同站下 ⇒ 渲染为 `51B/25AX`） */
+  routes?: string[];
+  /** `ride` 专用：上车站码 / 下车站码 */
+  board?: string;
+  alight?: string;
+  /** `ride` 专用：上车站名 / 下车站名（展示） */
+  boardLabel?: string;
+  alightLabel?: string;
+  /** `ride` 专用：坐几站（0 = 未知） */
+  hops?: number;
+  /** `walk` 专用：去程（出发地→上车站）还是离程（下车站→目的地） */
+  phase?: "out" | "in";
+  /** `walk` 专用：该段步行耗时（分钟；来源 = 实测/推算，见 `walkSrc`） */
+  minutes?: number;
+  /** `walk` 专用：取值来源（`measured` 实测 · `estimate` 推算） */
+  walkSrc?: "measured" | "estimate";
+}
+
+/**
+ * ★ v2.4.0：**路线级步行覆盖**（用户自定义步行耗时的存放处）。
+ *
+ * 语义（2026-09-21 拍板）：
+ *   · 挂在**路线**上（不是组合），UI 位置 = **流程图旁**；
+ *   · 但**按「步行起点 + 步行终点」共享** —— **同一组合内**，若路线 A 与路线 B
+ *     有同一段「从 X 走到 Y」，改 A 的这段 ⇒ B 的这段一起变（07 §2.5 扩展）。
+ *
+ * 钥匙 = `walkKey(plan, seg)` = `组合内`：`${组合id}::${起点}->${终点}`
+ *   —— 起点/终点取**站码**（`walk:out` = 出发地→上车站；`walk:in` = 下车站→目的地），
+ *      出发地/目的地侧用 `PLACE:` 前缀 + place slug 表示（无站码）。
+ */
+export interface RouteWalkOv {
+  /** 该段是否解锁联动（`false` = 距离与时长各自独立，同 `ComboWalkSeg.link`） */
+  link?: boolean;
+  /** 覆盖距离（米，0–20000） */
+  distanceM?: number;
+  /** 覆盖时长（分钟，0–180） */
+  minutes?: number;
+}
+
+/**
+ * 路线级覆盖集合。键 = `walkKey()` 产物（**组合内共享**，见上）。
+ * ⚠️ 用对象而非数组：重复键天然合并（同段共享的实现基础）。
+ */
+export type RouteWalkOverrides = Record<string, RouteWalkOv>;
+
 /** 组合下**已保存方案**（≈ v1 `PlanFavorite` 去 OD 化；指纹真源同 `planFingerprint`） */
 export interface ComboPlan {
   id: string;
@@ -219,6 +284,16 @@ export interface ComboPlan {
   fingerprint: string;
   /** 采集时快照（**只作离线/降级展示**，不作真值；含 `capturedAt` → 「保存于 MM-DD」） */
   snapshot: PlanSnapshot;
+  /**
+   * ★ v2.4.0：**路线流程图结构**（各分段：步行/乘车/换乘/通关）。
+   * 缺省 = 老数据（无结构 ⇒ 流程图降级为文字摘要）。
+   */
+  route?: RouteSeg[];
+  /**
+   * ★ v2.4.0：**路线级步行覆盖**（钥匙见 `walkKey`；**同组合内同段共享**）。
+   * 缺省 = 全部走系统默认（实测值 / 推算值）。
+   */
+  walkOv?: RouteWalkOverrides;
   note?: string;
   createdAt: number;
   updatedAt: number;
@@ -269,6 +344,15 @@ export interface FavoritesFileV2 {
 
 export const FAVORITES_KEY_V2 = "must.favorites.v2";
 export const FAVORITES_SCHEMA_VERSION_V2 = 2 as const;
+/**
+ * ★ v2.4.0：**「已整理旧版组合」的一次性提示**传递键。
+ *
+ * 用途：`ComboSeeder` 清理掉旧版空壳组合后写入条数 → `FavoritesClient` 读到后
+ * flash 一句提示并**立刻删除该键**（保证只提示一次）。
+ * · 用 `sessionStorage` 而非 `localStorage` ⇒ 关掉标签页即失效，不会长期残留；
+ * · 清除用户数据**必须可解释** ⇒ 这是「透明告知」的载体，不要删。
+ */
+export const PRUNE_NOTICE_KEY = "must.fav.pruneNotice";
 /** 组合上限（沿用 v1 的 200 量级） */
 export const COMBO_CAP = 200;
 /** 组合名上限（06 §3.2） */
@@ -282,6 +366,27 @@ export function comboDefaultName(from: { label: string }, to: { label: string })
 /** 组合去重键：按 `query`（同一 OD 只应有一个组合，07 §1.2） */
 export function comboDedupeKey(c: { query: string }): string {
   return `combo:${c.query}`;
+}
+
+/* ── ★ v2.4.0：路线级步行的**共享钥匙**（唯一真源）───────────────────────
+   口径（2026-09-21 拍板）：**同一组合内**，只要「步行的起点 + 终点」相同，
+   ⇒ 就是同一段 ⇒ 共用一份用户覆盖值（改 A 的，B 一起变）。
+
+   钥匙构成 = `${组合 id}::${一端}->${另一端}`
+     · 一端/另一端：优先**站码**（`walk:out` 的终点 = 上车站；
+       `walk:in` 的起点 = 下车站）；出发地/目的地侧无站码 ⇒ 用 `PLACE:<slug>`。
+     · ⚠️ **组合 id 必须进钥匙** —— 否则跨组合会误共享（拍板：只在同组合内共享）。
+
+   ⚠️ 站台码归一：`C690/3` 与 `C690/2` 视为**不同**段（子台不同即不同步行终点），
+      与「同主码不同子台」的展示合并逻辑区分开（展示可合并，步行不可混）。
+   ────────────────────────────────────────────────────────────────────── */
+export function walkKey(comboId: string, from: string, to: string): string {
+  return `${comboId}::${from}->${to}`;
+}
+
+/** 步行段两端：`PLACE:<slug>` 前缀用于「出发地/目的地」（无站码） */
+export function placeWalkEnd(slug: string): string {
+  return `PLACE:${slug}`;
 }
 
 /**

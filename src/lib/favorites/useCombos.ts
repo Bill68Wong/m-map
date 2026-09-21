@@ -16,6 +16,8 @@
  *   `seedDefaultCombos(coords, zone)` 由 `/favorites` 的 `ComboSeeder` 调一次：
  *   仅当 `seedVersion < SEED_VERSION` 时**补「同名不存在」的默认组合**，然后置位；
  *   用户删掉的默认组合**不再复活**。
+ *   ★ v2.4.0：同一次动作里还会**清掉旧版遗留的空壳默认组合**（v2.3.x 只建组合、
+ *     不填路线 ⇒ 点进去看不到任何路线），见 `storage.isEmptyLegacyDefault`。
  */
 import { useEffect, useState } from "react";
 import {
@@ -30,8 +32,13 @@ import type { AddResult } from "./useFavorites";
 import { newId } from "./storage";
 import {
   comboDedupeKey,
+  placeWalkEnd,
+  walkKey,
   type Combo,
   type ComboPlan,
+  type RouteSeg,
+  type RouteWalkOv,
+  type RouteWalkOverrides,
 } from "./types";
 
 const EVT = "must:combos";
@@ -164,12 +171,95 @@ export function updateComboPlan(comboId: string, planId: string, patch: Partial<
   });
 }
 
+/**
+ * ★ v2.4.0：设置**路线级步行覆盖**，并**按钥匙在同组合内共享**。
+ *
+ * 语义（2026-09-21 拍板）：`key = walkKey(组合id, 步行起点, 步行终点)`；
+ * **同一组合内，所有「确实含该钥匙那段步行」的路线（`ComboPlan`）一起写入** ——
+ * 这就是「路线 A 改了从 X 走到 Y 的这段，路线 B 里同样那段一起变」的实现。
+ *
+ * ⚠️ **只写给真的含该段的路线**（v2.4.0 修正）：
+ *   初版写成「组合内**每条**路线都写一份该 key」⇒ 不含该段的路线也被塞入一个
+ *   用不上的覆盖值（脏数据：钥匙指向它根本没有的步行段）。实测证据：同组合 11 条
+ *   路线里只有 6 条走到 `C653`，却 11 条全被写入。
+ *   ⇒ 改为**先用 `walkSegKeysOf(plan)` 取出该路线真实的钥匙集合，命中才写**。
+ *
+ * @param comboId 组合 id
+ * @param key     `walkKey()` 产物
+ * @param ov      覆盖值；传 `null` ⇒ **清除**该段覆盖（回落系统默认）
+ */
+export function setRouteWalkOverride(
+  comboId: string,
+  key: string,
+  ov: RouteWalkOv | null,
+): AddResult {
+  return mutate((file) => {
+    const combo = file.combos.find((c) => c.id === comboId);
+    if (!combo) return { ok: false, reason: "error", message: "未找到该组合" };
+    const combos = file.combos.map((c) => {
+      if (c.id !== comboId) return c;
+      return {
+        ...c,
+        plans: c.plans.map((p) => {
+          // ★ 只处理「真的含该段」的路线：无该段 ⇒ 原样返回（不制造脏覆盖）
+          const owned = walkSegKeysOf(c, p);
+          if (!owned.has(key)) return p;
+          const map: RouteWalkOverrides = { ...(p.walkOv ?? {}) };
+          if (ov === null) delete map[key];
+          else map[key] = { ...(map[key] ?? {}), ...ov };
+          const next: ComboPlan = { ...p, updatedAt: Date.now() };
+          if (Object.keys(map).length) next.walkOv = map;
+          else delete next.walkOv;
+          return next;
+        }),
+        updatedAt: Date.now(),
+      };
+    });
+    return { ok: true, next: { ...file, combos } };
+  });
+}
+
+/**
+ * 取某条路线**实际拥有**的全部步行段钥匙集合。
+ *
+ * 钥匙构造口径与 `presets.comboWalkSegs()` / `RouteFlow.tsx` **逐字一致**：
+ *   · `out`（出发地→上车站）：`walkKey(id, PLACE:<起点slug>, 站码)`
+ *   · `in` （下车站→目的地）：`walkKey(id, 站码, PLACE:<终点slug>)`
+ *
+ * ⚠️ 三者（本函数 / `comboWalkSegs` / `RouteFlow`）必须同口径 —— 有一处不一致就会出现
+ *    「UI 显示的钥匙」与「写入用的钥匙」对不上，表现为改了没生效或写错段。
+ */
+export function walkSegKeysOf(combo: Combo, plan: ComboPlan): Set<string> {
+  const keys = new Set<string>();
+  const fromSlug = endpointSlug(combo.from.label);
+  const toSlug = endpointSlug(combo.to.label);
+  for (const s of plan.route ?? []) {
+    if (s.kind !== "walk") continue;
+    const phase = s.phase ?? "out";
+    const station = s.code ?? "";
+    const fromE = phase === "out" ? placeWalkEnd(fromSlug) : station;
+    const toE = phase === "out" ? station : placeWalkEnd(toSlug);
+    keys.add(walkKey(combo.id, fromE, toE));
+  }
+  return keys;
+}
+
+/** 端点 label → place slug（与 `presets.slugOfEndpoint` 同口径） */
+function endpointSlug(label: string): string {
+  if (label.includes("澳门科技大学") || label.includes("澳科大")) return "school";
+  if (label.includes("橫琴") || label.includes("横琴")) return "hengqin";
+  if (label.includes("關閘") || label.includes("关闸")) return "gate";
+  return "home";
+}
+
 // ─────────────────────────── 收藏入口（★ S2：写入方的唯一收口） ───────────────────────────
 
 /**
  * **收藏一条方案** —— 归入对应组合：
  * · 同 `query` 组合已存在 → 追加一条 `ComboPlan`（按 `fingerprint` 去重）；
  * · 不存在 → **新建组合并带上该 plan**（**一次写入**，避免"建了组合但 plan 没进去"的半成品）。
+ *
+ * ★ v2.4.0：`route`（流程图结构）可选传入 —— 有它才能在故事里画出纵向流程图。
  */
 export function savePlanFavorite(args: {
   from: Combo["from"];
@@ -177,12 +267,14 @@ export function savePlanFavorite(args: {
   query: string;
   fingerprint: string;
   snapshot: ComboPlan["snapshot"];
+  /** ★ v2.4.0：路线流程图结构（缺省 = 只存快照，流程图降级为文字摘要） */
+  route?: RouteSeg[];
   name?: string;
 }): AddResult {
   return mutate((file) => {
     const exist = file.combos.find((c) => c.query === args.query);
     if (exist?.plans.some((p) => p.fingerprint === args.fingerprint)) return { ok: false, reason: "duplicate" };
-    const plan = makeComboPlan(args.fingerprint, args.snapshot);
+    const plan = makeComboPlan(args.fingerprint, args.snapshot, args.route);
     let combos: Combo[];
     if (exist) {
       combos = file.combos.map((c) =>
@@ -244,10 +336,16 @@ export function makeCombo(args: {
   return c;
 }
 
-/** 造一条「组合下方案」 */
-export function makeComboPlan(fingerprint: string, snapshot: ComboPlan["snapshot"], note?: string): ComboPlan {
+/** 造一条「组合下方案」（★ v2.4.0：可选带流程图结构） */
+export function makeComboPlan(
+  fingerprint: string,
+  snapshot: ComboPlan["snapshot"],
+  route?: RouteSeg[],
+  note?: string,
+): ComboPlan {
   const now = Date.now();
   const p: ComboPlan = { id: newId(), fingerprint, snapshot, createdAt: now, updatedAt: now };
+  if (route?.length) p.route = route;
   if (note) p.note = note.slice(0, 40);
   return p;
 }
@@ -255,20 +353,27 @@ export function makeComboPlan(fingerprint: string, snapshot: ComboPlan["snapshot
 // ─────────────────────────── 种子注入 ───────────────────────────
 
 /**
- * 注入 6 个默认组合（幂等；**仅补同名不存在者**）。
- * @returns 实际新增条数（0 = 已注入过 / 坐标不全 / 只读）
+ * 注入默认组合（幂等；**仅补「同名/同 query 都不存在」者**），并顺手清掉旧版空壳。
+ *
+ * ★ v2.4.0：返回值从 `number` 扩为对象 —— 除新增条数外，还报出**清理掉的旧空壳条数**，
+ *   供 UI 给用户一句「已整理 N 个旧版组合」的透明提示（新增**组合数 6 → 10**）。
+ *
+ * @returns `added` = 实际新增条数；`pruned` = 清掉的旧版空壳条数（0 = 无需清理/已注入过/只读）
  */
-export function seedDefaultCombos(coords: SeedPlaceCoord[], zone: string | null): number {
+export function seedDefaultCombos(
+  coords: SeedPlaceCoord[],
+  zone: string | null,
+): { added: number; pruned: number } {
   const { available, readOnly, file } = readCached(true);
-  if (!available || readOnly) return 0;
+  if (!available || readOnly) return { added: 0, pruned: 0 };
   const seeds = buildDefaultComboSeeds(coords, zone);
-  if (!seeds.length) return 0;
-  const { file: next, added } = applySeed(file, seeds, SEED_VERSION);
-  if (!added) return 0;
+  if (!seeds.length) return { added: 0, pruned: 0 };
+  const { file: next, added, pruned } = applySeed(file, seeds, SEED_VERSION);
+  if (!added && !pruned) return { added: 0, pruned: 0 };
   const res = writeCombos(next);
-  if (!res.ok) return 0;
+  if (!res.ok) return { added: 0, pruned: 0 };
   emit();
-  return added;
+  return { added, pruned };
 }
 
 // ─────────────────────────── Hook ───────────────────────────
@@ -291,6 +396,8 @@ export interface UseCombos {
   addPlan: (comboId: string, plan: ComboPlan) => AddResult;
   removePlan: (comboId: string, planId: string) => AddResult;
   updatePlan: (comboId: string, planId: string, patch: Partial<ComboPlan>) => AddResult;
+  /** ★ v2.4.0：设置某段步行的覆盖值（**同组合内同段共享**）；`null` = 清除该段覆盖 */
+  setWalkOv: (comboId: string, key: string, ov: RouteWalkOv | null) => AddResult;
   file: ReadCombosResult["file"];
 }
 
@@ -326,6 +433,8 @@ export function useCombos(): UseCombos {
     addPlan: addPlanToCombo,
     removePlan: removePlanFromCombo,
     updatePlan: updateComboPlan,
+    /** ★ v2.4.0：设置某段步行的覆盖值（同组合内同段共享） */
+    setWalkOv: setRouteWalkOverride,
     file: state.file,
   };
 }

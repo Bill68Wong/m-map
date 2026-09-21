@@ -92,6 +92,10 @@
 
   /* 圆角 Radius（上限 10px；按钮不用 pill） */
   --radius-chip: 6px;
+  /* ★ v2.4.0：多码并列组的**墨底衬底**圆角（不再另加 padding ⇒ 只比色块大 1px 发光边） */
+  --radius-group-pad: 7px;
+  /* ★ v2.4.0：组内相邻色块**内侧**圆角（磨圆拼缝）——故意小于 --radius-chip */
+  --radius-chip-inner: 3px;
   --radius-group: 7px;
   --radius-btn: 8px;
   --radius-card: 10px;
@@ -3062,11 +3066,51 @@ button[aria-disabled="true"] {
   align-items: center;
   flex-shrink: 0;
 }
-/* 多码并列 = **墨色组胶囊承底** + 白斜杠（白斜杠落在墨色上，白底卡片也清晰可见） */
+/*
+ * ★★ v2.4.0 修复（用户实测：「分色块之前还能显示，现在变成黑黑的一片」「圆角也出了问题」）
+ *
+ * 根因（两条历史样式**互相打架**）：
+ *   · v0.19.1  `.route-stack { border-radius:6px; overflow:hidden }` —— 用**容器裁剪**出圆角；
+ *   · v2.2.1  `.route-stack { overflow:visible }` —— 为多段换行不切边改成 visible，
+ *     **但孩子身上的 `border-radius` 仍在** ⇒ 容器不再裁剪、每块各带一角 ⇒ 块间露底、
+ *     圆角碎裂（用户看到的「圆角出问题」）。
+ *   · 同时 `__slash` 是**白字**，只在 `--multi` 的墨底上成立；单码段没有墨底时，
+ *     若背景偏白就「白字白底」⇒ 视觉糊成一片（用户看到的「黑黑的一片」实为对比度丢失）。
+ *
+ * 修法（**只让多码并列那层上墨底**，单码段保持纯净的单一色块）：
+ *   ① 外层不再裁剪、由**每个色块自己**出圆角（`__seg` 已有 `border-radius`）；
+ *   ② 多码组的**墨底只作斜杠承底**，且**不再留 3px 内边距**（否则 = 黑框）；
+ *   ③ 组内相邻色块之间**内侧圆角磨到 3px**（原为 0 = 直角 ⇒ 用户看到的「圆角异常」）；
+ *   ④ 白斜杠加**不透明描边**，不再依赖墨底保对比度。
+ *
+ * ★★ v2.4.0 二次修正（用户第二轮实测：「两个图标放在一起有奇怪的黑底 + 圆角异常」）
+ *   ❌ 我第一轮判断错了：以为是 `padding:3px` 撑出的黑框，把 padding 归零后
+ *      **实测截图（`.verify/slash-01-group-crop.png`）仍是两块彩色码之间夹一整块黑**。
+ *   ✅ 真正根因：`__slash` 是**插在两块 `__seg` 之间的独立 flex 项**，
+ *      而整组铺了 `background: var(--fg)`（近黑）⇒ 两块之间那段间隙露出的就是这层黑底。
+ *   ✅ 修法：**组不铺底色**（`transparent`），墨底**收进 `__slash` 自身**（只衬 `/` 一条）；
+ *      组内相邻色块内侧圆角从 0 → 3px，避免拼缝出现与两端不一致的方角。
+ *
+ *   教训（写给自己）：视觉 bug **必须真浏览器截图看**，不能靠读 CSS 推理 ——
+ *   第一轮就是「读代码觉得对」而实际没修好，靠 `.verify/e2e-v240-slash.mjs` 截图才暴露。
+ */
 .route-stack__group--multi {
-  background: var(--fg);
-  border-radius: var(--radius-group);
-  padding: 3px;
+  /* ★★ v2.4.0 修（用户第二轮实测：「两个图标放在一起有奇怪的黑底」）
+     实测截图（`.verify/slash-01-group-crop.png`）显示：**两块彩色圆角码之间有一整块黑**。
+     根因（比原判断更根本）：`__slash` 是**插在两块 seg 之间的独立 flex 项**，
+     而整组的 `background: var(--fg)`（近黑）铺满全宽 ⇒ 两块之间那段「间隙」露出的
+     就是这层黑底 ⇒ 看起来像「两个图标中间夹了一块黑」。
+     ❌ 而不是原以为的「padding 撑出的黑边框」（padding 已归零，黑块依旧）。
+     ⇒ 正解：**组不再铺底色**；把墨底收进 `__slash` 自己身上（`background: var(--fg)`），
+        只在斜杠脚下留一小条，不再横贯整组。 */
+  background: transparent;
+  border-radius: var(--radius-group-pad);
+  padding: 0;
+}
+/* 单码段：**不加墨底**（保持纯色块 + 自身圆角），只在斜切时代码里保证完整包裹 */
+.route-stack__group:not(.route-stack__group--multi) {
+  border-radius: var(--radius-chip);
+  overflow: hidden;
 }
 /* ★ 组内禁用旧斜切（§G.3 反例：斜切梯形）；码回归干净的圆角矩形 */
 .route-stack__group .route-stack__seg {
@@ -3076,14 +3120,43 @@ button[aria-disabled="true"] {
   padding: 3px 8px;
   font-size: 12px;
 }
-/* 白斜杠：左右各留 2px，避免与色块糊连（§G.3） */
+/* ★ v2.4.0 修②：组内相邻色块的**内侧圆角磨圆、不对齐**。
+   原做法是内侧 0（直角）⇒ 拼缝两侧是方角，用户看到的「圆角异常」。
+   改为较小的 `--radius-chip-inner`(3px)：拼缝过磨不掉内容，两端外角仍是 6px，
+   ⇒ 整组看起来是靠内的一条圆角胶囊，而不是几个方角硬拼。 */
+.route-stack__group .route-stack__seg:not(:first-child) {
+  border-top-left-radius: var(--radius-chip-inner);
+  border-bottom-left-radius: var(--radius-chip-inner);
+}
+.route-stack__group .route-stack__seg:not(:last-child) {
+  border-top-right-radius: var(--radius-chip-inner);
+  border-bottom-right-radius: var(--radius-chip-inner);
+}
+/* 白斜杠：左右各留 3px（§G.3）；
+   ★★ v2.4.0 最终修法（三轮迭代，每轮都靠真浏览器截图核对）：
+     用户诉求 = 「两块彩色码 + 一个白色斜杠」，**不要任何黑块**。
+     ❌ 第 1 轮：留 `padding:3px` → 黑框；
+     ❌ 第 2 轮：padding 归零，但**整组**仍铺 `var(--fg)` → 两码之间的间隙露黑；
+     ❌ 第 3 轮：墨底收进斜杠自身 → 变成「两码之间一个黑色方块」，仍是黑底；
+     ✅ 第 4 轮（本版）：**彻底不要墨底**（组与斜杠均 `transparent`）。
+        斜杠 = 纯白字符 + **不透明描边**（4 方向 1px 黑 + 1px 下方投影）；
+        无论坐在白卡、灰底还是彩色码旁，都清晰可见，且不产生任何黑块。
+        ⇒ 与 §G.2「整体套墨色组胶囊」原设计意图**有意偏离**：
+          那个胶囊在「块间用斜切留白」的旧形态下才需要（斜切处是连通的），
+          现在两码已是**独立的圆角矩形**，墨底只会变成脏块。 */
 .route-stack__slash {
   color: #fff;
-  opacity: 0.92;
+  opacity: 1;
   font-weight: 700;
   font-size: 12px;
   line-height: 1;
-  padding: 0 2px;
+  padding: 0 3px;
+  background: transparent;
+  text-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.85),
+    -1px 0 1px rgba(0, 0, 0, 0.7),
+    1px 0 1px rgba(0, 0, 0, 0.7),
+    0 -1px 1px rgba(0, 0, 0, 0.7);
 }
 /* 段间「换乘箭头」：粗一档 + muted，两侧留 --space-2(8px)（§G.4） */
 .route-stack__arrow {
@@ -3675,3 +3748,177 @@ button[aria-disabled="true"] {
 
 
 
+
+/* ══════════════════════════════════════════════════════════════════════════
+   ★ v2.4.0：收藏「组合 → 路线」两级（2026-09-21）
+   组合（父）= 一对起终点；路线（子）= 同起点终点下的一条走法。
+   本段 = ① 右上角「已存路线」清单 ② 路线流程图与就地步行编辑
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── ① 已存路线清单（右上角工具按钮展开）── */
+.rl-sheet {
+  margin-top: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--surface-2);
+}
+.rl-sheet__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+.rl-sheet__title {
+  font-size: var(--text-md);
+  font-weight: var(--fw-emphasize);
+  color: var(--fg);
+}
+.rl-sheet__count {
+  letter-spacing: var(--tracking-label);
+}
+.rl-sheet__empty {
+  padding: var(--space-2) 0;
+}
+.rl-sheet__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.rl-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-chip);
+  background: var(--surface);
+  text-align: left;
+  cursor: pointer;
+}
+.rl-item:hover {
+  border-color: var(--border-strong);
+}
+/* 当前正在看流程图的那条 → 高亮 */
+.rl-item--on {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.rl-item__routes {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+}
+.rl-item__meta {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rl-item__go {
+  flex: none;
+  color: var(--muted);
+}
+/* 清单按钮激活态（顶栏） */
+.editor-bar .btn.is-on {
+  color: var(--accent);
+}
+
+/* ── ② 路线流程图（复用 .combo-flow 骨架，补本场景专属件）── */
+.rf {
+  margin-top: var(--space-2);
+}
+.rf__title {
+  margin-bottom: var(--space-1);
+}
+.rf__flow {
+  margin-top: 0;
+}
+/* 乘车节点：占一行，圆点取线路色 */
+.combo-node--ride .combo-node__body {
+  gap: 2px;
+}
+.combo-node__sub {
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+/* 步行段：本场景**只读呈现 + 就地编辑**，故去掉编辑器的字段区样式影响 */
+.combo-seg--walk {
+  border-style: solid;
+}
+/* 步行耗时按钮（流程图旁，§「自定义打在路线上、UI 在流程图旁」） */
+.rf-walk-btn {
+  flex: none;
+  padding: 2px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-chip);
+  background: var(--surface);
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+  font-weight: var(--fw-emphasize);
+  cursor: pointer;
+}
+.rf-walk-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+/* 已被用户手改过 → 实色标记（灰度语义：灰=系统给，实色=你定的） */
+.rf-walk-btn--on {
+  border-color: var(--accent);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.rf-tag {
+  flex: none;
+  color: var(--accent);
+  letter-spacing: var(--tracking-label);
+}
+/* 就地编辑器 */
+.rf-editor {
+  margin-top: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-chip);
+  background: var(--surface-2);
+}
+.rf-editor__title {
+  margin-bottom: 6px;
+}
+.rf-editor__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.rf-editor__inp {
+  width: 96px;
+}
+.rf-editor__hint {
+  margin-top: 6px;
+}
+.rf-editor__acts {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+/* 流程图上方「回到实时方案」条 */
+.rl-back {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+/* 历史记录的按钮组 */
+.combo-snap__acts {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}

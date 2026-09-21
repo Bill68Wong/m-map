@@ -13,7 +13,7 @@ import { useCallback, useEffect, useState } from "react";
 import RecommendCards from "@/components/RecommendCards";
 import FavoriteButton from "@/components/favorites/FavoriteButton";
 import { endpointOf } from "@/lib/favorites/types";
-import { snapshotOfCard } from "@/lib/favorites/snapshot";
+import { snapshotOfCard, routeSegsOfCard } from "@/lib/favorites/snapshot";
 import { takeNavNotice } from "@/lib/nav/nav-notice";
 import type { RecommendCard } from "@/lib/recommend/types";
 import type { NavPoint } from "@/lib/nav/types";
@@ -147,6 +147,7 @@ export default function NavResultClient({ query, initial, origin, dest }: NavRes
                 query={query}
                 fingerprint={snap.fingerprint}
                 snapshot={snap}
+                route={routeSegsOfCard(card)}
               />
             );
           }}
