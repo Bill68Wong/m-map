@@ -20,7 +20,7 @@
  *       调研：docs/调研-全澳导航-高德API能力-20260918.md §C、§6。
  */
 import { haversineM } from "./coord";
-import { acquireToken, RATE_BUCKET } from "./rate-limit";
+import { acquireToken, RATE_BUCKET, type RateDecision } from "./rate-limit";
 import { normalizeName } from "@/lib/shared/normalize";
 import type { PoiKind, PoiSearchResult } from "@/lib/nav/types";
 
@@ -128,7 +128,16 @@ export async function inputtips(
   keywords: string,
   opts: InputTipsOptions = {},
 ): Promise<PoiFetchResult<AmapTip>> {
-  const token = await acquireToken(RATE_BUCKET.search);
+  // ★ 搜索优化（2026-09-21）：本函数契约是「**失败不抛错**」—— 限速组件自身异常也必须兜住。
+  //   背景（实测事故）：生产库被平台置只读时，取令牌的 INSERT 会失败；修前它一路冒泡，
+  //   直接让「点搜索」整体不可用。`rate-limit.ts` 已改为 fail-open，此处再加一层防御。
+  let token: RateDecision;
+  try {
+    token = await acquireToken(RATE_BUCKET.search);
+  } catch (e) {
+    console.warn("[poi] 取令牌异常，放行本次调用：", (e as Error).message);
+    token = { ok: true, tokensLeft: null };
+  }
   if (!token.ok) return { ok: false, items: [], error: "rate_limited" };
 
   const params = new URLSearchParams({
@@ -179,7 +188,16 @@ export async function placeText(
   keywords: string,
   opts: PlaceTextOptions = {},
 ): Promise<PoiFetchResult<AmapPoi>> {
-  const token = await acquireToken(RATE_BUCKET.search);
+  // ★ 搜索优化（2026-09-21）：本函数契约是「**失败不抛错**」—— 限速组件自身异常也必须兜住。
+  //   背景（实测事故）：生产库被平台置只读时，取令牌的 INSERT 会失败；修前它一路冒泡，
+  //   直接让「点搜索」整体不可用。`rate-limit.ts` 已改为 fail-open，此处再加一层防御。
+  let token: RateDecision;
+  try {
+    token = await acquireToken(RATE_BUCKET.search);
+  } catch (e) {
+    console.warn("[poi] 取令牌异常，放行本次调用：", (e as Error).message);
+    token = { ok: true, tokensLeft: null };
+  }
   if (!token.ok) return { ok: false, items: [], error: "rate_limited" };
 
   const offset = Math.min(MAX_OFFSET, Math.max(1, opts.offset ?? 20));

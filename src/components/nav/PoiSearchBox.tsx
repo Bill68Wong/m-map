@@ -3,14 +3,17 @@
 /**
  * POI 搜索框（src/components/nav/PoiSearchBox.tsx，v1.3.0 · T04；v2.0.1 改「搜索按钮」交互）
  *
- * ── 两段式搜索（设计 §2.A.6 / R5，产品已定）────────────────────────────
+ * ── 两段式搜索（设计 §2.A.6 / R5 · ★ 搜索优化 2026-09-21 修订）──────────
  *   · **打字**（防抖 300ms）→ `/api/poi/suggest?mode=type` —— **本地别名库，0 配额**、秒回；
- *   · **点【搜索】按钮** → `/api/poi/suggest?mode=enter` —— 本地优先，本地无坐标命中才调高德。
+ *     下拉候选**只有巴士站 / 轻轨站**（服务端已过滤线路名与地点类，见 `suggestLocal`）。
+ *   · **点【搜索】按钮** → `/api/poi/suggest?mode=enter` —— **总是**调高德，
+ *     与本地结果合并返回（旧版「本地已有命中就短路」已废止，见 `poi-search.ts` 文件头）。
  *   ★ 【7②】v2.0.1：**主入口从「回车」改为「输入框右侧的搜索按钮」**（产品口径）。
  *     键盘 Enter **仍可用**（对桌面端友好），但按钮是显式入口。
  *
  * ── 结果呈现（★【7①】v2.0.1）──────────────────────────────────────────
  *   · 每条结果标**类型徽章**：「公交站」/「轻轨站」/「地点」——让用户知道这是**站点**而非想去的地点；
+ *     ⚠️ 「地点」徽章现在只出现在**点搜索后的高德结果**里（打字阶段的下拉已不含地点类候选）；
  *   · 巴士站名带**站编号**（`M1 關閘總站`）；
  *   · 界面文案一律**简体**；站名/线路名保留繁体原文。
  *
@@ -242,8 +245,11 @@ export default function PoiSearchBox({
               onClick={() => pickPending(p.name)}
               title="点「搜索」用高德确认坐标"
             >
-              {/* ★ §11.6：线路候选用主题色标签（单条 → `.route-stack` 也接受单块） */}
-              <span className="nav-sbox__type nav-sbox__type--poi">地点</span>
+              {/* ★ 搜索优化（2026-09-21）：pending 现在只可能是「无坐标的站点」
+                  ⇒ 徽章按真实类型渲染，不再硬编码「地点」 */}
+              <span className={`nav-sbox__type nav-sbox__type--${p.targetKind}`}>
+                {TYPE_LABEL[p.targetKind as PoiKind] ?? "站点"}
+              </span>
               {p.targetKind === "route" ? (
                 <RouteStack codes={[p.name]} colorOf={(c) => colors?.[c] ?? null} />
               ) : (

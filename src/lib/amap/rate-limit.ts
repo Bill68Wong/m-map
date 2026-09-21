@@ -45,6 +45,25 @@ export interface RateDecision {
   tokensLeft: number | null;
 }
 
+/**
+ * ★ 搜索优化（2026-09-21）：限速组件「自愈熔断」窗口。
+ *
+ * 一旦发现桶表写不了（典型：生产库被平台置为只读），在 `BROKEN_TTL_MS` 内**直接放行**，
+ * 不再让每个请求都去撞一次注定失败的 DB 往返（既慢又刷错误日志）。
+ * ⚠️ 只影响「限速」，**不影响业务正确性** —— 见 `acquireToken()` catch 分支的长注释。
+ */
+const BROKEN_TTL_MS = 60_000;
+let brokenUntil = 0;
+
+function markRateLimiterBroken(): void {
+  brokenUntil = Date.now() + BROKEN_TTL_MS;
+}
+
+/** 桶表当前是否已知不可写（窗口内） */
+function rateLimiterBroken(): boolean {
+  return Date.now() < brokenUntil;
+}
+
 /** 纯函数：按经过时间回填令牌（可单测；与 SQL 里的 LEAST 表达式同一口径） */
 export function refillTokens(
   tokens: number,
@@ -69,6 +88,9 @@ export async function acquireToken(
   qps: number = AMAP_QPS,
   capacity: number = AMAP_BUCKET_CAPACITY,
 ): Promise<RateDecision> {
+  // ★ 已知桶表不可写（如库被置只读）⇒ 直接放行，省掉一次注定失败的 DB 往返
+  if (rateLimiterBroken()) return { ok: true, tokensLeft: null };
+
   const pool = getPool();
   const c = await pool.connect();
   try {
@@ -104,7 +126,20 @@ export async function acquireToken(
     return { ok: (r.rowCount ?? 0) > 0, tokensLeft: left };
   } catch (e) {
     await c.query("ROLLBACK").catch(() => undefined);
-    throw e;
+    // ★ 搜索优化（2026-09-21）：限速组件故障 ⇒ **保守放行（fail-open）**，绝不拖垮业务功能。
+    //
+    //   为什么必须这样（实测事故）：2026-09-21 生产库被平台置为只读
+    //   （`default_transaction_read_only = on`）⇒ 上面那条 `INSERT INTO amap_rate_bucket`
+    //   必然失败 ⇒ 修改前这里 `throw e`，异常一路冒泡：
+    //     acquireToken → placeText()/inputtips() → searchAmap() → suggest()
+    //   ⇒ **整个 POI 搜索不可用** —— 用户点「搜索」什么也拿不到（正是产品反馈的现象）。
+    //
+    //   原则：令牌桶是**限速优化**，不是**安全边界**。即使真的超速，高德也只会返回限流错误
+    //   （我们本来就有兜底），为「限速读不到」而让搜索整体挂掉，得不偿失。
+    //   先例：`src/lib/nav/quota.ts#circuitState()` 读不到用量时同样「保守放行」。
+    markRateLimiterBroken();
+    console.warn("[rate-limit] acquireToken 失败，本次放行（fail-open）：", (e as Error).message);
+    return { ok: true, tokensLeft: null };
   } finally {
     c.release();
   }

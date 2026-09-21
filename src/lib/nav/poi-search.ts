@@ -1,16 +1,22 @@
 /**
  * 两段式 POI 搜索（src/lib/nav/poi-search.ts，v1.3.0 · T02）
  *
- * ── 交互口径（设计 §2.A.6，产品 2026-09-18 拍板 = 方案 A）────────────────
+ * ── 交互口径（设计 §2.A.6 · ★ 搜索优化 2026-09-21 修订）─────────────────
  *   · **打字阶段 `suggestLocal()`** —— **只查本地别名库**（`alias-resolve`），
  *     **0 高德配额**、秒回；**绝不发任何高德请求** ✗。
- *   · **回车阶段 `searchAmap()`** —— 才调高德（`place/text` 正式搜索，必要时 `inputtips`
- *     兜底）——这是**唯一**消耗搜索配额（5,000/月，静默超限）的时机。
- *   ⇒ `suggest()` 按 `mode` 分派：`type` 纯本地 / `enter` 本地优先 + 高德兜底。
+ *     ★ 候选**只保留巴士站 / 轻轨站**（`station` / `lrt_station`）——
+ *       线路名、地点（place）、泛 POI 一律不进下拉（理由见 `suggestLocal` 内注释）。
+ *   · **点「搜索」/回车阶段 `searchAmap()`** —— **无条件**调高德
+ *     （`place/text` 正式搜索，必要时 `inputtips` 兜底）——这是**唯一**消耗搜索配额
+ *     （5,000/月，静默超限）的时机。
+ *     ★ 2026-09-21 修订：旧实现「本地已有带坐标命中就短路、不调高德」⇒
+ *       用户点搜索常表现为**无反应**（输入与站点名相同/部分重合时必然如此）。
+ *       现已改为**总是联网**，与本地结果合并排序。
+ *   ⇒ `suggest()` 按 `mode` 分派：`type` 纯本地（0 配额）/ `enter` **总是** 本地 + 高德合并。
  *
- * ── 已知取舍（方案 A 的固有代价，**不是 bug**）─────────────────────────
+ * ── 已知取舍（**不是 bug**）─────────────────────────────────────────────
  *   **打字时看不到「新地名」的提示** —— 逐字阶段不联网。用户输入本地库没有的新地名时，
- *   下拉区不会有候选，**直到按回车**才去高德搜。产品文案/引导需说明（§2.A.6）。
+ *   下拉区不会有候选，**直到点「搜索」**才去高德搜（§2.A.6）。
  *   本地未命中且输入 ≥2 字符时，下拉区给一行**灰字**提示（见 `HINT_*` 常量）。
  *
  * ── adcode 过滤 + 本地排序（★ 必做）──────────────────────────────────
@@ -48,6 +54,11 @@ import { circuitState, recordSearchCall } from "./quota";
 export const HINT_NO_LOCAL_ENTER = "没有本地结果 · 点「搜索」查找网上的新地点";
 /** 高德也无结果时的行内提示（简体；同产品总原则） */
 export const HINT_AMAP_EMPTY = "找不到这个地点，试试换个说法";
+/**
+ * ★ 搜索优化（2026-09-21）：**搜索配额熔断中**（高德兜底已停）的行内提示。
+ * 为什么必须有它：熔断时点「搜索」拿不到任何网上结果，若不告知，用户只会觉得「搜索坏了」。
+ */
+export const HINT_AMAP_CIRCUIT = "在线搜索暂时不可用（本月配额已满）· 仍可搜本地站名";
 
 export interface SuggestOptions {
   /** 用户当前位置（GCJ-02）——用于近者优先排序 */
@@ -113,11 +124,15 @@ export async function suggestLocal(query: string, opts: SuggestOptions = {}): Pr
       ? `${m.targetKind}|${mainCodeOf(m.targetCode)}`
       : `${m.targetKind}|${m.nameTc}`;
   for (const m of matches) {
-    // ★ 【7①】本地**结果**只保留「可用于出行的点」：巴士站 / 轻轨站 / 已知地点（校内部位、口岸）。
-    //   **线路名（targetKind='route'）一律不列为结果** ——
-    //   它不是一个「想去的地点」，且导致「输入 25 就返回 25 路巴士」的困惑（产品实测）；
-    //   线路名只在「按乘车的行内文案」里用 `.route-stack` 出现，不进搜索候选。
-    if (m.targetKind === "route") continue;
+    // ★ 搜索优化（2026-09-21，产品口径）：下拉候选**只允许巴士站 / 轻轨站** ——
+    //   线路名（`route`）、已知地点（`place`，如校内部位/口岸）、泛 POI（`poi`）**一律不进下拉**。
+    //   理由：
+    //     ① 线路名不是「想去的地点」，且造成「输入 25 就返回 25 路巴士」的困惑（产品实测）；
+    //     ② 泛 POI 会带来**同名歧义** —— 实测「大三巴」会命中媽閣站旁 445m 的**同名餐厅**
+    //        （「大三巴美食」）：终点被带到离大三巴牌坊 1.5km 处，做出「媽閣站下车步行数分钟」
+    //        的假方案 ⇒ 用户在到达前 1.5km 就以为快到了 ✗；
+    //     ③ 非站点目的地（大学 / 口岸 / 景区…）交给**高德**：用户点「搜索」时联网返回。
+    if (m.targetKind !== "station" && m.targetKind !== "lrt_station") continue;
     const dk = dedupKey(m);
     if (seen.has(dk)) continue;
     const r = aliasToResult(m, { userPos: opts.userPos });
@@ -184,31 +199,41 @@ export async function searchAmap(query: string, opts: SuggestOptions = {}): Prom
     void recordSearchCall(api, ok, infocode, latencyMs);
   };
 
-  // ① 正式搜索
-  const text = await placeText(query, {
-    city: ADCODE_MACAU,
-    citylimit: true,
-    offset: 20,
-    onCall,
-  });
-  let results = text.ok
-    ? poisToResults(text.items, { source: "amap-text", userPos: opts.userPos, macauOnly: true, query })
-    : [];
+  // ★ 搜索优化（2026-09-21）：本函数契约是「失败 / 熔断**不抛错**，收敛为空结果」。
+  //   实测事故：限速组件在「生产库被置只读」时抛错（见 `rate-limit.ts` 的长注释），
+  //   异常冒到 API 层后，用户看到的是**误导性**的「找不到这个地点」。
+  //   此处兜住所有底层异常 ⇒ 至少不会伪装成「搜不到」。
+  let results: PoiSearchResult[] = [];
+  try {
+    // ① 正式搜索
+    const text = await placeText(query, {
+      city: ADCODE_MACAU,
+      citylimit: true,
+      offset: 20,
+      onCall,
+    });
+    results = text.ok
+      ? poisToResults(text.items, { source: "amap-text", userPos: opts.userPos, macauOnly: true, query })
+      : [];
 
-  // ② 无结果时用 inputtips 补一次（设计：「必要时 inputtips」）
-  if (!results.length) {
-    const st2 = await circuitState();
-    if (!st2.open) {
-      const tips = await inputtips(query, {
-        city: ADCODE_MACAU,
-        citylimit: true,
-        location: opts.userPos,
-        onCall,
-      });
-      if (tips.ok) {
-        results = tipsToResults(tips.items, { source: "amap-inputtips", userPos: opts.userPos, macauOnly: true, query });
+    // ② 无结果时用 inputtips 补一次（设计：「必要时 inputtips」）
+    if (!results.length) {
+      const st2 = await circuitState();
+      if (!st2.open) {
+        const tips = await inputtips(query, {
+          city: ADCODE_MACAU,
+          citylimit: true,
+          location: opts.userPos,
+          onCall,
+        });
+        if (tips.ok) {
+          results = tipsToResults(tips.items, { source: "amap-inputtips", userPos: opts.userPos, macauOnly: true, query });
+        }
       }
     }
+  } catch (e) {
+    console.warn("[poi-search] searchAmap 底层异常（已收敛为空结果）：", (e as Error).message);
+    results = [];
   }
 
   results = filterMacau(results).sort((a, b) => b.score - a.score);
@@ -250,35 +275,32 @@ export async function suggest(
     return resp;
   }
 
-  // ── ★ B7：强制高德（跳过本地短路）──
-  if (opts.forceAmap) {
-    const forced = await searchAmap(trimmed, opts);
-    resp.amapCircuitOpen = forced.circuitOpen;
-    resp.quotaConsumed = forced.quotaConsumed;
-    if (forced.results.length) {
-      // 高德结果**置前**（调用方要的就是它），本地结果保留在后但不再遮挡；
-      // 同名 pending 行已由高德给出坐标 → 移出 pending，避免下拉里再出现一行「点搜索确认」。
-      resp.results = [...forced.results, ...local.results];
-      resp.pending = local.pending.filter((p) => !forced.results.some((r) => r.name === p.name));
-    } else {
-      resp.hint = "amap_empty";
-      resp.hintText = HINT_AMAP_EMPTY;
-    }
-    return resp;
-  }
-
-  // ── 回车：本地已有「带坐标」命中 → 直接用，**不消耗配额** ──
-  if (local.results.length) return resp;
-
-  // ── 本地无带坐标命中 → 高德兜底（唯一消耗配额的时机）──
+  // ── 点「搜索」/回车阶段：★ **总是**去高德（搜索优化 2026-09-21）──────────
+  //   旧逻辑有两条同源缺陷，都会让用户「点了搜索却像没反应」：
+  //     ① `if (local.results.length) return resp;` —— 本地只要有一条带坐标命中，
+  //        就**永不调高德**，用户点了搜索也拿不到网上的新结果（需求 ②）；
+  //     ② 输入与站点名**相同或部分重合**时本地必然命中 ⇒ 同样短路，
+  //        表现为「联网搜索不可用」（需求 ③）。
+  //   现改为：enter 阶段**无条件**走一次高德，与本地结果合并后按分数排序。
+  //   ⚠️ 打字阶段（`mode="type"`）仍严格 0 配额 —— 配额只在用户**显式点搜索**时消耗（设计 §2.A.6）。
+  //   `opts.forceAmap` 入参保留（向后兼容：其语义已被「enter 总是联网」吸收）。
+  void opts.forceAmap;
   const amap = await searchAmap(trimmed, opts);
   resp.amapCircuitOpen = amap.circuitOpen;
   resp.quotaConsumed = amap.quotaConsumed;
+
   if (amap.results.length) {
     resp.results = [...local.results, ...amap.results].sort((a, b) => b.score - a.score);
-  } else {
-    resp.hint = "amap_empty";
-    resp.hintText = HINT_AMAP_EMPTY;
+    // 同名 pending 行已由高德给出坐标 → 移出 pending，避免下拉里再出现一行「点搜索确认」
+    resp.pending = local.pending.filter((p) => !amap.results.some((r) => r.name === p.name));
+  } else if (!local.results.length) {
+    // 高德**空**、且本地也空 ⇒ 才报「找不到」；本地有命中时静默保留本地结果
+    resp.hint = amap.circuitOpen ? "amap_circuit" : "amap_empty";
+    resp.hintText = amap.circuitOpen ? HINT_AMAP_CIRCUIT : HINT_AMAP_EMPTY;
+  } else if (amap.circuitOpen) {
+    // 本地有结果、但高德被熔断 ⇒ 明说「在线搜索暂不可用」，避免用户以为搜索坏了
+    resp.hint = "amap_circuit";
+    resp.hintText = HINT_AMAP_CIRCUIT;
   }
   return resp;
 }
