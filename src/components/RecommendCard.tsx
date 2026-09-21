@@ -43,7 +43,7 @@ export default function RecommendCard({
   colors: Record<string, string>;
   /** 开发者模式：仅影响右上角绿点（「进详情页后能開計時」） */
   devMode: boolean;
-  /** 澳科大座区 */
+  /** 澳门科技大学座区 */
   zone: SchoolZone | null;
   /** 名次（1 起） */
   rank: number;

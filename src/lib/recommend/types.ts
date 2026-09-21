@@ -5,10 +5,10 @@
  *    （`RecommendCard` 等视图类型要传到客户端渲染）。服务端查询见 ./query.ts。
  */
 
-/** 澳科大校区（步行分组上下文；仅 school 侧有意义） */
+/** 澳门科技大学校区（步行分组上下文；仅 school 侧有意义） */
 export type SchoolZone = "B/C" | "N/O" | "R";
 
-/** 澳科大三座区（默认 N/O） */
+/** 澳门科技大学三座区（默认 N/O） */
 export const SCHOOL_ZONES: { value: SchoolZone; label: string }[] = [
   { value: "B/C", label: "B/C 座" },
   { value: "N/O", label: "N/O 座" },

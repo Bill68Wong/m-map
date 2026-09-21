@@ -23,7 +23,7 @@ import { parseNavParams } from "@/lib/nav/nav-params";
 import { planNav } from "@/lib/nav/nav-service";
 import { buildStrips } from "@/lib/nav/strips";
 import { endpointOf } from "@/lib/favorites/types";
-import { snapshotOfCard } from "@/lib/favorites/snapshot";
+import { snapshotOfCard, routeSegsOfCard } from "@/lib/favorites/snapshot";
 import { rangeText } from "@/lib/recommend/catch-up";
 import { fetchStationLive } from "@/lib/recommend/live";
 import { loadStatics, type RecStatic } from "@/lib/recommend/query";
@@ -116,6 +116,8 @@ async function DetailSection({
   const foldLive = lastAlightMain ? await foldLiveAt(pool, st, lastAlightMain, otherRoutes, result.generatedAt) : {};
   // ★ S5：本方案可用于收藏（存 query + fingerprint，不落 planId）
   const favSnap = snapshotOfCard(card);
+  // ★ v2.4.0：连流程图结构一起存（收藏页可画纵向流程图）
+  const favRoute = routeSegsOfCard(card);
 
   return (
     <>
@@ -140,6 +142,7 @@ async function DetailSection({
           query={query}
           fingerprint={favSnap.fingerprint}
           snapshot={favSnap}
+          route={favRoute}
           withLabel
         />
       </div>

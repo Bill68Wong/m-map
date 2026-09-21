@@ -45,7 +45,7 @@
  *
  *   ★ 结论：**保留本条 ①「首段赶不上 → 整条剔除」不动**；「后续车次」一律走 `altBuses`。
  *
- * ⚠️ zone（澳科大座区）判据是 `slug === "school"`，**与方向无关** ——
+ * ⚠️ zone（澳门科技大学座区）判据是 `slug === "school"`，**与方向无关** ——
  *    去程的 `walkIn` 与回程的 `walkOut` 都会吃到它（`walk_times` 本来就是
  *    `(place, 站主码, zone)` 合并键、不分出发/到达）。
  *
@@ -228,7 +228,7 @@ export interface ModelContext {
   placeIds: Record<string, number>;
   /** 站码 → 显示名（巴士带站号前缀） */
   nameOf: Map<string, string>;
-  /** 澳科大座区（★ 只要**任一侧**是 school 就生效，与出发/到达方向无关） */
+  /** 澳门科技大学座区（★ 只要**任一侧**是 school 就生效，与出发/到达方向无关） */
   zone: SchoolZone | null;
   /** route → 实时视图 */
   live: Map<string, RouteLive>;
@@ -325,7 +325,7 @@ function walkView(ctx: ModelContext, slug: string, station: string, dir: "out" |
 
 /** place 展示名：学校侧带上座区（起点/终点都用它，保证两个方向都能看到座区） */
 function placeLabelOf(ctx: ModelContext, slug: string): string {
-  if (slug === "school" && ctx.zone) return `澳科大（${ctx.zone} 座）`;
+  if (slug === "school" && ctx.zone) return `澳门科技大学（${ctx.zone} 座）`;
   return PLACE_SHORT[slug] ?? slug;
 }
 
@@ -558,7 +558,7 @@ export function modelOption(seed: OptionSeed, ctx: ModelContext): ModeledOption 
   const hints: string[] = [];
   hints.push(
     seed.fromSlug === "school" && ctx.zone
-      ? `从澳科大（${ctx.zone} 座）步行出发，在 ${labelOf(ctx, first.board)} 上车，乘 ${first.route}`
+      ? `从澳门科技大学（${ctx.zone} 座）步行出发，在 ${labelOf(ctx, first.board)} 上车，乘 ${first.route}`
       : `在 ${labelOf(ctx, first.board)} 上车，乘 ${first.route}`,
   );
   for (let i = 0; i + 1 < segs.length; i++) {

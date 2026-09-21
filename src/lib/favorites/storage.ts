@@ -39,6 +39,9 @@ import {
   type PlaceFavorite,
   type PlanFavorite,
   type PlanSnapshot,
+  type RouteSeg,
+  type RouteWalkOv,
+  type RouteWalkOverrides,
 } from "./types";
 
 /** 存储键（Spec §4 锁定；带版本后缀，便于未来迁移） */
@@ -299,6 +302,83 @@ export function emptyFileV2(): FavoritesFileV2 {
 }
 
 const CHAIN_KINDS = new Set<string>(["board", "transfer", "alight"]);
+const SEG_KINDS = new Set<string>(["walk", "ride", "transfer", "border"]);
+
+/** 单个步行覆盖校验（越界项丢字段，不废整条） */
+function sanitizeWalkOv(raw: unknown): RouteWalkOv | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const r = raw as Record<string, unknown>;
+  const ov: RouteWalkOv = {};
+  if (typeof r.distanceM === "number" && Number.isFinite(r.distanceM) && r.distanceM >= 0 && r.distanceM <= 20000) {
+    ov.distanceM = r.distanceM;
+  }
+  if (typeof r.minutes === "number" && Number.isFinite(r.minutes) && r.minutes >= 0 && r.minutes <= 180) {
+    ov.minutes = r.minutes;
+  }
+  if (typeof r.link === "boolean") ov.link = r.link;
+  return Object.keys(ov).length ? ov : undefined;
+}
+
+/** 路线级步行覆盖表校验（坏键静默剔除） */
+function sanitizeWalkOvMap(raw: unknown): RouteWalkOverrides | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const out: RouteWalkOverrides = {};
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (!k.includes("::") || !k.includes("->")) continue; // 必须形如 `<comboId>::<from>-><to>`
+    const ov = sanitizeWalkOv(v);
+    if (ov) out[k] = ov;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+/**
+ * ★ v2.4.0：路线流程图结构校验。
+ * 坏段**逐段丢弃**（不废整条路线）——流程图允许残缺（缺段只是少画一个节点）。
+ */
+function sanitizeRouteSegs(raw: unknown): RouteSeg[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: RouteSeg[] = [];
+  for (const it of raw) {
+    if (!it || typeof it !== "object" || Array.isArray(it)) continue;
+    const r = it as Record<string, unknown>;
+    const kind = String(r.kind ?? "");
+    if (!SEG_KINDS.has(kind)) continue;
+    const seg: RouteSeg = { kind: kind as RouteSeg["kind"] };
+    const str = (v: unknown): string | undefined => (typeof v === "string" && v.trim() ? v : undefined);
+    const code = str(r.code);
+    if (code) seg.code = code;
+    const label = str(r.label);
+    if (label) seg.label = label;
+    const route = str(r.route);
+    if (route) seg.route = route;
+    if (Array.isArray(r.routes)) {
+      const rs = r.routes.filter((x): x is string => typeof x === "string" && !!x.trim());
+      if (rs.length) seg.routes = rs;
+    }
+    const board = str(r.board);
+    if (board) seg.board = board;
+    const alight = str(r.alight);
+    if (alight) seg.alight = alight;
+    const boardLabel = str(r.boardLabel);
+    if (boardLabel) seg.boardLabel = boardLabel;
+    const alightLabel = str(r.alightLabel);
+    if (alightLabel) seg.alightLabel = alightLabel;
+    // ⚠️ 流程图的「乘车段」必须至少有上下车站，否则该段无意义（丢段）
+    if (seg.kind === "ride" && (!seg.board || !seg.alight)) continue;
+    // ⚠️ 「步行/换乘」必须有落点，否则画不出节点（丢段）
+    if ((seg.kind === "walk" || seg.kind === "transfer") && !seg.code && !seg.label) continue;
+    if (typeof r.hops === "number" && Number.isFinite(r.hops) && r.hops >= 0 && r.hops <= 200) {
+      seg.hops = Math.round(r.hops);
+    }
+    if (r.phase === "out" || r.phase === "in") seg.phase = r.phase;
+    if (typeof r.minutes === "number" && Number.isFinite(r.minutes) && r.minutes >= 0 && r.minutes <= 180) {
+      seg.minutes = r.minutes;
+    }
+    if (r.walkSrc === "measured" || r.walkSrc === "estimate") seg.walkSrc = r.walkSrc;
+    out.push(seg);
+  }
+  return out.length ? out : undefined;
+}
 
 /** 组合下方案校验（坏 → null） */
 function sanitizeComboPlan(raw: unknown, now: number): ComboPlan | null {
@@ -313,6 +393,10 @@ function sanitizeComboPlan(raw: unknown, now: number): ComboPlan | null {
     createdAt,
     updatedAt: typeof p.updatedAt === "number" && Number.isFinite(p.updatedAt) ? p.updatedAt : createdAt,
   };
+  const route = sanitizeRouteSegs(p.route);
+  if (route) out.route = route;
+  const walkOv = sanitizeWalkOvMap(p.walkOv);
+  if (walkOv) out.walkOv = walkOv;
   if (typeof p.note === "string" && p.note.trim()) out.note = p.note.slice(0, 40);
   if (p.pinned === true) out.pinned = true;
   return out;
@@ -550,24 +634,80 @@ export function migrateV1(v1: FavoritesFile): { ok: true; combos: Combo[] } | { 
 }
 
 /**
+ * ★ v2.4.0：判定「旧版遗留的**空壳**默认组合」。
+ *
+ * ── 为什么需要清理 ────────────────────────────────────────────────────
+ *   v2.3.x（`SEED_VERSION = 1`）生成的 6 个默认组合 **`plans` 恒为空数组**
+ *   （旧版只建组合、不填路线）⇒ 用户点进去**什么路线都看不到**。
+ *   v2.4.0 换成 **10 个带座区的新组合**（每个预置若干条路线）。新旧组合的
+ *   `name` 与端点坐标都不同 ⇒ `applySeed` 的「同名/同 query」双去重**不会合并它们**
+ *   ⇒ 老用户会看到「6 个空壳 + 10 个新的 = 16 个」。故在种子升级时顺手清掉空壳。
+ *
+ * ── 判定条件（★ 收得极紧，宁可漏删不可误删）────────────────────────────
+ *   必须**同时**满足：
+ *     · `isDefault === true` —— 系统生成的（用户自建组合此字段为 `undefined` ⇒ 永不命中）；
+ *     · `plans.length === 0` —— 里面一条路线都没有；
+ *     · 用户**没做过任何主动定制**（`pinned` / `disabled` / `nameEdited` 任一为真即放过）；
+ *     · 没有任何自定义编排（`chain` / `walk` / `tiers` 全空）。
+ *   ⇒ 只要用户在它身上动过一次（改名/置顶/停用/存路线/改步行），就**不再视为空壳**。
+ *
+ * ⚠️ **不把 `lastUsedAt` 纳入判定**：用户正是「点开过才发现里面是空的」，
+ *   纳入会导致该清理的反而清不掉。
+ */
+export function isEmptyLegacyDefault(c: Combo): boolean {
+  if (!c.isDefault) return false;
+  if (c.plans.length > 0) return false;
+  if (c.pinned || c.disabled || c.nameEdited) return false;
+  if (c.chain?.length) return false;
+  if (c.walk && (c.walk.seg1 || c.walk.seg2)) return false;
+  if (c.tiers && (c.tiers.speedMps || c.tiers.minutes)) return false;
+  return true;
+}
+
+/**
  * 默认组合种子注入（幂等，07 §1.4）。
- * 仅当 `file.seedVersion < version` 时，补「**同名不存在**」的默认组合，然后置位。
- * 用户删掉的默认组合**不再复活**（seedVersion 已置位）。
+ *
+ * 仅当 `file.seedVersion < version` 时执行，然后置位。用户删掉的默认组合**不再复活**。
+ *
+ * ★ v2.4.0 两段式：
+ *   · **路径 A**：清掉旧版遗留的空壳默认组合（`isEmptyLegacyDefault`）→ 再补新种子；
+ *   · **路径 B**：种子为空、或**清理量补不回来**时 ⇒ **放弃清理**，只做注入。
+ *
+ * 🚨 **净损失守卫**（为什么必须有两段式）：若清掉 6 个却只补回 4 个
+ *   （例如服务端只下发了部分地点的坐标 ⇒ `buildDefaultComboSeeds` 少生成两个组合），
+ *   用户就**净亏 2 个组合**。故要求 `add.length >= pruned`，否则**根本不清理** ——
+ *   宁可让用户多看几个空壳，也绝不让他的收藏变少。
  */
 export function applySeed(
   file: FavoritesFileV2,
   seeds: Combo[],
   version: number,
-): { file: FavoritesFileV2; added: number } {
+): { file: FavoritesFileV2; added: number; pruned: number } {
   const cur = file.seedVersion ?? 0;
-  if (cur >= version) return { file, added: 0 };
-  const names = new Set(file.combos.map((c) => c.name));
-  const queries = new Set(file.combos.map((c) => comboDedupeKey(c)));
-  const add = seeds.filter((s) => !names.has(s.name) && !queries.has(comboDedupeKey(s)));
-  return {
-    file: { ...file, seedVersion: version, updatedAt: Date.now(), combos: [...file.combos, ...add] },
-    added: add.length,
+  if (cur >= version) return { file, added: 0, pruned: 0 };
+
+  /** 给定基底，算出「同名/同 query 都不存在」的待注入种子 */
+  const pickAddable = (base: Combo[]) => {
+    const names = new Set(base.map((c) => c.name));
+    const queries = new Set(base.map((c) => comboDedupeKey(c)));
+    return seeds.filter((s) => !names.has(s.name) && !queries.has(comboDedupeKey(s)));
   };
+  const commit = (base: Combo[], add: Combo[], pruned: number) => ({
+    file: { ...file, seedVersion: version, updatedAt: Date.now(), combos: [...base, ...add] },
+    added: add.length,
+    pruned,
+  });
+
+  // ── 路径 A：清理旧空壳 + 补新种子 ──
+  if (seeds.length) {
+    const kept = file.combos.filter((c) => !isEmptyLegacyDefault(c));
+    const pruned = file.combos.length - kept.length;
+    const add = pickAddable(kept);
+    // ★ 净损失守卫：没得清（pruned=0）或补得回来（add >= pruned）才走这条路
+    if (pruned === 0 || add.length >= pruned) return commit(kept, add, pruned);
+  }
+  // ── 路径 B：放弃清理，只注入 ──
+  return commit(file.combos, pickAddable(file.combos), 0);
 }
 
 /**
