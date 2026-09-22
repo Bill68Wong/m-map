@@ -505,39 +505,44 @@ export default function NavMap({
     if (view.mode === "fit-two") {
       if (!origin || !dest) return;
       /**
-       * ★ 2026-09-22 修复「选完出发地后地图偏到澳门西边」。
+       * ★ 2026-09-22 二次修复「选完出发地后地图跑到珠海/西边」。
        *
-       * 原实现：`setFitView([originMarker, destMarker].filter(Boolean), …)`。
-       * 问题：取景**可能跑在两个 marker 都建好之前** —— 此时 `filter(Boolean)` 只剩一个
-       *   （甚至只剩 dest），`setFitView` 便会把**那一个点**当作全部内容来取景，
-       *   视野自然偏到一侧（实测表现为「往左拖、显示澳门西边」）✗
+       * 前一版用 `setFitView(overlays, …)` + 等 marker 就绪重试 —— **实测仍然失效**：
+       *   取景后 zoom 掉到最小值 11（= 一屏 27.6km），中心跑到珠海斗门/黄杨山一带 ✗
+       *   （`setFitView` 内部会参考 `setLimitBounds` 与遮罩范围，在这个「底图限制在澳门」
+       *     的场景下把视野撑到了极限。）
        *
-       * 现改为：**等两个 marker 都就绪再取景**（最多重试 3 次）；
-       *   仍不齐 ⇒ 退化为「按两点中点居中」（不依赖 marker，结果稳定）。
-       *   `immediately=true` 关掉动画，避免与后续的定位/取景互相打断。
+       * 现改为**完全自算**，不依赖任何 marker 或 fitView：
+       *   ① 中心 = 两点中点；
+       *   ② 由经纬跨度**反推 zoom**（留 2.2 倍余量），并**只用上半屏**的可用像素，
+       *      因为下半屏被面板遮住；
+       *   ③ `setZoomAndCenter(..., immediately=true)` 无动画落位，再 `panBy` 上移 1/4 屏，
+       *      使两点落在**上半屏中间**。
        */
-      const fitWithRetry = (attempt: number) => {
-        const ov = [originMarkerRef.current, destMarkerRef.current].filter(Boolean);
-        try {
-          if (ov.length >= 2) {
-            map.setFitView(ov, true, [80, 80, Math.round(winH / 2) + 48, 80]);
-            return;
-          }
-        } catch {
-          /* 落到兜底 */
-        }
-        if (attempt < 3) {
-          window.setTimeout(() => fitWithRetry(attempt + 1), 150);
-          return;
-        }
-        // 兜底：按两点中点居中（与 marker 是否就绪无关）
-        try {
-          map.setZoomAndCenter(15, [(origin.lng + dest.lng) / 2, (origin.lat + dest.lat) / 2], true);
-        } catch {
-          /* ignore */
-        }
-      };
-      fitWithRetry(0);
+      try {
+        const centerLat = (origin.lat + dest.lat) / 2;
+        const centerLng = (origin.lng + dest.lng) / 2;
+        const size = map.getSize?.() ?? { width: 390, height: 700 };
+        // 可用视野：宽留边 50px/侧；高只用上半屏（下部被面板盖住）再留 60px
+        const availW = Math.max(80, size.width - 100);
+        const availH = Math.max(80, Math.round(size.height / 2) - 60);
+        // 两点跨度 × 2.2（余量，避免贴边）
+        const lngSpan = Math.max(Math.abs(origin.lng - dest.lng) * 2.2, 1e-5);
+        const latSpan = Math.max(Math.abs(origin.lat - dest.lat) * 2.2, 1e-5);
+        const zx = Math.log2((360 * availW) / (256 * lngSpan));
+        const zy = Math.log2(
+          (360 * availH) / (256 * latSpan * Math.cos((centerLat * Math.PI) / 180)),
+        );
+        // 上限 16：两点很近时不要怼到街景级；下限 12：不要拉到看不出地理位置
+        const z = Math.max(12, Math.min(16, Math.floor(Math.min(zx, zy))));
+        map.setZoomAndCenter(z, [centerLng, centerLat], true);
+        // 上移 1/4 容器高：把两点从「整屏中心」推到「上半屏中心」
+        map.panBy(0, Math.round(size.height * 0.25));
+        canvasRef.current?.setAttribute("data-nav-zoom", String(z));
+        canvasRef.current?.setAttribute("data-view-mode", "fit-two-selfcalc");
+      } catch {
+        /* ignore */
+      }
     }
   }, [view, dest, origin, phase]);
 
