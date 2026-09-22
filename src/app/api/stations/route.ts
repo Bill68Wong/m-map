@@ -39,15 +39,24 @@ interface StationPoint {
   lng: number;
   /** 纬度（GCJ-02） */
   lat: number;
+  /** ★ 2026-09-22：载具种类 —— 前端据此区分巴士站 / 轻轨站（`include=lrt` 时才有轻轨行） */
+  kind: "bus" | "lrt";
 }
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
+    // ★ 2026-09-22：新增可选参数 `include=lrt`（含轻轨）。
+    //   为什么不默认带上：本接口原先被**首页地图站点图层**使用，口径是「只标巴士站」
+    //   （产品 2026-09-19 拍板）；直接改成含轻轨会**改变首页既有表现**。
+    //   ⇒ 用参数区分：首页不传（保持原样），导航页传 `include=lrt`（新需求：地图要有轻轨站）。
+    const includeLrt = new URL(req.url).searchParams.get("include") === "lrt";
+    const kinds = includeLrt ? `kind IN ('bus','lrt')` : `kind = 'bus'`;
+
     const pool = getPool();
     const res = await pool.query(
-      `SELECT code, name_tc, lat, lng
+      `SELECT code, name_tc, lat, lng, kind
          FROM stations
-        WHERE kind = 'bus' AND lat IS NOT NULL AND lng IS NOT NULL`,
+        WHERE ${kinds} AND lat IS NOT NULL AND lng IS NOT NULL`,
     );
 
     // 按【主码】去重（同站多站台合成一个点）；保留首个非空站名。
@@ -61,9 +70,10 @@ export async function GET() {
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
       const prev = byMain.get(main);
       const name = String(r.name_tc ?? "") || prev?.name || "";
+      const kind: "bus" | "lrt" = String(r.kind ?? "bus") === "lrt" ? "lrt" : "bus";
       // ★ WGS84 → GCJ-02（前端直接喂高德地图，不再转换）
       const gcj = wgs84ToGcj02({ lat, lng });
-      byMain.set(main, { code: main, name, lng: gcj.lng, lat: gcj.lat });
+      byMain.set(main, { code: main, name, lng: gcj.lng, lat: gcj.lat, kind });
     }
 
     const stations = [...byMain.values()].sort((a, b) => a.code.localeCompare(b.code));

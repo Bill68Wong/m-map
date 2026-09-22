@@ -56,9 +56,11 @@ const MAX_ZOOM = 18;
 
 /**
  * 站点图层显示阈值：`zoom < STATION_MIN_ZOOM` 时不显示任何站点（拉远即清空）。
- * ★ 沿用 v2.1.0 现网验证值，本次改版**不改**（避免回归）。
+ * ★ 2026-09-22：16 → **15**（用户反馈「要放得很大站点才显示出来」）。
+ *   为什么取 15 而不是更低：15 级时澳门半岛/氹仔的站点分布已可读且不糊；
+ *   再降到 14 会一次铺开全部站点、与街区细节叠在一起（用户明确要求「不能太小」）。
  */
-const STATION_MIN_ZOOM = 16;
+const STATION_MIN_ZOOM = 15;
 /** 视图事件节流（毫秒）：`zoomend`/`moveend` 高频触发，节流后再裁剪/渲染 */
 const STATION_REFRESH_THROTTLE_MS = 150;
 
@@ -83,6 +85,8 @@ export interface StationPointLite {
   name: string;
   lng: number;
   lat: number;
+  /** ★ 2026-09-22：载具种类（仅带 `include=lrt` 时轻轨行才出现；缺省视为巴士） */
+  kind?: "bus" | "lrt";
 }
 
 /** 让「一屏宽」横向放下 `TARGET_METERS_ACROSS` 米的 zoom（按纬度与容器像素宽实时算） */
@@ -261,11 +265,23 @@ export default function NavMap({
       amapRef.current = AMap;
       if (!canvasRef.current) return;
       // 先建图（放澳门中心，避免白屏）——边界就绪后再收敛视野。
+      // ★ 2026-09-22 交互手感优化（用户反馈「操作要更丝滑舒适」）：
+      //   · `rotateEnable:false` / `pitchEnable:false` —— 手机双指极易误触旋转与倾斜，
+      //     转歪之后用户很难掰回来；这是公交导航，本就不需要 3D 视角 ⇒ 直接禁掉。
+      //   · `keyboardEnable:false` —— 键盘方向键会平移地图，**与页面输入框抢按键**
+      //     （在搜索框里按方向键会莫名挪地图）；移动端也用不到键盘操作 ⇒ 禁掉。
+      //   · `animateEnable:true` / `jogEnable:true` —— 显式开启视图动画与惯性平移，
+      //     拖拽后带惯性滑行，手感更顺。
       const map = new AMap.Map(canvasRef.current, {
         zoom: INIT_ZOOM,
         center: [MACAU_CENTER.lng, MACAU_CENTER.lat],
         viewMode: "2D",
         resizeEnable: true,
+        rotateEnable: false,
+        pitchEnable: false,
+        keyboardEnable: false,
+        animateEnable: true,
+        jogEnable: true,
       });
       mapRef.current = map;
       setPhase("ready");
@@ -488,17 +504,40 @@ export default function NavMap({
 
     if (view.mode === "fit-two") {
       if (!origin || !dest) return;
-      try {
-        const overlays = [originMarkerRef.current, destMarkerRef.current].filter(Boolean);
-        if (typeof map.setFitView === "function" && overlays.length) {
-          // avoid = [上, 右, 下, 左]（像素）：底部避开「弹窗高度」⇒ 两点都被压进上半屏
-          map.setFitView(overlays, false, [80, 80, Math.round(winH / 2) + 48, 80]);
-        } else {
-          map.setCenter([(origin.lng + dest.lng) / 2, (origin.lat + dest.lat) / 2]);
+      /**
+       * ★ 2026-09-22 修复「选完出发地后地图偏到澳门西边」。
+       *
+       * 原实现：`setFitView([originMarker, destMarker].filter(Boolean), …)`。
+       * 问题：取景**可能跑在两个 marker 都建好之前** —— 此时 `filter(Boolean)` 只剩一个
+       *   （甚至只剩 dest），`setFitView` 便会把**那一个点**当作全部内容来取景，
+       *   视野自然偏到一侧（实测表现为「往左拖、显示澳门西边」）✗
+       *
+       * 现改为：**等两个 marker 都就绪再取景**（最多重试 3 次）；
+       *   仍不齐 ⇒ 退化为「按两点中点居中」（不依赖 marker，结果稳定）。
+       *   `immediately=true` 关掉动画，避免与后续的定位/取景互相打断。
+       */
+      const fitWithRetry = (attempt: number) => {
+        const ov = [originMarkerRef.current, destMarkerRef.current].filter(Boolean);
+        try {
+          if (ov.length >= 2) {
+            map.setFitView(ov, true, [80, 80, Math.round(winH / 2) + 48, 80]);
+            return;
+          }
+        } catch {
+          /* 落到兜底 */
         }
-      } catch {
-        /* ignore */
-      }
+        if (attempt < 3) {
+          window.setTimeout(() => fitWithRetry(attempt + 1), 150);
+          return;
+        }
+        // 兜底：按两点中点居中（与 marker 是否就绪无关）
+        try {
+          map.setZoomAndCenter(15, [(origin.lng + dest.lng) / 2, (origin.lat + dest.lat) / 2], true);
+        } catch {
+          /* ignore */
+        }
+      };
+      fitWithRetry(0);
     }
   }, [view, dest, origin, phase]);
 
@@ -584,11 +623,15 @@ export default function NavMap({
           if (s.lat < sw.lat || s.lat > ne.lat || s.lng < sw.lng || s.lng > ne.lng) continue;
           visible.add(s.code);
           if (stationMarkersRef.current.has(s.code)) continue;
+          // ★ 2026-09-22：轻轨站与巴士站**样式区分**（产品要求）——
+          //   轻轨点更大、走 `--lrt` 类（见 globals.css：不同配色 + 方形圆角以区分形状）；
+          //   zIndex 再高一档，避免与巴士站重叠时被盖住。
+          const isLrt = s.kind === "lrt";
           const marker = new AMap.Marker({
             position: [s.lng, s.lat],
-            content: `<div class="nav-map__station" data-code="${esc(s.code)}" title="${esc(s.name)}"></div>`,
-            offset: new AMap.Pixel(-6, -6),
-            zIndex: 90,
+            content: `<div class="nav-map__station${isLrt ? " nav-map__station--lrt" : ""}" data-code="${esc(s.code)}" title="${esc(s.name)}"></div>`,
+            offset: new AMap.Pixel(isLrt ? -8 : -6, isLrt ? -8 : -6),
+            zIndex: isLrt ? 95 : 90,
           });
           marker.on("click", () => onStationClickRef.current?.(s));
           map.add(marker);
@@ -624,8 +667,10 @@ export default function NavMap({
     map.on("moveend", schedule);
 
     // 一次性拉全量站点（ref 缓存；失败静默，不影响其他功能）
+    // ★ 2026-09-22：带 `include=lrt` —— 导航页地图需要**巴士 + 轻轨**两种站点
+    //   （首页那个图层仍是不带参数的「只巴士」，口径各自独立、互不影响）。
     if (!stationsRef.current) {
-      fetch("/api/stations", { cache: "force-cache" })
+      fetch("/api/stations?include=lrt", { cache: "force-cache" })
         .then((r) => r.json())
         .then((j: { stations?: StationPointLite[] }) => {
           if (cancelled) return;

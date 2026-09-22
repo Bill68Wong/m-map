@@ -222,14 +222,8 @@ export default function SearchSheet({
         </button>
 
         <div className="ssheet__fields">
-          {/* 选出发地时：**两行**（上行出发地=编辑中，下行目的地=已定，只读展示） */}
-          {editing === "from" && (
-            <div className="ssheet__row ssheet__row--static">
-              <span className="ssheet__dot ssheet__dot--to" aria-hidden="true" />
-              <span className="ssheet__static-text">{otherLabel}</span>
-            </div>
-          )}
-
+          {/* ★ 2026-09-22：顺序为「**出发地在上、目的地在下**」（产品口径）。
+              此前是「静态行（目的地）在上、输入行（出发地）在下」，与实际填写顺序相反。 */}
           <div className="ssheet__row ssheet__row--input">
             <span
               className={`ssheet__dot${editing === "from" ? " ssheet__dot--from" : " ssheet__dot--to"}`}
@@ -262,6 +256,14 @@ export default function SearchSheet({
               搜索
             </button>
           </div>
+
+          {/* 选出发地时：下方再显示**已定的目的地**（只读） */}
+          {editing === "from" && (
+            <div className="ssheet__row ssheet__row--static">
+              <span className="ssheet__dot ssheet__dot--to" aria-hidden="true" />
+              <span className="ssheet__static-text">{otherLabel}</span>
+            </div>
+          )}
         </div>
       </header>
 

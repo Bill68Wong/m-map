@@ -2032,13 +2032,20 @@ button[aria-disabled="true"] {
   position: absolute;
   left: 8px;
   right: 8px;
-  bottom: 8px;
+  /* ★ 2026-09-22 修复「提示被 M Map / 定位图标挡住」：
+     原为 `bottom: 8px` —— 而品牌栏（`.nav-brandbar`）同样固定在**底部**且 `z-index: 20`，
+     两者重叠 ⇒ 提示被压在下面看不见。
+     ⇒ 改到**顶部搜索框下方**（搜索框高约 48px + 上下间距），这里没有其他浮层。 */
+  top: 62px;
   background: var(--surface);
   border: 1px solid var(--stroke);
   border-radius: var(--r-field);
   padding: 6px 10px;
   box-shadow: var(--shadow-1);
   color: var(--on-surface-var);
+  z-index: 25;
+  pointer-events: none;
+  text-align: center;
 }
 .nav-map__mepin {
   width: 18px;
@@ -2047,13 +2054,29 @@ button[aria-disabled="true"] {
   background: var(--primary);
   box-shadow: 0 0 0 4px rgba(11, 87, 208, 0.25);
 }
+/* 目的地标记：水滴形 + **中心白点** ★ 2026-09-22 改进
+   （原为纯红色色块、无白点，用户反馈「图标长得有点奇怪」；
+     加上白点后与主流地图的标记一致，也更容易在底图上辨认） */
 .nav-map__destpin {
-  width: 20px;
-  height: 26px;
+  position: relative;
+  width: 22px;
+  height: 28px;
   border-radius: 50% 50% 50% 0;
   transform: rotate(-45deg);
   background: var(--error);
-  box-shadow: var(--hairline-inset);
+  border: 1.5px solid #fff;
+  box-shadow: 0 2px 5px rgba(15, 23, 32, 0.35);
+}
+.nav-map__destpin::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  margin: -4px 0 0 -4px;
+  border-radius: 50%;
+  background: #fff;
 }
 
 /* ── ★ v2.1.0：巴士站点图层 + 站点信息卡 ── */
@@ -2070,12 +2093,27 @@ button[aria-disabled="true"] {
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.18);
   cursor: pointer;
 }
+/* ★ 2026-09-22 新增：**轻轨站**样式 —— 与巴士站一眼可分
+   · 形状：**方角圆（圆角 5px）** vs 巴士的**正圆**
+   · 配色：**品牌绿实心** vs 巴士的**白底蓝圈**
+   · 尺寸：略大（16px vs 12px），在缩小阈值后也更容易看到 */
+.nav-map__station--lrt {
+  width: 16px;
+  height: 16px;
+  border-radius: 5px;
+  background: var(--brand-green);
+  border: 2.5px solid #fff;
+  box-shadow: 0 0 0 1px rgba(15, 23, 32, 0.28);
+}
 .nav-station-card {
   position: absolute;
   left: 8px;
   right: 8px;
   bottom: 8px;
-  z-index: 5;
+  /* ★ 2026-09-22 修复「点站点后的报站弹窗被 M Map / 定位图标挡住」：
+     品牌栏 `.nav-brandbar` 是 `z-index: 20`，而本卡片原为 **5** ⇒ 被压在下面（实测被遮）✗
+     ⇒ 提到 **30**：高于品牌栏（20）与顶部提示（25），确保弹窗始终在最上层。 */
+  z-index: 30;
   max-height: 62%;
   overflow: auto;
   padding: 10px 12px;
