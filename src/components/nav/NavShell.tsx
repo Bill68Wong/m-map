@@ -1,26 +1,49 @@
 "use client";
 
 /**
- * 首页导航壳（src/components/nav/NavShell.tsx，M Map 改版 S2 重构）
+ * 首页导航壳（src/components/nav/NavShell.tsx）
  *
- * ── 组成（设计 D.1 / PRD §8 状态机）───────────────────────────────────
- *   · **全屏地图**（`fixed`，底部让出底部导航带以保留高德 Logo/审图号）；
- *   · 顶部浮层：品牌字标 `M Map`（16px/600，**不是大标题**）+ 右上定位按钮；
- *   · 顶置**目的地**搜索条（白底 + 1.5px 青花蓝描边 + 3px 硬投影）→ 点开分步弹层；
- *   · 分步弹层（`StepSheet`）：选目的地 → 地图标定 → 选出发地 → 出发；
- *   · 站点信息卡（点地图巴士站）。
+ * ── 2026-09-22 搜索界面重构（模仿高德/谷歌地图的两态交互）─────────────────
  *
- * ── 铁律 ──────────────────────────────────────────────────────────────
- *   · ★ **不记忆**出发点（不用 localStorage，产品 R5）；收藏是**用户显式意图**，故允许（02 §2.1）；
+ *  **旧版**：可拖拽底部抽屉 + 4 步引导（①选目的地 ②地图标定 ③选出发地 ④出发），
+ *            每步高度不同、带惯性吸附。
+ *  **新版**：**两态** ——
+ *
+ *    ┌─ S0 全屏地图 ────────────────────────────────┐
+ *    │  顶部只有搜索框「去哪儿？」                    │
+ *    └───────────────────────────────────────────────┘
+ *              ↓ 点搜索框
+ *    ┌─ S1 全屏搜索（`SearchSheet`）───────────────┐
+ *    │  输入条 + 结果列表（打字=站点 / 搜索=含高德）  │
+ *    └───────────────────────────────────────────────┘
+ *              ↓ 选中地点
+ *    ┌─ S2 半屏（`RoutePanel`）────────────────────┐
+ *    │  上半屏：地图，**该地点居上半屏正中**         │
+ *    │  下半屏：出发地（默认我的位置）/ 目的地 + 出发 │
+ *    └───────────────────────────────────────────────┘
+ *              ↓ 点「出发地」行
+ *    ┌─ S3 全屏搜索（两行输入条：出发地 / 目的地）──┐
+ *    └───────────────────────────────────────────────┘
+ *              ↓ 选中出发地
+ *    ┌─ S4 半屏 ───────────────────────────────────┐
+ *    │  上半屏：地图，**两点都在视野内**（自动适配） │
+ *    │  下半屏：两地 + 出发 → `/nav`                │
+ *    └───────────────────────────────────────────────┘
+ *
+ * ── 铁律（沿用）───────────────────────────────────────────────────────
+ *   · ★ **不记忆**出发点（产品 R5）；收藏是**用户显式意图**，故允许；
  *   · 「出发」→ 组 `/nav` URL（★ 坐标 **GCJ-02**）；
- *   · 地图失败**不阻塞**：搜索与出发照常（§Q7）。
+ *   · 地图失败**不阻塞**：搜索与出发照常；
+ *   · ★ 弹窗是**覆盖层**（盖住地图），不是新页面 —— 避免整页加载的等待感。
  */
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 import { useRouter } from "next/navigation";
 import Icon from "@/components/ui/Icon";
 import NavMap from "./NavMap";
-import StepSheet, { queryOf } from "./StepSheet";
+import RoutePanel from "./RoutePanel";
+import SearchSheet, { type QuickPair } from "./SearchSheet";
 import StationCard, { type StationCardStation } from "./StationCard";
+import { queryOf } from "./StepSheet";
 import { useCombos } from "@/lib/favorites/useCombos";
 import type { NavPoint } from "@/lib/nav/types";
 
@@ -35,8 +58,8 @@ export interface NavShellProps {
   initialTo?: NavPoint | null;
 }
 
-/** 地图中心读取器（`StepSheet` 第 2 步「用这个点」用） */
-type CenterProbe = () => { lng: number; lat: number } | null;
+/** 弹层状态：关闭（全屏地图）/ 全屏（搜索）/ 半屏（起终点面板） */
+type SheetState = "closed" | "full" | "half";
 
 export default function NavShell({ jsKey, colors = {}, initialFrom = null, initialTo = null }: NavShellProps) {
   const router = useRouter();
@@ -44,22 +67,26 @@ export default function NavShell({ jsKey, colors = {}, initialFrom = null, initi
   const [userPos, setUserPos] = useState<{ lng: number; lat: number } | null>(null);
   const [from, setFrom] = useState<NavPoint | null>(initialFrom);
   const [to, setTo] = useState<NavPoint | null>(initialTo);
-  const [picking, setPicking] = useState(false);
   const [station, setStation] = useState<StationCardStation | null>(null);
-  /** 分步状态：1 选目的地 · 2 确认位置 · 3 选出发地 · 4 出发 */
-  const [step, setStep] = useState<1 | 2 | 3 | 4>(initialTo ? 3 : 1);
-  const [sheetOpen, setSheetOpen] = useState(!!initialTo);
+  const [picking, setPicking] = useState(false);
   /** 重新定位触发计数（右上定位按钮） */
   const [locateTick, setLocateTick] = useState(0);
-  const centerProbeRef = useRef<CenterProbe | null>(null);
+
+  /** ★ 弹层状态（带 initialTo 时直接进「半屏」= 可出发态，与旧版一致） */
+  const [sheet, setSheet] = useState<SheetState>(initialTo ? "half" : "closed");
+  /** 全屏态正在编辑哪个端点 */
+  const [editing, setEditing] = useState<"dest" | "from">("dest");
+  /**
+   * 取景触发计数：状态变化时 +1，使 `NavMap` 重新取景。
+   * ⚠️ 用计数而不是依赖对象本身 —— 同一模式连续触发（如两次都选「目的地」）也要生效。
+   */
+  const [viewTick, setViewTick] = useState(0);
+
   const favs = useCombos();
 
   const onLocate = useCallback((pos: { lng: number; lat: number } | null) => setUserPos(pos), []);
   const onStationClick = useCallback((s: StationCardStation) => setStation(s), []);
   const onMapClick = useCallback(() => setStation(null), []);
-  const onMapReady = useCallback((probe: CenterProbe) => {
-    centerProbeRef.current = probe;
-  }, []);
 
   const myLocation: NavPoint | null = userPos
     ? { kind: "gps", label: MY_LOCATION, lng: userPos.lng, lat: userPos.lat }
@@ -67,31 +94,33 @@ export default function NavShell({ jsKey, colors = {}, initialFrom = null, initi
   const fromPoint = from ?? myLocation;
   const canGo = !!fromPoint && !!to;
 
-  /** 进入下一步（仅在有目的地时） */
-  function goStep(n: 1 | 2 | 3 | 4) {
-    setStep(n);
-    setSheetOpen(true);
+  /**
+   * 视口指令（交给 `NavMap`）：
+   *   · 半屏 + 只有目的地 → `dest-center-top`（该点居**上半屏正中**）
+   *   · 半屏 + 起终点都有 → `fit-two`（两点都在视野内）
+   *   · 全屏搜索 / 全屏地图 → `none`（弹窗盖住地图，取景无意义）
+   */
+  const viewMode: "dest-center-top" | "fit-two" | "none" =
+    sheet === "half" ? (from ? "fit-two" : to ? "dest-center-top" : "none") : "none";
+
+  /** 打开全屏搜索 */
+  function openSearch(which: "dest" | "from") {
+    setEditing(which);
+    setSheet("full");
   }
 
-  function pickDest(p: NavPoint) {
-    setTo(p);
-    goStep(2); // ★「地图标定」是进入 S1 的标志
+  /** 全屏返回：**回到半屏**（若有目的地）否则回全屏地图 */
+  function backFromSearch() {
+    setSheet(to ? "half" : "closed");
+    setViewTick((t) => t + 1);
   }
 
-  function clearDest() {
-    setTo(null);
-    goStep(1);
-  }
-
-  function useMapCenter() {
-    const c = centerProbeRef.current?.();
-    if (c && to) setTo({ ...to, lng: c.lng, lat: c.lat });
-    goStep(3);
-  }
-
-  function useMyLocation() {
-    if (myLocation) setFrom(null); // 省一次？—— 显式意图：置回「我的位置」
-    goStep(4);
+  /** 选中某个端点 */
+  function pickPoint(p: NavPoint, which: "dest" | "from") {
+    if (which === "dest") setTo(p);
+    else setFrom(p);
+    setSheet("half");
+    setViewTick((t) => t + 1);
   }
 
   function go() {
@@ -100,12 +129,13 @@ export default function NavShell({ jsKey, colors = {}, initialFrom = null, initi
     router.push(`/nav?${queryOf(fromPoint, to)}`);
   }
 
-  /** ★ S2：常用 = **收藏组合**（排除已停用），按最近使用取前 3 */
-  const quickPairs = favs.mounted
+  /** 常用 = **收藏组合**（排除已停用），按最近使用取前 3 */
+  const quickPairs: QuickPair[] = favs.mounted
     ? [...favs.combos]
         .filter((c) => !c.disabled)
         .sort((a, b) => (b.lastUsedAt ?? b.updatedAt) - (a.lastUsedAt ?? a.updatedAt))
         .slice(0, 3)
+        .map((c) => ({ id: c.id, from: c.from, to: c.to }))
     : [];
 
   return (
@@ -115,18 +145,15 @@ export default function NavShell({ jsKey, colors = {}, initialFrom = null, initi
           jsKey={jsKey}
           className="nav-map--full"
           dest={to ? { lng: to.lng, lat: to.lat, label: to.label } : null}
+          origin={from ? { lng: from.lng, lat: from.lat, label: from.label } : null}
+          view={{ mode: viewMode, tick: viewTick }}
           locateTick={locateTick}
           onLocate={onLocate}
           onStationClick={onStationClick}
           onMapClick={onMapClick}
-          onMapReady={onMapReady}
         />
 
-        {/* 品牌栏：品牌字标 + 定位按钮
-            ★ v2.4.1：从地图**上方**移到地图**下方**（用户要求「首页地图上方仅保留搜索框」）。
-              DOM 仍留在 `.nav-map-wrap` 内（它需要压在地图上），靠 CSS 把定位方向由 top 改为 bottom。
-              ⚠️ 类名同步由 `.nav-top` 改为 `.nav-brandbar` —— 旧名说的是「在顶部」，
-                 与它现在的位置矛盾，不改会误导后续维护。 */}
+        {/* 品牌栏：品牌字标 + 定位按钮（压在地图下方） */}
         <div className="nav-brandbar">
           <span className="nav-brand">M Map</span>
           <button
@@ -140,27 +167,29 @@ export default function NavShell({ jsKey, colors = {}, initialFrom = null, initi
           </button>
         </div>
 
-        {/* 顶置目的地搜索条 → 打开分步弹层 */}
-        <button
-          type="button"
-          className="nav-searchbar"
-          onClick={() => goStep(to ? 3 : 1)}
-          aria-label={to ? `已选目的地 ${to.label}，点击修改` : "选择目的地"}
-        >
-          <Icon name="search" size={20} />
-          <span className={`nav-searchbar__text${to ? "" : " nav-searchbar__text--ph"}`}>
-            {to ? to.label : "去哪儿？"}
-          </span>
-          {step > 1 && to && (
-            <span className="nav-searchbar__tag t-label">
-              <Icon name="destination" size={16} />
-              已选
+        {/* 顶置搜索条 —— **只在「非全屏搜索」时出现**（全屏时由 SearchSheet 自己的输入条接管） */}
+        {sheet !== "full" && (
+          <button
+            type="button"
+            className="nav-searchbar"
+            onClick={() => openSearch("dest")}
+            aria-label={to ? `已选目的地 ${to.label}，点击修改` : "选择目的地"}
+          >
+            <Icon name="search" size={20} />
+            <span className={`nav-searchbar__text${to ? "" : " nav-searchbar__text--ph"}`}>
+              {to ? to.label : "去哪儿？"}
             </span>
-          )}
-        </button>
+            {sheet === "half" && to && (
+              <span className="nav-searchbar__tag t-label">
+                <Icon name="destination" size={16} />
+                已选
+              </span>
+            )}
+          </button>
+        )}
 
-        {/* 带入收藏提示条（PRD §7.5 可选） */}
-        {initialTo && (
+        {/* 带入收藏提示条（半屏可出发态才显示，避免与全屏搜索抢注意力） */}
+        {initialTo && sheet === "half" && !from && (
           <div className="nav-banner t-label" role="status">
             已带入收藏：{initialFrom?.label ?? MY_LOCATION} → {initialTo.label}
           </div>
@@ -174,53 +203,58 @@ export default function NavShell({ jsKey, colors = {}, initialFrom = null, initi
             onSetFrom={() => {
               setFrom(stationToNavPoint(station));
               setStation(null);
-              goStep(4);
+              setSheet("half");
+              setViewTick((t) => t + 1);
             }}
             onSetTo={() => {
-              pickDest(stationToNavPoint(station));
+              setTo(stationToNavPoint(station));
               setStation(null);
+              setSheet("half");
+              setViewTick((t) => t + 1);
             }}
           />
         )}
       </div>
 
-      {sheetOpen && (
-        <>
-          <button
-            type="button"
-            className="step-sheet__scrim"
-            aria-label="收起规划面板"
-            onClick={() => setSheetOpen(false)}
-          />
-          <StepSheet
-            step={step}
-            dest={to}
-            from={from}
-            userPos={userPos}
-            colors={colors}
-            quickPairs={quickPairs}
-            onPickDest={pickDest}
-            onClearDest={clearDest}
-            onPickFrom={(p) => {
-              setFrom(p);
-              goStep(4);
-            }}
-            onUseMyLocation={useMyLocation}
-            onUseMapCenter={useMapCenter}
-            onBack={() => goStep((Math.max(1, step - 1) as 1 | 2 | 3 | 4))}
-            onGo={go}
-            going={picking}
-            canGo={canGo}
-            /* ★ B6：下拖超阈值 / Esc → 关闭弹层（弹层自己不做状态机，只上报） */
-            onDismiss={() => setSheetOpen(false)}
-          />
-        </>
+      {/* ── 全屏搜索层 ── */}
+      {sheet === "full" && (
+        <SearchSheet
+          editing={editing}
+          dest={to}
+          from={from}
+          userPos={userPos}
+          colors={colors}
+          quickPairs={quickPairs}
+          onPick={pickPoint}
+          onPickQuick={(f, t) => {
+            setFrom(f);
+            setTo(t);
+            setSheet("half");
+            setViewTick((n) => n + 1);
+          }}
+          onBack={backFromSearch}
+        />
+      )}
+
+      {/* ── 下半屏起终点面板 ── */}
+      {sheet === "half" && (
+        <RoutePanel
+          dest={to}
+          from={from}
+          userPos={userPos}
+          canGo={canGo}
+          going={picking}
+          query={fromPoint && to ? queryOf(fromPoint, to) : ""}
+          onGo={go}
+          onTapFrom={() => openSearch("from")}
+          onTapDest={() => openSearch("dest")}
+        />
       )}
     </section>
   );
 }
 
-/** 站点 → NavPoint（`kind='station'`，label 带站码，与 POI 搜索框口径一致） */
+/** 站点 → NavPoint（`kind='station'`，label 带站码，与 POI 搜索口径一致） */
 function stationToNavPoint(s: StationCardStation): NavPoint {
   return { kind: "station", label: `${s.code} ${s.name}`.trim(), lng: s.lng, lat: s.lat, code: s.code };
 }

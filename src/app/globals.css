@@ -3894,3 +3894,363 @@ button[aria-disabled="true"] {
   gap: var(--space-2);
   flex-wrap: wrap;
 }
+
+/* ══════════════════════════════════════════════════════════════════════
+   ★ 2026-09-22 搜索界面重构：全屏搜索层 + 下半屏起终点面板
+   背景：旧版是「可拖拽底部抽屉 + 4 步引导」（`.step-sheet`）。产品口径改为
+         **模仿高德/谷歌的两态** —— 点搜索框 ⇒ 全屏输入；选完点 ⇒ 下半屏 +
+         上半屏看地图。弹窗一律**覆盖在地图上**（不做成新页面，避免整页加载的等待）。
+   ⚠️ 本节为**新增**，不改动既有 `.step-sheet`（暂时保留，确认新版稳定后再清理）。
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* ── 出发地标记（与目的地标记同构；绿色区分「起点」） ── */
+.nav-map__originpin {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--brand-green);
+  border: 2.5px solid #fff;
+  box-shadow: 0 1px 4px rgba(15, 23, 32, 0.35);
+}
+
+/* ══ 全屏搜索层 ══ */
+.ssheet {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+}
+
+.ssheet__top {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: calc(10px + var(--safe-top, 0px)) 14px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.ssheet__back {
+  flex: none;
+  width: 36px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: var(--fg-2);
+  cursor: pointer;
+}
+.ssheet__fields {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ssheet__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 10px;
+  border: var(--frame-w) solid var(--border-2);
+  border-radius: 10px;
+  background: var(--surface);
+}
+/* 非编辑行（显示另一个端点，只读展示） */
+.ssheet__row--static {
+  min-height: 36px;
+  background: var(--surface-2);
+  border-style: dashed;
+}
+.ssheet__static-text {
+  color: var(--muted);
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 编辑中的行：青花蓝描边 + focus 强化 */
+.ssheet__row--input {
+  border-color: var(--border-strong);
+}
+.ssheet__row--input:focus-within {
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.ssheet__dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+}
+.ssheet__dot--from {
+  background: var(--brand-green);
+}
+.ssheet__dot--to {
+  background: var(--accent);
+}
+.ssheet__inp {
+  flex: 1;
+  min-width: 0;
+  height: 40px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 15px;
+}
+.ssheet__inp::placeholder {
+  color: var(--meta);
+}
+.ssheet__spin {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border-2);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: ssheet-spin 0.7s linear infinite;
+}
+@keyframes ssheet-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.ssheet__go {
+  flex: none;
+  height: 32px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--accent-on);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.ssheet__go:disabled {
+  background: var(--border-2);
+  color: var(--meta);
+  cursor: default;
+}
+
+.ssheet__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+.ssheet__sect {
+  padding: 12px 14px 4px;
+}
+.ssheet__sect-title {
+  margin: 0 0 8px;
+}
+.ssheet__pair {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--fg);
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+}
+.ssheet__pair-from,
+.ssheet__pair-to {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ssheet__pair-from {
+  max-width: 34%;
+}
+.ssheet__pair-to {
+  flex: 1;
+}
+.ssheet__tip {
+  margin: 8px 14px 20px;
+  line-height: 1.6;
+}
+
+.ssheet__list {
+  padding: 6px 0 24px;
+}
+.ssheet__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 52px;
+  padding: 10px 14px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg);
+  text-align: left;
+  cursor: pointer;
+}
+.ssheet__item:active {
+  background: var(--surface-2);
+}
+.ssheet__type {
+  flex: none;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  background: var(--surface-2);
+  color: var(--fg-2);
+}
+.ssheet__type--station {
+  background: var(--accent-soft);
+  color: var(--accent-deep);
+}
+.ssheet__type--lrt_station {
+  background: #e3f2ea;
+  color: var(--brand-green);
+}
+.ssheet__name {
+  flex: 1;
+  min-width: 0;
+  font-size: 15px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ssheet__badge {
+  flex: none;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  background: var(--surface-2);
+  color: var(--meta);
+}
+.ssheet__badge--soft {
+  background: var(--accent-soft);
+  color: var(--accent-deep);
+}
+.ssheet__item--pending .ssheet__name {
+  color: var(--fg-2);
+}
+.ssheet__meta {
+  flex: none;
+  font-size: 12px;
+}
+.ssheet__empty {
+  padding: 24px 14px;
+  text-align: center;
+  line-height: 1.7;
+}
+
+/* ══ 下半屏起终点面板 ══ */
+.rpanel {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 55;
+  background: var(--surface);
+  border-radius: 16px 16px 0 0;
+  box-shadow: 0 -6px 22px rgba(15, 23, 32, 0.14);
+  will-change: transform;
+}
+.rpanel__handle {
+  height: 26px;
+  display: grid;
+  place-items: center;
+  touch-action: none;
+  cursor: grab;
+}
+.rpanel__grip {
+  width: 40px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border-2);
+}
+.rpanel__body {
+  padding: 0 14px calc(14px + var(--safe-bottom, 0px));
+}
+.rpanel__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 48px;
+  padding: 0 4px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg);
+  text-align: left;
+  cursor: pointer;
+}
+.rpanel__row:active {
+  background: var(--surface-2);
+}
+.rpanel__dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+}
+.rpanel__dot--from {
+  background: var(--brand-green);
+}
+.rpanel__dot--to {
+  background: var(--accent);
+}
+.rpanel__label {
+  flex: none;
+  color: var(--muted);
+}
+.rpanel__value {
+  flex: 1;
+  min-width: 0;
+  font-size: 15px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rpanel__value--gps {
+  color: var(--brand-green);
+}
+.rpanel__actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 12px;
+}
+
+/* 收起态：只留一条细把手（点它展开） */
+.rpanel--collapsed {
+  border-radius: 14px 14px 0 0;
+}
+.rpanel__expandbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 14px calc(8px + var(--safe-bottom, 0px));
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.rpanel__expandtext {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

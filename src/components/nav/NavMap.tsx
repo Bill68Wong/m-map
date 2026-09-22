@@ -99,6 +99,22 @@ export interface NavMapProps {
   jsKey: string;
   /** 目的地图标（用户选定 POI 后）；★ S2：设为该点后地图**居中**到目的地 */
   dest?: { lng: number; lat: number; label: string } | null;
+  /**
+   * ★ 2026-09-22 新增：**出发地标记**（选完出发地后与目的地同时显示）。
+   *   与 `dest` 同构；两者都有时可配合 `view.mode='fit-two'` 自动适配两点。
+   */
+  origin?: { lng: number; lat: number; label: string } | null;
+  /**
+   * ★ 2026-09-22 新增：**视口指令**（搜索重构用）。
+   *
+   * 为什么要它：新版搜索弹窗**覆盖在地图上**（下半屏被遮住）。
+   *   若仍按「容器中心」居中，标记会落进被遮住的下半屏 ⇒ 用户看不见 ✗
+   *   所以需要两种特殊取景：
+   *     · `dest-center-top`：目的地放在 **上半屏正中央**（弹窗半屏时用）
+   *     · `fit-two`       ：出发地 + 目的地 **都在视野内**（自动缩放 + 居中）
+   *   `tick` 变化即重新取景（同一模式重复触发也生效）。
+   */
+  view?: { mode: "dest-center-top" | "fit-two" | "none"; tick: number } | null;
   /** 定位回调：成功给 GCJ-02 坐标；失败给 null */
   onLocate?: (pos: { lng: number; lat: number } | null) => void;
   /** 点击巴士站点回调（信息卡）——坐标 GCJ-02 */
@@ -119,6 +135,8 @@ export interface NavMapProps {
 export default function NavMap({
   jsKey,
   dest,
+  origin,
+  view,
   onLocate,
   onStationClick,
   onMapClick,
@@ -132,6 +150,8 @@ export default function NavMap({
   const amapRef = useRef<any>(null);
   const userMarkerRef = useRef<any>(null);
   const destMarkerRef = useRef<any>(null);
+  /** ★ 2026-09-22：出发地标记（与目的地图标同构） */
+  const originMarkerRef = useRef<any>(null);
   const maskRef = useRef<any>(null);
   const locatedRef = useRef(false);
   /** 澳门边界结果（ref；供定位「是否在澳门内」判定） */
@@ -375,15 +395,90 @@ export default function NavMap({
         map.add(destMarkerRef.current);
       }
       // ★ S2「地图标定」：选完目的地 → 居中到该点（限制范围内自动收敛）
-      try {
-        map.setCenter(pos);
-      } catch {
-        /* ignore */
+      // ★ 2026-09-22：若调用方给了 `view`（新版搜索弹窗），取景改由下面的 view effect 统一负责
+      //   —— 因为那时需要「居上半屏」或「适配两点」，不能简单 setCenter。不传 `view` 时保持原行为。
+      if (!view) {
+        try {
+          map.setCenter(pos);
+        } catch {
+          /* ignore */
+        }
       }
     } catch {
       /* 标记失败不影响底图 */
     }
-  }, [dest, phase]);
+  }, [dest, phase, view]);
+
+  // ── ★ 2026-09-22 新增：**出发地标记**（选完出发地后与目的地同时显示）──
+  useEffect(() => {
+    const AMap = typeof window !== "undefined" ? window.AMap : undefined;
+    const map = mapRef.current;
+    if (!map || !AMap || phase !== "ready") return;
+    try {
+      if (!origin) {
+        if (originMarkerRef.current) {
+          map.remove(originMarkerRef.current);
+          originMarkerRef.current = null;
+        }
+        return;
+      }
+      const pos = [origin.lng, origin.lat];
+      if (originMarkerRef.current) originMarkerRef.current.setPosition(pos);
+      else {
+        originMarkerRef.current = new AMap.Marker({
+          position: pos,
+          content: '<div class="nav-map__originpin" aria-hidden="true"></div>',
+          offset: new AMap.Pixel(-9, -9),
+          title: origin.label,
+          zIndex: 110,
+        });
+        map.add(originMarkerRef.current);
+      }
+    } catch {
+      /* 标记失败不影响底图 */
+    }
+  }, [origin, phase]);
+
+  /**
+   * ★ 2026-09-22 新增：**视口取景**（新版搜索弹窗覆盖在地图上时用）。
+   *
+   * 为什么需要单独的 effect：新版弹窗是**覆盖层**（下半屏遮住地图）。
+   *   若沿用「容器中心居中」，标记会落进被遮住的下半屏 ⇒ 用户看不见 ✗
+   *   ⇒ `dest-center-top` 把视口上移 1/4 屏；`fit-two` 用 `setFitView` + 底部 avoid 让两点都落在上半屏。
+   */
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || phase !== "ready" || !view || view.mode === "none") return;
+    const winH = typeof window !== "undefined" ? window.innerHeight : 800;
+
+    if (view.mode === "dest-center-top") {
+      if (!dest) return;
+      try {
+        map.setZoomAndCenter(16, [dest.lng, dest.lat]);
+        const h: number = map.getSize?.()?.height ?? winH;
+        // 上移 1/4 屏：让该点出现在**上半屏正中央**而不是整屏中心
+        map.panBy(0, Math.round(h / 4));
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
+
+    if (view.mode === "fit-two") {
+      if (!origin || !dest) return;
+      try {
+        const overlays = [originMarkerRef.current, destMarkerRef.current].filter(Boolean);
+        if (typeof map.setFitView === "function" && overlays.length) {
+          // avoid = [上, 右, 下, 左]（像素）：底部避开「弹窗高度」⇒ 两点都被压进上半屏
+          map.setFitView(overlays, false, [80, 80, Math.round(winH / 2) + 48, 80]);
+        } else {
+          map.setCenter([(origin.lng + dest.lng) / 2, (origin.lat + dest.lat) / 2]);
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+  }, [view, dest, origin, phase]);
 
   // ★ 同步点击回调到 ref（避免回调变化导致图层重建）
   useEffect(() => {
