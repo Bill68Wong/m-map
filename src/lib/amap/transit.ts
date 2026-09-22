@@ -125,9 +125,21 @@ interface RawWalking {
   distance?: string;
   cost?: { duration?: string };
 }
+/** ★ 2026-09-22：高德的**打车段**（此前被完全忽略，是本次绕路 bug 的根因之一） */
+interface RawTaxi {
+  distance?: string;
+  drivetime?: string;
+  price?: string;
+  startname?: string;
+  endname?: string;
+  startpoint?: string;
+  endpoint?: string;
+}
 interface RawSegment {
   walking?: RawWalking;
   bus?: { buslines?: RawBusline[] };
+  /** ★ 2026-09-22：打车段 —— 本 App **不采纳**（只做巴士+轻轨），见 `parseTransits` 的过滤 */
+  taxi?: RawTaxi;
 }
 /** 高德原始方案（transits[i]）—— 供入库/重解析 */
 export interface RawPlan {
@@ -181,6 +193,31 @@ const num = (v: string | undefined): number => {
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;
 };
+
+/** 首末步行合理性下限：步行距离至少是直线距离的这个比例（见 `effectiveWalkDist` 说明） */
+const MIN_WALK_RATIO = 0.5;
+
+/**
+ * ★ 2026-09-22 新增：首末步行的**几何合理性闸门**。
+ *
+ * 判据：**步行距离不可能小于对应直线距离的一半**。走路的实际里程永远 > 直线
+ *   （必须绕开建筑与车行道，实测正常比值 `distance / straight ∈ [1.2, 1.6]`）。
+ *   一旦高德给的值小于直线的一半，说明这段「步行」**并不连接起点（或终点）**，
+ *   而是别的东西被错位放了进来 —— 实测两种来源：
+ *     ① 方案里夹了 **taxi（打车）** 段（现已在上层 `parseTransits` 整条剔除）；
+ *     ② 高德把**站内步行**（如轻轨「A口 → 站台」241m、「站台 → C口」58m）放在了首末位置。
+ *   ⇒ 此时丢弃高德的值（返回 `null`），让 `fixWalkDistance` 退回**直线估算**。
+ *
+ * 实测事故（石排灣 → 大三巴牌坊）：妈阁 → 大三巴牌坊直线 1932m，高德只给 58m（3%），
+ *   卡面因此显示「步行 0.7 分」——实际那段是**站内出站步行**，之后还要打车 4357m。
+ *
+ * @returns 可信的步行距离（米）；不可信 ⇒ `null`（交给直线估算）
+ */
+function effectiveWalkDist(given: number, straight: number): number | null {
+  if (!(given > 0)) return null;
+  if (straight > 0 && given < straight * MIN_WALK_RATIO) return null;
+  return given;
+}
 
 /**
  * 把一条高德原始方案解析成 `AmapPlanSeed`（骨架；**不含**站码桥接与逐跳重算）。
@@ -261,8 +298,8 @@ export function parsePlan(
       ? haversineM({ lng: alight.lng, lat: alight.lat }, destGcj)
       : 0;
 
-  const fixOut = fixWalkDistance(straightOut, walkOutDist > 0 ? walkOutDist : null, "walk");
-  const fixIn = fixWalkDistance(straightIn, walkInDist > 0 ? walkInDist : null, "walk");
+  const fixOut = fixWalkDistance(straightOut, effectiveWalkDist(walkOutDist, straightOut), "walk");
+  const fixIn = fixWalkDistance(straightIn, effectiveWalkDist(walkInDist, straightIn), "walk");
 
   // ── 换乘步行（相邻 leg 之间；缺失 → 0/ null）──
   const transfers: AmapPlanTransfer[] = [];
@@ -296,14 +333,33 @@ export function parsePlan(
   };
 }
 
-/** 把整份高德响应解析成方案骨架数组 */
+/**
+ * 把整份高德响应解析成方案骨架数组。
+ *
+ * ★ 2026-09-22：**含打车段的方案整条丢弃**（产品口径：只做巴士 + 轻轨的公共交通）。
+ *
+ *   为什么必须丢（实测事故）：以「石排灣 → 大三巴牌坊」为例，高德返回的一条方案是
+ *   「**打车 793m 到协和医院 → 坐轻轨到妈阁 → 出站再打车 4357m 到大三巴**」。
+ *   而 `parsePlan` 只累加 `walking`、**完全忽略 `taxi`** ⇒ 剩下的两段*站内步行*
+ *   （协和医院 A口→站台 241m、妈阁站台→C口 58m）被**错位**当成了
+ *   「起点→上车站」与「下车站→终点」⇒ 卡面显示「步行 2.9 分到协和医院」
+ *   「妈阁到大三巴步行 0.7 分」—— **与事实完全不符** ✗
+ *
+ *   ⇒ 打车超出本 App 范围（且我们展示不了车费/叫车），直接整条剔除，从源头消除错位。
+ */
 export function parseTransits(
   json: AmapTransitRawResponse,
   originGcj: LatLng,
   destGcj: LatLng,
 ): AmapPlanSeed[] {
   const transits = json.route?.transits ?? [];
-  return transits.map((t, i) => parsePlan(t, i, originGcj, destGcj));
+  const out: AmapPlanSeed[] = [];
+  for (const [i, t] of transits.entries()) {
+    const hasTaxi = (t.segments ?? []).some((s) => !!s.taxi);
+    if (hasTaxi) continue;
+    out.push(parsePlan(t, i, originGcj, destGcj));
+  }
+  return out;
 }
 
 // ─────────────────────────── OD 缓存键 ───────────────────────────
