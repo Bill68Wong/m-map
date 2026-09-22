@@ -42,6 +42,14 @@ interface NavResp {
   error?: string;
 }
 
+/** 端点 label → slug（与 `useCombos.endpointSlug` / `RouteViewer` 同口径） */
+function slugOf(label: string): string {
+  if (label.includes("澳門科技大學") || label.includes("澳门科技大学") || label.includes("澳科大")) return "school";
+  if (label.includes("橫琴") || label.includes("横琴")) return "hengqin";
+  if (label.includes("關閘") || label.includes("关闸")) return "gate";
+  return "home";
+}
+
 export interface ComboPlansProps {
   combo: Combo;
   colors: Record<string, string>;
@@ -55,6 +63,8 @@ export default function ComboPlans({ combo, colors, onExit }: ComboPlansProps) {
   const [cards, setCards] = useState<CardData[]>([]);
   const [degraded, setDegraded] = useState(false);
   const [emptyReason, setEmptyReason] = useState<string | null>(null);
+  /** ★ 2026-09-22：本组合的预设路线总数（用于文案「已按 N 条预设路线排序」） */
+  const [presetTotal, setPresetTotal] = useState(0);
   /** ★ v2.4.0：右上角路线清单是否展开 */
   const [listOpen, setListOpen] = useState(false);
   /** ★ v2.4.0：当前查看流程图的路线（非空 → 用流程图取代卡片列表） */
@@ -76,22 +86,39 @@ export default function ComboPlans({ combo, colors, onExit }: ComboPlansProps) {
     setPhase("loading");
     setEmptyReason(null);
     try {
-      const sp = new URLSearchParams(liveCombo.query);
-      // ★ 只在有自定义编排/覆盖时传参（缺省 = v2.2.0 行为，逐字节不变）
-      // ★ 编码口径：URLSearchParams 会对值再编码一次 ⇒ 此处传 JSON 串即可，
-      //   最终 URL 即为契约要求的 `encodeURIComponent(JSON.stringify(...))` 单编码（防 URL 长度翻倍）。
-      if (liveCombo.chain?.length) sp.set("chain", JSON.stringify(liveCombo.chain));
-      if (liveCombo.walk && (liveCombo.walk.seg1 || liveCombo.walk.seg2)) {
-        sp.set("walk", JSON.stringify(liveCombo.walk));
-      }
-      if (liveCombo.tiers && (liveCombo.tiers.speedMps || liveCombo.tiers.minutes)) {
-        sp.set("tiers", JSON.stringify(liveCombo.tiers));
-      }
-      const res = await fetch(`/api/nav?${sp.toString()}`, { cache: "no-store" });
-      const j = (await res.json()) as NavResp;
+      // ★ 2026-09-22 口径变更：**参与排序的只有本组合内已预设好的路线**。
+      //   做法：把库里的预设路线交给服务端，逐条转成 `chain`（自定义站链）算实时耗时。
+      //   `chain` 非空 ⇒ 引擎按链约束枚举、**完全不调高德** ⇒ 候选集恰好 = 预设路线，
+      //   从源头消除「高德方案 + 本地模型方案」（旧版就是它们混进来导致结果不稳定）。
+      //   ⚠️ 逐条算而非合并：产品要求 13 条**分开排序、分开显示**，合并会变成一张卡。
+      const res = await fetch("/api/fav-routes/plan", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        cache: "no-store",
+        body: JSON.stringify({
+          fromSlug: slugOf(liveCombo.from.label),
+          toSlug: slugOf(liveCombo.to.label),
+          origin: {
+            lng: liveCombo.from.lng,
+            lat: liveCombo.from.lat,
+            label: liveCombo.from.label,
+            kind: liveCombo.from.kind,
+            code: liveCombo.from.code,
+          },
+          dest: {
+            lng: liveCombo.to.lng,
+            lat: liveCombo.to.lat,
+            label: liveCombo.to.label,
+            kind: liveCombo.to.kind,
+            code: liveCombo.to.code,
+          },
+        }),
+      });
+      const j = (await res.json()) as NavResp & { presetTotal?: number; failed?: unknown[] };
       setCards(Array.isArray(j.cards) ? j.cards : []);
-      setDegraded(!!j.degraded);
-      setEmptyReason(j.emptyReason ?? (j.ok === false ? (j.error ?? "no_candidate") : null));
+      setPresetTotal(j.presetTotal ?? 0);
+      setDegraded(false);
+      setEmptyReason(j.ok === false ? (j.error ?? "no_candidate") : null);
       setPhase("ready");
     } catch {
       setPhase("failed");
@@ -171,8 +198,9 @@ export default function ComboPlans({ combo, colors, onExit }: ComboPlansProps) {
       ) : (
         <>
           <p className="fav-note t-label t-muted">
-            {liveCombo.chain?.length ? `已按你的编排（${liveCombo.chain.length} 段）计算` : "按系统自动选线计算"}
-            {liveCombo.plans.length > 0 ? ` · 已存 ${liveCombo.plans.length} 条路线` : ""}
+            {/* ★ 2026-09-22：明确告知数据来源 —— 只有本组合的预设路线参与排序 */}
+            只按本组合的 {presetTotal || "…"} 条预设路线排序（不掺高德 / 本地模型方案）
+            {liveCombo.plans.length > 0 ? ` · 另有 ${liveCombo.plans.length} 条历史保存` : ""}
           </p>
 
           {degraded && (

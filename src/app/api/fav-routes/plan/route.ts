@@ -1,0 +1,168 @@
+/**
+ * POST /api/fav-routes/plan —— 按「组合内预设路线」批量算实时方案并排序
+ * （2026-09-22 新增）
+ *
+ * ── 解决什么 ──────────────────────────────────────────────────────────
+ *   产品口径：「点组合卡后参与排序的，**只有该组合内已预设好的方案**，
+ *   不再使用高德模型与本地模型」。
+ *
+ *   实现方式：把库里的每条预设路线转成 **`chain`（自定义站链）** 后交给 `planNav` ——
+ *   `chain` 非空即 `chainMode = true`，引擎**按链约束枚举、完全不调高德**（见 `nav-service.ts`）
+ *   ⇒ 候选集恰好 = 预设路线，**从源头消除高德/本地模型候选** ✓
+ *
+ * ── 为什么做成批量接口 ────────────────────────────────────────────────
+ *   横琴一例就有 13 条预设。若由前端逐条打 `/api/nav?chain=…` ⇒ 手机端 13 次往返，
+ *   且服务端每次都要重载静态索引。本接口在**一次请求内**顺序算完全部路线再统一排序，
+ *   复用同一次 `planNav` 的静态缓存 ⇒ 明显更快、也不会打爆函数配额。
+ *
+ * ⚠️ 逐条算 ≠ 合并算：**不能把 13 条并成一条链**（那会把结构相同的路线合并成一张卡，
+ *    而产品要求**分开排序、分开显示**）。
+ *
+ * 只读接口（不改库）。
+ */
+import { NextResponse } from "next/server";
+import { getPool } from "@/lib/db";
+import { planNav } from "@/lib/nav/nav-service";
+import type { ChainStep } from "@/lib/nav/combo-params";
+import type { NavPoint } from "@/lib/nav/types";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const preferredRegion = "sin1";
+export const maxDuration = 60;
+
+const SLUGS = new Set(["home", "school", "gate", "hengqin"]);
+
+interface Seg {
+  kind: "walk" | "ride" | "transfer" | "cross_border";
+  phase?: "out" | "in";
+  route?: string;
+  kind2?: "bus" | "lrt";
+  board?: string;
+  alight?: string;
+  boardLabel?: string;
+  alightLabel?: string;
+  at?: string;
+  label?: string;
+}
+
+interface Body {
+  fromSlug?: string;
+  toSlug?: string;
+  /** 终点坐标（GCJ-02）—— 由前端带过来（组合里的目的地 POI 坐标） */
+  origin?: { lng: number; lat: number; label?: string; kind?: string; code?: string };
+  dest?: { lng: number; lat: number; label?: string; kind?: string; code?: string };
+  limit?: number;
+}
+
+/**
+ * `segs`（库里的分段结构）→ `ChainStep[]`（引擎要的站链）。
+ *
+ * 规则：第 1 段乘车的上车站 = `board` 节点（routes = [该线]）；
+ *      中间每段乘车的上车站 = `transfer` 节点（`routes` = 该段线路）；
+ *      最后一段乘车的下车站 = `alight` 节点。
+ *      `walk` / `cross_border` 段不参与（首末步行由 `planNav` 用起终点自行计算）。
+ */
+function segsToChain(segs: Seg[]): ChainStep[] {
+  const rides = segs.filter((s) => s.kind === "ride" && s.route);
+  if (!rides.length) return [];
+  const steps: ChainStep[] = [];
+  rides.forEach((r, i) => {
+    steps.push({
+      kind: i === 0 ? "board" : "transfer",
+      code: r.board,
+      label: r.boardLabel ?? r.board ?? "",
+      routes: [r.route as string],
+    });
+  });
+  const last = rides[rides.length - 1];
+  steps.push({ kind: "alight", code: last.alight, label: last.alightLabel ?? last.alight ?? "" });
+  return steps;
+}
+
+export async function POST(req: Request) {
+  try {
+    const body = (await req.json()) as Body;
+    const { fromSlug, toSlug, origin, dest } = body;
+    if (!fromSlug || !toSlug || !SLUGS.has(fromSlug) || !SLUGS.has(toSlug)) {
+      return NextResponse.json({ ok: false, error: "bad_slug" }, { status: 400 });
+    }
+    if (!origin || !dest) {
+      return NextResponse.json({ ok: false, error: "missing_endpoints" }, { status: 400 });
+    }
+
+    const pool = getPool();
+    const rows = (
+      await pool.query(
+        `SELECT route_key, name, route_labels, segs
+           FROM favorite_routes
+          WHERE from_slug = $1 AND to_slug = $2 AND is_active
+          ORDER BY sort_order, id`,
+        [fromSlug, toSlug],
+      )
+    ).rows as { route_key: string; name: string; segs: Seg[] }[];
+
+    if (!rows.length) {
+      return NextResponse.json({ ok: true, cards: [], presetTotal: 0, note: "no_preset" });
+    }
+
+    const originPoint: NavPoint = {
+      kind: (origin.kind as NavPoint["kind"]) ?? "station",
+      label: origin.label ?? "出发地",
+      lng: origin.lng,
+      lat: origin.lat,
+      ...(origin.code ? { code: origin.code } : {}),
+    };
+    const destPoint: NavPoint = {
+      kind: (dest.kind as NavPoint["kind"]) ?? "place",
+      label: dest.label ?? "目的地",
+      lng: dest.lng,
+      lat: dest.lat,
+      ...(dest.code ? { code: dest.code } : {}),
+    };
+
+    /** 逐条按链计算（`chain` 模式 = 按链约束、不调高德） */
+    const cards: unknown[] = [];
+    const failed: { routeKey: string; reason: string }[] = [];
+
+    for (const r of rows) {
+      const chain = segsToChain(Array.isArray(r.segs) ? r.segs : []);
+      if (chain.length < 2) {
+        failed.push({ routeKey: r.route_key, reason: "chain_too_short" });
+        continue;
+      }
+      try {
+        const out = await planNav(pool, {
+          origin: originPoint,
+          dest: destPoint,
+          chain,
+          limit: 1,
+        });
+        const card = out.cards?.[0];
+        if (card) {
+          cards.push({ ...card, presetKey: r.route_key });
+        } else {
+          failed.push({ routeKey: r.route_key, reason: out.emptyReason ?? "no_candidate" });
+        }
+      } catch (e) {
+        failed.push({ routeKey: r.route_key, reason: (e instanceof Error ? e.message : "error").slice(0, 120) });
+      }
+    }
+
+    // ★ 排序：总用时升序（与全站 `/nav` 卡片同口径）—— 这就是产品要的「按预设排序」
+    (cards as { totalMin?: number }[]).sort((a, b) => (a.totalMin ?? 1e9) - (b.totalMin ?? 1e9));
+
+    return NextResponse.json({
+      ok: true,
+      cards,
+      presetTotal: rows.length,
+      failed,
+      /** 数据来源说明（前端可显示，便于用户知道「这页只排预设」） */
+      source: "preset-chain",
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error("[api/fav-routes/plan] 失败：", msg);
+    return NextResponse.json({ ok: false, error: msg.slice(0, 300) }, { status: 500 });
+  }
+}
