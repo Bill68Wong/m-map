@@ -91,16 +91,29 @@ export async function POST(req: Request) {
       }
       if (!r.board || !r.alight) continue;
       // 在任一方向上找「顺向」路径（逐跳相邻）
+      //
+      // ⚠️ 踩坑（实测 2026-09-22）：**环线站码会重复出现** —— 例如 26 号线单向循环，
+      //    主码 `T355` 在站序里出现两次（位序 34 的 `T355/1` 与位序 45+ 的 `T355/2`）。
+      //    最初用 `indexOf()` 只取**首次出现** ⇒ 拿 `T355(34)` 与 `C653(43)` 比较，
+      //    得出「C653 在 T355 之后 ⇒ 不可达」的**误报** ✗
+      //    实际 `C653(43) → C692 → C689/1 → T355/2` 完全顺向可达 ✓
+      //    ⇒ 必须对 `board` 的**每个出现位置**分别往后找 `alight`。
       let reachable = false;
       for (const dir of st.routeIdx.dirsOf.get(r.route) ?? []) {
         const stops = st.routeIdx.dirStops.get(`${r.route}|${dir}`) ?? [];
         const codes = stops.map((s) => mainCodeOf(s));
-        const b = codes.indexOf(mainCodeOf(r.board));
-        const a = codes.indexOf(mainCodeOf(r.alight));
-        if (b >= 0 && a > b) {
-          reachable = true;
-          break;
+        const bCode = mainCodeOf(r.board);
+        const aCode = mainCodeOf(r.alight);
+        for (let i = 0; i < codes.length && !reachable; i++) {
+          if (codes[i] !== bCode) continue;
+          for (let j = i + 1; j < codes.length; j++) {
+            if (codes[j] === aCode) {
+              reachable = true;
+              break;
+            }
+          }
         }
+        if (reachable) break;
       }
       if (!reachable) {
         errors.push(
