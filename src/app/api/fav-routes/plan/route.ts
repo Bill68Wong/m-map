@@ -125,12 +125,13 @@ export async function POST(req: Request) {
     const cards: unknown[] = [];
     const failed: { routeKey: string; reason: string }[] = [];
 
-    // ★ 全并行（2026-09-22 实测调优）：
-    //   串行 13 条 ≈ 8.9s；分 4 条一批的批内并行**仍是 9.0s**（几乎没有改善）——
-    //   说明瓶颈不在「计算」而在**每条链各自要做的实时报站查询**，批间串行把收益吃掉了。
-    //   ⇒ 改为全部并发：13 条链的实时查询同时在途（与首页 11 桶 4 波同量级，可承受），
-    //     总耗时 ≈ 最慢的那一条。
-    const CHUNK = 13;
+    // ★ 分批并行（2026-09-22 三次实测调优，结论已定）：
+    //   串行 13 条 ≈ 8.9s · 分 4 条一批 ≈ **9.0s** · 全部 13 条并发 ≈ **12.1s**（反而更慢）
+    //   ⇒ 说明瓶颈**不在并发度**：每条链都要独立查 DSAT 实时报站，13 路齐发时相互争抢
+    //     （上游限流 + 函数冷启动），加大并发只会更糟。
+    //   ⇒ 取 4 条一批为最优实测点。**9 秒是这个链路的实际下限**；
+    //     真要提速需做层间缓存（`unstable_cache` 缓存原始行）或收敛预设条数，属后续优化项。
+    const CHUNK = 4;
     type Row = (typeof rows)[number];
     type Res = { r: Row; card: { summary?: string; totalMin?: number } | null; reason: string | null };
 
