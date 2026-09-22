@@ -146,7 +146,9 @@ export default function FavoriteCard({
                 </form>
               ) : (
                 <>
-                  {/* ★ S3：编排编辑器入口（S2 故意留空的位置） */}
+                  {/* ★ 2026-09-22：「编辑编排」→「**查看路线**」（产品口径）。
+                      点进去是**路线查看页** —— 读取库里固定的路线（一行一条、**不合并**），
+                      而不是旧的「编排编辑器」。⚠️「停用」功能保留不动（产品明确要求）。 */}
                   <button
                     type="button"
                     className="fav-menu__item"
@@ -156,8 +158,8 @@ export default function FavoriteCard({
                     }}
                     disabled={readOnly}
                   >
-                    <Icon name="edit" size={16} />
-                    编辑编排
+                    <Icon name="records" size={16} />
+                    查看路线
                   </button>
                   <button
                     type="button"

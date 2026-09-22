@@ -17,6 +17,7 @@ import Icon from "@/components/ui/Icon";
 import FavoriteCard from "./FavoriteCard";
 import ComboEditor from "./ComboEditor";
 import ComboPlans from "./ComboPlans";
+import RouteViewer from "./RouteViewer";
 import { useCombos } from "@/lib/favorites/useCombos";
 import { PRUNE_NOTICE_KEY, type Combo } from "@/lib/favorites/types";
 
@@ -35,6 +36,11 @@ export default function FavoritesClient({ colors = {} }: { colors?: Record<strin
   const [editing, setEditing] = useState<Combo | null>(null);
   /** ★ S4：正在查看方案的组合（非空 → 全屏方案列表） */
   const [viewing, setViewing] = useState<Combo | null>(null);
+  /**
+   * ★ 2026-09-22：「查看路线」页（取代旧「编辑编排」入口）。
+   * 展示该组合下**库里固定的路线**（`favorite_routes`，一行一卡、不合并）。
+   */
+  const [routeView, setRouteView] = useState<Combo | null>(null);
   const combos = useMemo(() => [...c.combos].sort(order), [c.combos]);
 
   /** 行内轻提示（不弹模态） */
@@ -97,6 +103,12 @@ export default function FavoritesClient({ colors = {} }: { colors?: Record<strin
         }}
       />
     );
+  }
+
+  // ── ★ 2026-09-22：「查看路线」全屏（读库里的固定路线，一行一卡）──
+  if (routeView) {
+    const fresh = c.combos.find((x) => x.id === routeView.id) ?? routeView;
+    return <RouteViewer combo={fresh} colors={colors} onExit={() => setRouteView(null)} />;
   }
 
   // ── ★ S4：方案列表全屏（现场算）──
@@ -164,7 +176,8 @@ export default function FavoritesClient({ colors = {} }: { colors?: Record<strin
               combo={combo}
               readOnly={c.readOnly}
               onOpen={open}
-              onEdit={(x) => setEditing(x)}
+              // ★ 2026-09-22：⋯ 菜单的「查看路线」→ 读库的路线查看页（不再是旧编排编辑器）
+              onEdit={(x) => setRouteView(x)}
               onRename={(id, name) => {
                 c.update(id, { name, nameEdited: true });
                 flash("已重命名");

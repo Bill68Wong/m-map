@@ -48,6 +48,8 @@
     "db:migrate-v1400": "tsx scripts/db-guard.ts run db/migrate-v1400.ts",
     "db:migrate-v2300": "tsx scripts/db-guard.ts run db/migrate-v2300.ts",
     "db:migrate-v2501": "tsx scripts/db-guard.ts run db/migrate-v2501.ts",
+    "db:migrate-v2600": "tsx scripts/db-guard.ts run db/migrate-v2600.ts",
+    "db:import-favorite-routes": "tsx scripts/db-guard.ts run db/import-favorite-routes.ts",
     "bus:fetch-frequency": "tsx scripts/db-guard.ts run scripts/fetch-bus-frequency.ts",
     "db:rebuild-amap-map": "tsx scripts/db-guard.ts run scripts/rebuild-station-amap-map.ts",
     "db:apply-amap-map": "tsx scripts/db-guard.ts run scripts/apply-station-amap-map.ts",
