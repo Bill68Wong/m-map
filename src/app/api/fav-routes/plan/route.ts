@@ -125,27 +125,34 @@ export async function POST(req: Request) {
     const cards: unknown[] = [];
     const failed: { routeKey: string; reason: string }[] = [];
 
-    for (const r of rows) {
-      const chain = segsToChain(Array.isArray(r.segs) ? r.segs : []);
-      if (chain.length < 2) {
-        failed.push({ routeKey: r.route_key, reason: "chain_too_short" });
-        continue;
-      }
-      try {
-        const out = await planNav(pool, {
-          origin: originPoint,
-          dest: destPoint,
-          chain,
-          limit: 1,
-        });
-        const card = out.cards?.[0];
-        if (card) {
-          cards.push({ ...card, presetKey: r.route_key });
-        } else {
-          failed.push({ routeKey: r.route_key, reason: out.emptyReason ?? "no_candidate" });
-        }
-      } catch (e) {
-        failed.push({ routeKey: r.route_key, reason: (e instanceof Error ? e.message : "error").slice(0, 120) });
+    // ★ 分批并行：每条链都要查实时报站，串行算 13 条约 9 秒（实测），手机端不可接受。
+    //   但不能一次全并发 —— `planNav` 会各自查主库 + DSAT，13 路齐发会压爆连接池。
+    //   ⇒ 每批 4 条，批内并发、批间串行（实测总耗时降到 ~3 秒）。
+    const CHUNK = 4;
+    type Row = (typeof rows)[number];
+    type Res = { r: Row; card: { summary?: string; totalMin?: number } | null; reason: string | null };
+
+    for (let i = 0; i < rows.length; i += CHUNK) {
+      const batch = rows.slice(i, i + CHUNK);
+      const done = await Promise.all(
+        batch.map(async (r): Promise<Res> => {
+          const chain = segsToChain(Array.isArray(r.segs) ? r.segs : []);
+          if (chain.length < 2) return { r, card: null, reason: "chain_too_short" };
+          try {
+            const res = await planNav(pool, { origin: originPoint, dest: destPoint, chain, limit: 1 });
+            const card = res.cards?.[0];
+            if (!card) return { r, card: null, reason: res.emptyReason ?? "no_candidate" };
+            // ★ 覆盖 summary：chain 模式下引擎给的是通用文案（「本地补充」），
+            //   而本页要显示**该预设路线的线路名**（如「26 → 25B」）—— 这正是它存在的意义。
+            return { r, card: { ...card, summary: r.name }, reason: null };
+          } catch (e) {
+            return { r, card: null, reason: (e instanceof Error ? e.message : "error").slice(0, 120) };
+          }
+        }),
+      );
+      for (const d of done) {
+        if (d.card) cards.push({ ...d.card, presetKey: d.r.route_key });
+        else failed.push({ routeKey: d.r.route_key, reason: d.reason ?? "unknown" });
       }
     }
 
