@@ -523,21 +523,23 @@ export default function NavMap({
         const centerLat = (origin.lat + dest.lat) / 2;
         const centerLng = (origin.lng + dest.lng) / 2;
         const size = map.getSize?.() ?? { width: 390, height: 700 };
-        // 可用视野：宽留边 50px/侧；高只用上半屏（下部被面板盖住）再留 60px
-        const availW = Math.max(80, size.width - 100);
-        const availH = Math.max(80, Math.round(size.height / 2) - 60);
-        // 两点跨度 × 2.2（余量，避免贴边）
-        const lngSpan = Math.max(Math.abs(origin.lng - dest.lng) * 2.2, 1e-5);
-        const latSpan = Math.max(Math.abs(origin.lat - dest.lat) * 2.2, 1e-5);
+        // 可用视野：宽留边 60px/侧；高只用上半屏（下部被面板盖住）再留 40px
+        const availW = Math.max(80, size.width - 120);
+        const availH = Math.max(80, Math.round(size.height / 2) - 40);
+        // 两点跨度 × **2.8**（余量）：余量给足，两点才会明显收进上半屏中部而不是贴边
+        //   （上一版取 2.2，实测两点贴边、靠南的出发地被面板遮住 ✗）
+        const lngSpan = Math.max(Math.abs(origin.lng - dest.lng) * 2.8, 1e-5);
+        const latSpan = Math.max(Math.abs(origin.lat - dest.lat) * 2.8, 1e-5);
         const zx = Math.log2((360 * availW) / (256 * lngSpan));
         const zy = Math.log2(
           (360 * availH) / (256 * latSpan * Math.cos((centerLat * Math.PI) / 180)),
         );
-        // 上限 16：两点很近时不要怼到街景级；下限 12：不要拉到看不出地理位置
-        const z = Math.max(12, Math.min(16, Math.floor(Math.min(zx, zy))));
+        // 上限 16：两点很近时不要怼到街景级；下限 11：允许跨全澳的远距离 OD
+        const z = Math.max(11, Math.min(16, Math.floor(Math.min(zx, zy))));
         map.setZoomAndCenter(z, [centerLng, centerLat], true);
-        // 上移 1/4 容器高：把两点从「整屏中心」推到「上半屏中心」
-        map.panBy(0, Math.round(size.height * 0.25));
+        // 上移 1/6 容器高：把两点从「整屏中心」抬到上半屏中部。
+        //   ⚠️ 取 1/6 而非 1/4 —— 1/4 会把靠南的那个点推出可见区（实测）。
+        map.panBy(0, Math.round(size.height / 6));
         canvasRef.current?.setAttribute("data-nav-zoom", String(z));
         canvasRef.current?.setAttribute("data-view-mode", "fit-two-selfcalc");
       } catch {
