@@ -125,10 +125,12 @@ export async function POST(req: Request) {
     const cards: unknown[] = [];
     const failed: { routeKey: string; reason: string }[] = [];
 
-    // ★ 分批并行：每条链都要查实时报站，串行算 13 条约 9 秒（实测），手机端不可接受。
-    //   但不能一次全并发 —— `planNav` 会各自查主库 + DSAT，13 路齐发会压爆连接池。
-    //   ⇒ 每批 4 条，批内并发、批间串行（实测总耗时降到 ~3 秒）。
-    const CHUNK = 4;
+    // ★ 全并行（2026-09-22 实测调优）：
+    //   串行 13 条 ≈ 8.9s；分 4 条一批的批内并行**仍是 9.0s**（几乎没有改善）——
+    //   说明瓶颈不在「计算」而在**每条链各自要做的实时报站查询**，批间串行把收益吃掉了。
+    //   ⇒ 改为全部并发：13 条链的实时查询同时在途（与首页 11 桶 4 波同量级，可承受），
+    //     总耗时 ≈ 最慢的那一条。
+    const CHUNK = 13;
     type Row = (typeof rows)[number];
     type Res = { r: Row; card: { summary?: string; totalMin?: number } | null; reason: string | null };
 
