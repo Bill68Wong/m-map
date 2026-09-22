@@ -56,6 +56,10 @@ interface EtaItem {
   stopsAway: number | null;
   etaMin: number | null;
   ok: boolean;
+  /** ★ 2026-09-22：载具种类（缺省按巴士，兼容旧接口） */
+  kind?: "bus" | "lrt";
+  /** ★ 2026-09-22 轻轨专用：下一班发车时刻 `HH:MM` */
+  nextAt?: string | null;
 }
 
 interface EtaResponse {
@@ -72,10 +76,22 @@ function mainCodeOf(code: string): string {
 }
 
 /**
- * 报站内容（简体）：ok=false→取不到；无车→暂无在途车；0 站→即将到站；否则「还有 N 站 · 约 M 分」。
+ * 报站内容（简体）。
+ * · 巴士：ok=false→取不到；无车→暂无在途车；0 站→即将到站；否则「还有 N 站 · 约 M 分」
+ * · **轻轨**（★ 2026-09-22）：走**时刻表**，没有「还有几站」⇒ 显示「下一班 HH:MM · M 分后」；
+ *   已收班（`etaMin === null`）⇒「今日已收班」。
  * ★ 站数 N 与「即将到站」由 `<EtaText>` 加粗 + 青花蓝（通勤决策的关键数字，第一眼可见）。
  */
 function etaNode(it: EtaItem) {
+  if (it.kind === "lrt") {
+    if (it.etaMin === null) return <>今日已收班</>;
+    const at = it.nextAt ? `${it.nextAt}` : "";
+    return (
+      <EtaText
+        text={it.etaMin === 0 ? `${at} 即将开出` : `下一班 ${at} · ${it.etaMin} 分后`}
+      />
+    );
+  }
   if (!it.ok) return <>这条线路暂时取不到报站</>;
   if (it.stopsAway === null) return <>暂无在途车</>;
   return (
@@ -124,6 +140,12 @@ export default function StationCard({
   }, [station.code]);
 
   const main = mainCodeOf(station.code);
+  /**
+   * ★ 2026-09-22：**轻轨站**（主码 `LRT-` 前缀）。
+   *   产品要求（用户反馈）：轻轨站**不要显示 `LRT-XXX` 这种码**，只显示繁体中文站名；
+   *   巴士站保持「主码 + 站名」—— 那是用户认站的依据（`M123` / `T373`）。
+   */
+  const isLrt = station.code.startsWith("LRT-");
 
   /** 按 `platform` 聚合为站台分组；无 `platform` → 退化成「单组」（不画框、不显子码） */
   const groups = useMemo(() => {
@@ -151,8 +173,9 @@ export default function StationCard({
     <div className="nav-station-card" role="dialog" aria-label={`站点 ${station.name}`}>
       <div className="nav-station-card__head">
         <span className="nav-station-card__name">
-          <span className="nav-station-card__code">{main}</span>
-          {station.name ? ` ${station.name}` : ""}
+          {/* ★ 2026-09-22：轻轨站**不显示主码**（`LRT-SPW` 这类），只显示中文站名 */}
+          {!isLrt && <span className="nav-station-card__code">{main}</span>}
+          {station.name ? `${isLrt ? "" : " "}${station.name}` : ""}
         </span>
         <button className="nav-station-card__close" type="button" aria-label="关闭" onClick={onClose}>
           <Icon name="close" size={20} />

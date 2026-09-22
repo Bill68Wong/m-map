@@ -49,7 +49,7 @@ const CACHE_TTL_MS = 20_000;
 interface StationEtaItem {
   /** 线路码 */
   route: string;
-  /** 查询方向（我们库 `dsat_dir`） */
+  /** 查询方向（我们库 `dsat_dir`；轻轨为终点站码） */
   dir: string;
   /**
    * ★ v2.3.0（FIX-07 落点）：该线在本站的**站台码**（如 `T373/1`）。
@@ -59,12 +59,19 @@ interface StationEtaItem {
   platform: string;
   /** 方向显示标签（如「往 關閘總站」） */
   dirLabel: string;
-  /** 最近一辆车还有几站；null = 暂无在途车 */
+  /** 最近一辆车还有几站；null = 暂无在途车（轻轨恒为 null） */
   stopsAway: number | null;
   /** 最近一辆车约几分钟到站；null = 暂无在途车 */
   etaMin: number | null;
   /** false = 该线查询失败/超时（区别于「查询成功但暂无车」） */
   ok: boolean;
+  /**
+   * ★ 2026-09-22 轻轨专用：载具种类，前端据此切换文案
+   *   （巴士说「还有 N 站 · 约 M 分」，轻轨说「下一班 HH:MM · M 分后」）。
+   */
+  kind: "bus" | "lrt";
+  /** ★ 2026-09-22 轻轨专用：下一班发车时刻 `HH:MM`（当天）；无班次 ⇒ null */
+  nextAt?: string | null;
 }
 
 interface StationEtaResponse {
@@ -98,6 +105,113 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   });
 }
 
+/**
+ * ★ 2026-09-22 新增：**轻轨站的报站**（走时刻表，不是 DSAT 实时）。
+ *
+ * 数据源 `lrt_timetables`：一行 = （站 × 线路 × 方向 × 日期类型）的**发车时刻表**
+ *   · `route_no`：`TPL` 氹仔线 / `SPVL` 石排湾线 / `HQL` 横琴线
+ *   · `direction`：该班车**开往的终点站码**（`BAR`妈阁 / `TFT`氹仔码头 / `SPV`石排湾 / `UH`协和医院 / `LOT`莲花 / `HQ`横琴）
+ *   · `day_type`：`mon_thurs` / `fri` / `sat_sun_holiday`
+ *   · `minutes`：`[{hour, minutes:[分...]}]` 当日发车时刻
+ *
+ * 产品口径（用户 2026-09-22）：
+ *   · **换乘站两条线都要显示** —— 数据天然如此（莲花 `LOT` 有 TPL+HQL、协和医院 `UH` 有 TPL+SPVL）；
+ *   · **非首末站显示双方向** —— 同样天然如此（首末站如妈阁只有 1 个方向）；
+ *   · 故本函数**枚举该站全部 (线路 × 方向)**，不额外筛选。
+ */
+const LRT_ROUTE_NAME: Record<string, string> = {
+  TPL: "LRT-氹仔线",
+  SPVL: "LRT-石排湾线",
+  HQL: "LRT-横琴线",
+};
+
+/** 站码 → 显示名（去掉「站」后缀，与全站口径一致） */
+function lrtStationName(raw: string): string {
+  return raw.replace(/站$/, "");
+}
+
+async function lrtItems(
+  pool: ReturnType<typeof getPool>,
+  main: string,
+  nowMs: number,
+): Promise<StationEtaItem[]> {
+  // ① 我们的码（`LRT-BAR`）→ 轻轨 API 码（`BAR`）
+  const stRow = (
+    await pool.query(`SELECT api_id, name_tc FROM lrt_api_stations WHERE db_code = $1 LIMIT 1`, [main])
+  ).rows[0] as { api_id: string; name_tc: string } | undefined;
+  if (!stRow) return [];
+  const apiStation = stRow.api_id;
+
+  // ② 日期类型 + 当日分钟偏移（澳门时间 GMT+8）
+  const macau = new Date(nowMs + 8 * 3_600_000);
+  const dow = macau.getUTCDay(); // 0=周日
+  const dayType = dow === 5 ? "fri" : dow === 0 || dow === 6 ? "sat_sun_holiday" : "mon_thurs";
+  const nowMin = macau.getUTCHours() * 60 + macau.getUTCMinutes();
+
+  // ③ 该站全部 (线路 × 方向)
+  const rows = (
+    await pool.query(
+      `SELECT route_no, direction, day_type, first_min, last_min, minutes
+         FROM lrt_timetables WHERE api_station = $1`,
+      [apiStation],
+    )
+  ).rows as { route_no: string; direction: string; day_type: string; first_min: number; last_min: number; minutes: unknown }[];
+
+  // 终点站显示名（`BAR` → 媽閣），用于「往 XXX」
+  const nameRows = (
+    await pool.query(`SELECT api_id, name_tc FROM lrt_api_stations`)
+  ).rows as { api_id: string; name_tc: string }[];
+  const nameOfApi = new Map(nameRows.map((r) => [r.api_id, lrtStationName(r.name_tc)]));
+
+  /** 取某个 (线路×方向) 在**当日类型**下的下一班 */
+  function nextDeparture(minutes: unknown, firstMin: number, lastMin: number): number | null {
+    let blocks: { hour: number; minutes: number[] }[] = [];
+    try {
+      blocks = typeof minutes === "string" ? JSON.parse(minutes) : ((minutes as typeof blocks) ?? []);
+    } catch {
+      return null;
+    }
+    const all: number[] = [];
+    for (const b of blocks ?? []) {
+      for (const m of b.minutes ?? []) all.push(b.hour * 60 + m);
+    }
+    all.sort((a, b) => a - b);
+    if (!all.length) return null;
+    if (nowMin > lastMin) return null; // 已收班
+    return all.find((v) => v >= nowMin) ?? null;
+  }
+
+  const byKey = new Map<string, { route_no: string; direction: string; minutes: unknown; first_min: number; last_min: number }>();
+  for (const r of rows) {
+    if (r.day_type !== dayType) continue;
+    byKey.set(`${r.route_no}|${r.direction}`, r);
+  }
+
+  const items: StationEtaItem[] = [];
+  for (const [key, r] of byKey) {
+    const [routeNo, direction] = key.split("|");
+    const route = LRT_ROUTE_NAME[routeNo] ?? routeNo;
+    const next = nextDeparture(r.minutes, r.first_min, r.last_min);
+    const etaMin = next === null ? null : Math.max(0, next - nowMin);
+    items.push({
+      route,
+      dir: direction,
+      platform: apiStation,
+      dirLabel: `往 ${nameOfApi.get(direction) ?? direction}`,
+      // 轻轨没有「还有几站」概念（时刻表制）⇒ 恒 null，前端据 `kind` 切文案
+      stopsAway: null,
+      etaMin,
+      ok: true,
+      kind: "lrt",
+      nextAt:
+        next === null
+          ? null
+          : `${String(Math.floor(next / 60)).padStart(2, "0")}:${String(next % 60).padStart(2, "0")}`,
+    });
+  }
+  return items;
+}
+
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
   const code = sp.get("code")?.trim() ?? "";
@@ -116,45 +230,52 @@ export async function GET(req: NextRequest) {
   let items: StationEtaItem[] = [];
   try {
     const pool = getPool();
-    const st = await loadStatics(pool);
-    const idx = st.routeIdx;
-    const weekday = new Date(nowMs + 8 * 3_600_000).getUTCDay();
 
-    // ② 枚举该主码出现的全部 (线路 × 方向)，构造「本站 → 下一站」查询作业
-    const jobs: { station: string; dest: string; routes: string[] }[] = [];
-    const meta: { route: string; dir: string; platform: string; dirLabel: string }[] = [];
-    for (const [key, stops] of idx.dirStops) {
-      const [route, dir] = key.split("|");
-      if (route.startsWith("LRT-")) continue; // 只做巴士（轻轨走时刻表，口径不同）
-      const i = stops.findIndex((c) => mainCodeOf(c) === main);
-      if (i < 0) continue;
-      if (i + 1 >= stops.length) continue; // 终点站：无「下一站」定方向 → 跳过
-      const platform = stops[i];
-      const terminal = idx.nameOf.get(stops[stops.length - 1]) ?? stops[stops.length - 1];
-      jobs.push({ station: platform, dest: stops[i + 1], routes: [route] });
-      meta.push({ route, dir, platform, dirLabel: `往 ${stripCodePrefix(terminal)}` });
-    }
+    // ★ 2026-09-22：**轻轨站**走时刻表分支（此前一律跳过 ⇒ 点轻轨站没有报站）
+    if (main.startsWith("LRT-")) {
+      items = await lrtItems(pool, main, nowMs);
+    } else {
+      const st = await loadStatics(pool);
+      const idx = st.routeIdx;
+      const weekday = new Date(nowMs + 8 * 3_600_000).getUTCDay();
 
-    if (jobs.length) {
-      // ③ 实时（复用 fetchStationLive：与详情页报站同一实现）；整体超时兜底
-      const liveMap = await withTimeout(
-        fetchStationLive(pool, jobs, idx, st.segIdx, { todayWeekday: weekday, nowMs }),
-        TOTAL_TIMEOUT_MS,
-      ).catch((): Map<string, BusLive> => new Map());
+      // ② 枚举该主码出现的全部 (线路 × 方向)，构造「本站 → 下一站」查询作业
+      const jobs: { station: string; dest: string; routes: string[] }[] = [];
+      const meta: { route: string; dir: string; platform: string; dirLabel: string }[] = [];
+      for (const [key, stops] of idx.dirStops) {
+        const [route, dir] = key.split("|");
+        if (route.startsWith("LRT-")) continue; // 只做巴士（轻轨走时刻表，口径不同）
+        const i = stops.findIndex((c) => mainCodeOf(c) === main);
+        if (i < 0) continue;
+        if (i + 1 >= stops.length) continue; // 终点站：无「下一站」定方向 → 跳过
+        const platform = stops[i];
+        const terminal = idx.nameOf.get(stops[stops.length - 1]) ?? stops[stops.length - 1];
+        jobs.push({ station: platform, dest: stops[i + 1], routes: [route] });
+        meta.push({ route, dir, platform, dirLabel: `往 ${stripCodePrefix(terminal)}` });
+      }
 
-      items = meta.map((m) => {
-        const bl = liveMap.get(`${m.route}@${m.platform}`);
-        const n = bl?.nearest ?? null;
-        return {
-          route: m.route,
-          dir: m.dir,
-          platform: m.platform,
-          dirLabel: m.dirLabel,
-          stopsAway: n ? n.stopsAway : null,
-          etaMin: n ? Math.max(0, Math.round(n.loSec / 60)) : null,
-          ok: !!bl, // 有 BusLive = 查询成功（nearest 为空 = 该方向暂无在途车，仍算成功）
-        };
-      });
+      if (jobs.length) {
+        // ③ 实时（复用 fetchStationLive：与详情页报站同一实现）；整体超时兜底
+        const liveMap = await withTimeout(
+          fetchStationLive(pool, jobs, idx, st.segIdx, { todayWeekday: weekday, nowMs }),
+          TOTAL_TIMEOUT_MS,
+        ).catch((): Map<string, BusLive> => new Map());
+
+        items = meta.map((m) => {
+          const bl = liveMap.get(`${m.route}@${m.platform}`);
+          const n = bl?.nearest ?? null;
+          return {
+            route: m.route,
+            dir: m.dir,
+            platform: m.platform,
+            dirLabel: m.dirLabel,
+            stopsAway: n ? n.stopsAway : null,
+            etaMin: n ? Math.max(0, Math.round(n.loSec / 60)) : null,
+            ok: !!bl, // 有 BusLive = 查询成功（nearest 为空 = 该方向暂无在途车，仍算成功）
+            kind: "bus" as const,
+          };
+        });
+      }
     }
   } catch (e) {
     console.warn("[api/station/eta] 失败（收敛为空）：", (e as Error).message);

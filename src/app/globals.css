@@ -2054,13 +2054,16 @@ button[aria-disabled="true"] {
   background: var(--primary);
   box-shadow: 0 0 0 4px rgba(11, 87, 208, 0.25);
 }
-/* 目的地标记：水滴形 + **中心白点** ★ 2026-09-22 改进
-   （原为纯红色色块、无白点，用户反馈「图标长得有点奇怪」；
-     加上白点后与主流地图的标记一致，也更容易在底图上辨认） */
+/* 目的地标记：水滴形 + 中心白点
+   ★ 2026-09-22 二次修正（用户反馈「还是奇怪、像长歪了」）：
+     · 白点原先放在**几何中心**（`top:50%`）—— 但水滴形的**视觉中心**在圆心处（偏上），
+       几何中心落在「腰」偏下的位置 ⇒ 看起来像整体歪了 ✗
+       ⇒ 改到 `top:34%`（对准圆心）。
+     · 容器由 22×28 收为 **20×26**：原比例偏瘦长，旋转后更显倾斜。 */
 .nav-map__destpin {
   position: relative;
-  width: 22px;
-  height: 28px;
+  width: 20px;
+  height: 26px;
   border-radius: 50% 50% 50% 0;
   transform: rotate(-45deg);
   background: var(--error);
@@ -2071,7 +2074,8 @@ button[aria-disabled="true"] {
   content: "";
   position: absolute;
   left: 50%;
-  top: 50%;
+  /* 对准水滴**圆心**（而非几何中心）——这是「看起来正」的关键 */
+  top: 34%;
   width: 8px;
   height: 8px;
   margin: -4px 0 0 -4px;

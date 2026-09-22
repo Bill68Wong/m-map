@@ -44,11 +44,17 @@ const INIT_ZOOM = 12;
  *   要在一屏宽 `W` 像素里横向放下 `D` 米 ⇒ `米/像素 = D / W`
  *   ⇒ 解出 `z = log2( 156543.03392 · cos(φ) · W / D )`
  *
- * 【实测代入】澳门纬度 φ≈22.15°（cos=0.9261）、手机宽 W=390px、D=5000m：
- *   z = log2(156543.03392 · 0.9261 · 390 / 5000) = log2(11309) ≈ 13.46
- * ⇒ 取 z≈13.46（随容器宽度实时计算，兼容手机/桌面）。
+ * 【实测代入】澳门纬度 φ≈22.15°（cos=0.9261）、手机宽 W=390px：
+ *   z = log2(156543.03392 · 0.9261 · 390 / D)
+ *   · D=5000（旧）  → z ≈ 13.46
+ *   · D=2500（现行）→ z ≈ 14.46
+ *
+ * ★ 2026-09-22：**5000 → 2500**（用户反馈「点定位居中后比例尺太小」）。
+ *   取 2500 而非更小的理由：一屏 2.5km ≈ 澳门半岛南北向的一半，
+ *   既能看清所处街区、又能看到周边地标（用于「我在哪 / 往哪走」）；
+ *   再缩到 1500 左右就只剩几条街，反而失去方位感。
  */
-const TARGET_METERS_ACROSS = 5000;
+const TARGET_METERS_ACROSS = 2500;
 
 /** ★ S1：缩放收敛区间（minZoom=11：一屏≈27.6km，远小于遮罩外圈 ±1.6°≈178km ⇒ 永不露边） */
 const MIN_ZOOM = 11;
@@ -198,6 +204,9 @@ export default function NavMap({
       ? isInsideRings(pos.lng, pos.lat, [...dist.rings, ...dist.exclaveRings])
       : true; // 边界未知时按旧行为（居中）
     if (inMacau) {
+      // ★ 2026-09-22：定位成功 ⇒ **清掉「无法定位」提示**（此前只设不清，定位恢复后提示仍挂着）
+      setNote("");
+      canvas?.setAttribute("data-locate-ok", "on");
       // ★ 2026-09-22：若调用方正在做**外部取景**（搜索弹窗要求「目的地居上半屏」或「两点适配」），
       //   定位**不再抢镜头** —— 否则异步定位完成后会把地图拉回「我的位置」居中，
       //   覆盖掉刚做好的取景（实测：标记因此掉进被弹窗遮住的下半屏）。蓝点照常落位。
@@ -523,23 +532,26 @@ export default function NavMap({
         const centerLat = (origin.lat + dest.lat) / 2;
         const centerLng = (origin.lng + dest.lng) / 2;
         const size = map.getSize?.() ?? { width: 390, height: 700 };
-        // 可用视野：宽留边 60px/侧；高只用上半屏（下部被面板盖住）再留 40px
-        const availW = Math.max(80, size.width - 120);
-        const availH = Math.max(80, Math.round(size.height / 2) - 40);
-        // 两点跨度 × **2.8**（余量）：余量给足，两点才会明显收进上半屏中部而不是贴边
-        //   （上一版取 2.2，实测两点贴边、靠南的出发地被面板遮住 ✗）
-        const lngSpan = Math.max(Math.abs(origin.lng - dest.lng) * 2.8, 1e-5);
-        const latSpan = Math.max(Math.abs(origin.lat - dest.lat) * 2.8, 1e-5);
+        // 可用视野（★ 2026-09-22 三次修正）：
+        //   宽：留 50px/侧（marker 宽约 30px + 呼吸位）。
+        //   高：**下半屏被弹窗完全遮住**，所以只用上半屏；只留 20px 顶/底呼吸位
+        //      （上一版多减了 40px，等于白白缩了一档 zoom）。
+        const availW = Math.max(80, size.width - 100);
+        const availH = Math.max(80, Math.round(size.height / 2) - 20);
+        // 两点跨度 × **1.25**：让两点占据可用区的大部分（上一版取 2.8 太保守 ⇒ zoom 被压到 11）✓
+        //   ×1.25 的含义：两点跨度只用掉可视区的 80%，余 20% 给 marker 尺寸与呼吸位。
+        const lngSpan = Math.max(Math.abs(origin.lng - dest.lng) * 1.25, 1e-5);
+        const latSpan = Math.max(Math.abs(origin.lat - dest.lat) * 1.25, 1e-5);
         const zx = Math.log2((360 * availW) / (256 * lngSpan));
         const zy = Math.log2(
           (360 * availH) / (256 * latSpan * Math.cos((centerLat * Math.PI) / 180)),
         );
-        // 上限 16：两点很近时不要怼到街景级；下限 11：允许跨全澳的远距离 OD
-        const z = Math.max(11, Math.min(16, Math.floor(Math.min(zx, zy))));
+        // 下限 12：跨全澳的远距离 OD 也至少能看清陆地方位；上限 16：两点很近时不要怼到街景级
+        const z = Math.max(12, Math.min(16, Math.floor(Math.min(zx, zy))));
         map.setZoomAndCenter(z, [centerLng, centerLat], true);
-        // 上移 1/6 容器高：把两点从「整屏中心」抬到上半屏中部。
-        //   ⚠️ 取 1/6 而非 1/4 —— 1/4 会把靠南的那个点推出可见区（实测）。
-        map.panBy(0, Math.round(size.height / 6));
+        // ★ 上移 1/4 容器高：把「两点中点」从整屏中心抬到**上半屏中心**（= size.height/4）。
+        //   这一版 zoom 已到 12（两点只占屏高约 1/3），上移 1/4 不会把靠下的点推出可见区。
+        map.panBy(0, Math.round(size.height / 4));
         canvasRef.current?.setAttribute("data-nav-zoom", String(z));
         canvasRef.current?.setAttribute("data-view-mode", "fit-two-selfcalc");
       } catch {
