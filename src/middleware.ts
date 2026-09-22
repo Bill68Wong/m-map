@@ -48,6 +48,11 @@ const PUBLIC_PREFIXES = [
   //   ⚠️ 该前缀同时覆盖 POST 保存接口 —— 与公开页 `/favorites` 同一信任级别
   //   （用户在自己浏览器里编辑并落库；非商业个人项目，接受此放宽）。
   "/api/fav-routes",
+  // ★ 2026-09-22 公共交通路线：线路清单 + 线路走向（地图画线用）
+  //   ⚠️⚠️ **fail-closed 下每新增一个 API 都必须显式加白名单** —— 忘加 = 线上 401。
+  //     本项目已因此踩过**两次**（`/api/fav-routes` 与本次 `/api/route-*`）⇒ 记牢。
+  "/api/route-lines",
+  "/api/route-shapes",
   "/_AMapService", // ★ 高德 JS API 安全代理（浏览器直连；密钥不下发前端，见 §2.D）
   "/api/amap-service", // ↑ 同一处理器的真实路由（`/_AMapService` 经 rewrite 指向它）
   "/_next", // 构建产物
