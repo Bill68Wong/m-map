@@ -67,6 +67,14 @@ const MAX_ZOOM = 18;
  *   再降到 14 会一次铺开全部站点、与街区细节叠在一起（用户明确要求「不能太小」）。
  */
 const STATION_MIN_ZOOM = 15;
+/**
+ * ★ 2026-09-22：**路线查看模式下的站点阈值**（比常规低一档）。
+ *   为什么需要：进入路线模式会 `setBounds` 把视野缩到「装下整条线」，
+ *   跨全澳的长线（如 26 号）实测落到 zoom ≈ 12~13，**低于常规阈值 15**
+ *   ⇒ 站点图层整体不显示 ⇒ 看不到「本线站点高亮」的效果 ✗
+ *   ⇒ 路线模式下放宽到 12（此时仍需显示本线站点，否则功能等于白做）。
+ */
+const STATION_MIN_ZOOM_ROUTE = 12;
 /** 视图事件节流（毫秒）：`zoomend`/`moveend` 高频触发，节流后再裁剪/渲染 */
 const STATION_REFRESH_THROTTLE_MS = 150;
 
@@ -644,7 +652,9 @@ export default function NavMap({
         const zoom = typeof map.getZoom === "function" ? map.getZoom() : 0;
         // ★ 无副作用观测钩子（同 `data-nav-zoom` 传统）：自动化验收读取实际生效的 zoom
         canvasRef.current?.setAttribute("data-nav-z", String(zoom));
-        if (zoom < STATION_MIN_ZOOM) {
+        // ★ 2026-09-22：路线模式下阈值放宽（否则长线缩到全澳后站点全消失，看不到高亮）
+        const minZoom = routeStopsRef.current.size > 0 ? STATION_MIN_ZOOM_ROUTE : STATION_MIN_ZOOM;
+        if (zoom < minZoom) {
           clearAll(); // 拉远：清空（产品口径）
           return;
         }
