@@ -53,6 +53,9 @@ const PUBLIC_PREFIXES = [
   //     本项目已因此踩过**两次**（`/api/fav-routes` 与本次 `/api/route-*`）⇒ 记牢。
   "/api/route-lines",
   "/api/route-shapes",
+  // ★ v2.10.0 路线查看模式·在途车辆实时位置（GET）—— 与 route-lines/shapes 同一信任级别
+  //   ⚠️ 第三次记牢：fail-closed 下**每新增一个 API 都必须显式加白名单**，忘加 = 线上 401。
+  "/api/route-vehicles",
   "/_AMapService", // ★ 高德 JS API 安全代理（浏览器直连；密钥不下发前端，见 §2.D）
   "/api/amap-service", // ↑ 同一处理器的真实路由（`/_AMapService` 经 rewrite 指向它）
   "/_next", // 构建产物

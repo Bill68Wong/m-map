@@ -1994,14 +1994,15 @@ button[aria-disabled="true"] {
 }
 
 /* ★ S2：首页**全屏地图** —— 去 aspect-ratio 改 fixed 铺满。
-   ⚠️ 底部让出「合规条 + 底部导航」整带 ⇒ 高德 Logo / 审图号（地图 DOM 左下 / 右下角）
-   **永不被遮挡**（合规红线，风险 #4）。 */
+   ⚠️ 底部让出「底部导航」整带 ⇒ 高德 Logo / 审图号（地图 DOM 左下 / 右下角）
+   **永不被遮挡**（合规红线，风险 #4）。
+   ★ v2.10.0：合规条已从地图页移除（内容迁至 `/help`）⇒ 不再让出 `--compliance-h`。 */
 .nav-map--full {
   position: fixed;
   top: 0;
   left: 0;
   right: 0;
-  bottom: calc(var(--tabbar-h) + var(--safe-bottom) + var(--compliance-h));
+  bottom: calc(var(--tabbar-h) + var(--safe-bottom));
   width: auto;
   height: auto;
   aspect-ratio: auto;
@@ -2087,27 +2088,48 @@ button[aria-disabled="true"] {
 .nav-map-wrap {
   position: relative;
 }
+/* ── ★ v2.10.0 站点配色改造（Spec §8）：**形状优先**，不只靠颜色区分 ──
+   · 巴士站 = 实心青花蓝圆：内容盒 13×13（蓝盘 Ø10 = 13 − 2×1.5 白描边）+ 1.5px 白描边
+     + 1px 深色外圈；
+   · 轻轨站 = **线路主题色方** 13×13 r3 + 同款描边；
+   · 换乘站 = 双色切分（颜色由行内 `--c1/--c2` 注入，此处只写**渐变结构**，不写色值）。
+   ⚠️ 颜色是**数据**（`routes.color`），禁止把线路色硬编码进本文件。 */
 .nav-map__station {
   box-sizing: border-box;
-  width: 12px;
-  height: 12px;
+  width: 13px;
+  height: 13px;
   border-radius: 50%;
-  background: var(--surface);
-  border: 2px solid var(--primary);
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.18);
+  background: var(--primary);
+  border: 1.5px solid #fff;
+  box-shadow: 0 0 0 1px rgba(15, 23, 32, 0.42);
   cursor: pointer;
 }
-/* ★ 2026-09-22 新增：**轻轨站**样式 —— 与巴士站一眼可分
-   · 形状：**方角圆（圆角 5px）** vs 巴士的**正圆**
-   · 配色：**品牌绿实心** vs 巴士的**白底蓝圈**
-   · 尺寸：略大（16px vs 12px），在缩小阈值后也更容易看到 */
 .nav-map__station--lrt {
-  width: 16px;
-  height: 16px;
-  border-radius: 5px;
-  background: var(--brand-green);
-  border: 2.5px solid #fff;
-  box-shadow: 0 0 0 1px rgba(15, 23, 32, 0.28);
+  width: 13px;
+  height: 13px;
+  border-radius: 3px;
+  /* 线路色由行内 `--c1` 注入；缺省回落到青花蓝（不硬编码线路色） */
+  background: var(--c1, var(--primary));
+  border: 1.5px solid #fff;
+  box-shadow: 0 0 0 1px rgba(15, 23, 32, 0.42);
+}
+/* 换乘站 · 水平切（Spec §8）：上 `--c1` / 下 `--c2`，中间 2px 白拼缝 */
+.nav-map__station--lrt.lrt-cut-half {
+  background: linear-gradient(
+    180deg,
+    var(--c1, var(--primary)) 0 calc(50% - 1px),
+    #fff calc(50% - 1px) calc(50% + 1px),
+    var(--c2, var(--primary)) calc(50% + 1px) 100%
+  );
+}
+/* 换乘站 · 斜切（Spec §8）：左下 `--c1` / 右上 `--c2`；白缝 1.4px ≈ 1÷cos45°（与水平缝同视觉宽度） */
+.nav-map__station--lrt.lrt-cut-diag {
+  background: linear-gradient(
+    to top right,
+    var(--c1, var(--primary)) 0 calc(50% - 1.4px),
+    #fff calc(50% - 1.4px) calc(50% + 1.4px),
+    var(--c2, var(--primary)) calc(50% + 1.4px) 100%
+  );
 }
 .nav-station-card {
   position: absolute;
@@ -2408,7 +2430,7 @@ button[aria-disabled="true"] {
   top: 0;
   left: 0;
   right: 0;
-  bottom: calc(var(--tabbar-h) + var(--safe-bottom) + var(--compliance-h));
+  bottom: calc(var(--tabbar-h) + var(--safe-bottom));
   z-index: 0;
 }
 /* 覆盖 .nav-map--full 的 fixed 形态（在 wrap 内改为绝对铺满） */
@@ -2424,40 +2446,57 @@ button[aria-disabled="true"] {
   border-radius: 0;
 }
 
-/* ── 首页品牌栏：品牌字标 + 定位按钮 ──
-   ★ v2.4.1：由地图**上方**移到地图**下方**（用户要求「首页地图上方仅保留搜索框」）。
-   位置 = 地图区域下缘、底部 chrome（合规条 + 底导）之上；
-   这同时符合 Apple HIG「浮层落在拇指区」的建议（单手可及）。
+/* ── 首页品牌栏（★ v2.10.0 重构为**三栏网格**）──
+   左：空（产品口径「左下角不放任何东西」）
+   中：换向按钮 + 路线查看模式的主题色标签
+   右：**竖排按钮组** 刷新 → 路线 → 定位 → M Map（自上而下）
+   位置 = 地图区域下缘、底部导航之上（沿用 v2.4.1 拇指区口径）。
    ⚠️ `pointer-events: none` 是**必须**的：本栏是一条**通栏**，若吃事件会挡住地图的
-      拖动 / 双指缩放；只让内部两个控件（牌子、按钮）可点。 */
+      拖动 / 双指缩放；只让内部控件可点（`pointer-events` 可继承 ⇒ 子元素自动恢复可点）。 */
 .nav-brandbar {
   position: fixed;
-  bottom: calc(var(--tabbar-h) + var(--safe-bottom) + var(--compliance-h) + var(--space-3));
+  bottom: calc(var(--tabbar-h) + var(--safe-bottom) + var(--space-3));
   left: 0;
   right: 0;
   padding: 0 var(--space-4);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: end;
+  column-gap: var(--space-2);
   z-index: 20;
   pointer-events: none;
 }
 .nav-brandbar > * {
   pointer-events: auto;
 }
-/* 品牌字标（16px/600，是「字标」不是大标题 —— 白底小牌，压在地图上清晰） */
+/* 左栏占位（不渲染任何可见内容） */
+.nav-brandbar__left {
+  grid-column: 1;
+}
+/* 中栏：换向按钮 + 线路标签（水平居中） */
+.nav-brandbar__mid {
+  grid-column: 2;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+/* M Map 字标（★ v2.10.0：由左侧移入右侧竖排组，改为**按钮外观**；
+   沿用既有视觉：白底 + 2px 青花蓝描边 + 圆角 chip） */
 .nav-brand {
+  display: inline-flex;
+  align-items: center;
   font-family: var(--font-display);
   font-size: 16px;
   font-weight: var(--fw-emphasize);
   letter-spacing: var(--tracking-title);
   color: var(--fg);
   background: var(--surface);
-  border: var(--frame-w) solid var(--border-strong);
+  border: var(--frame-w-emph) solid var(--border-strong);
   border-radius: var(--radius-chip);
   padding: 3px 9px;
   line-height: 1.3;
+  text-decoration: none;
+  cursor: pointer;
 }
 .nav-locate {
   width: 44px;
@@ -4685,11 +4724,15 @@ button[aria-disabled="true"] {
    ★ 2026-09-22 公共交通路线：全屏选择弹窗 + 路线查看模式
    ══════════════════════════════════════════════════════════════════════ */
 
-/* ── 全屏线路选择弹窗（⚠️ 不可滚动：全部线路必须一屏显示完）── */
+/* ── 全屏线路选择弹窗（⚠️ 不可滚动：全部线路必须一屏显示完）──
+   ★ v2.10.0（AC-13）：z-index 60 → 70。根因是**层叠上下文**：本弹窗原挂在
+   `.nav-map-wrap`（`position:fixed; z-index:0`）内 ⇒ 其 z-index 被关在该上下文里，
+   永远低于底部 chrome（`.home-chrome` z-index 30）⇒ 被合规条/底导压住。
+   双重修复：① 调用方已把它移出 `.nav-map-wrap`；② 这里再抬一档冗余保险。 */
 .rl-sheet {
   position: fixed;
   inset: 0;
-  z-index: 60;
+  z-index: 70;
   display: flex;
   flex-direction: column;
   background: var(--bg);
@@ -4818,8 +4861,10 @@ button[aria-disabled="true"] {
   background: rgba(255, 255, 255, 0.36);
 }
 
-/* 右侧按钮组：路线选择 + 定位（**竖排**，路线按钮在上） */
+/* 右侧竖排按钮组（★ v2.10.0）：自上而下 = 刷新 → 公共交通路线 → 定位 → M Map */
 .nav-brandbar__acts {
+  grid-column: 3;
+  justify-self: end;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -4827,30 +4872,484 @@ button[aria-disabled="true"] {
 }
 
 /* ── 路线查看模式的站点区分（产品口径「一眼分辨」）──
-   · `--onroute`：本线站点 —— 放大 + 主题描边加粗 + 白底
-   · `--dim`    ：其他站点 —— 缩小 + 半透明灰（环境参照还在，但不抢镜） */
+   · `--onroute`：本线站点 —— 放大（保留原填充：巴士=青花蓝实心 / 轻轨=线路色方）
+   · `--dim`    ：其他站点 —— 缩小 + 转灰 + 半透明（环境参照还在，但不抢镜）
+   ★ v2.10.0：形状与填充改由基础类承载，这里只负责「放大/缩小/转灰」。 */
 .nav-map__station--onroute {
   width: 16px;
   height: 16px;
-  border-width: 3px;
-  background: #fff;
-  box-shadow: 0 0 0 1.5px rgba(15, 23, 32, 0.35);
+  border-width: 2px;
+  box-shadow: 0 0 0 1.5px rgba(15, 23, 32, 0.4);
 }
 .nav-map__station--dim {
   width: 8px;
   height: 8px;
-  border-width: 1.5px;
+  border-width: 1px;
+  background: var(--muted);
   opacity: 0.45;
   box-shadow: none;
 }
 /* 轻轨站在路线模式下的叠加（保持方形特征，只是更大/更小） */
 .nav-map__station--lrt.nav-map__station--onroute {
-  width: 20px;
-  height: 20px;
-  border-radius: 6px;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
 }
 .nav-map__station--lrt.nav-map__station--dim {
   width: 10px;
   height: 10px;
   border-radius: 3px;
+  /* 转灰：路线模式下「其他轻轨站」不再保留线路色，让本线更突出 */
+  background: var(--muted);
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   ★ v2.10.0 实时巴士：刷新键（10 秒冷却）· 换向键 · 车辆图标 · 车辆信息卡
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* 冷却进度环的可动画自定义属性（**必须** @property 注册，否则 `--cd-p` 无法补间） */
+@property --cd-p {
+  syntax: "<number>";
+  inherits: false;
+  initial-value: 100;
+}
+
+/* ── 刷新键：44×44 圆 + 1.5px 青花蓝描边 + 3px 硬投影 ── */
+.nav-refresh {
+  position: relative;
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: var(--surface);
+  color: var(--accent);
+  border: 1.5px solid var(--accent);
+  border-radius: var(--radius-full);
+  box-shadow: var(--shadow-hard);
+  cursor: pointer;
+}
+.nav-refresh:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+/* 冷却中：整键降 `--muted` 且**撤投影**（剩余量改由外圈进度环表达） */
+.nav-refresh.is-cooling {
+  color: var(--muted);
+  border-color: transparent;
+  box-shadow: none;
+}
+/* 外圈 conic-gradient 进度环 100% → 0（`currentColor` 跟随 `--muted`） */
+.nav-refresh__ring {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-full);
+  background: conic-gradient(currentColor calc(var(--cd-p, 100) * 1%), transparent 0);
+  -webkit-mask: radial-gradient(circle at center, transparent 0 18.5px, #000 19px);
+  mask: radial-gradient(circle at center, transparent 0 18.5px, #000 19px);
+  transition: --cd-p 1s linear;
+  pointer-events: none;
+}
+/* 冷却秒数：等宽 / tabular-nums / 13px-500 / 不带单位 */
+.nav-refresh__icon {
+  display: block;
+  transition: opacity var(--dur-base) var(--ease-standard);
+}
+/* 冷却中：图标淡出到 0.25，中心改显纯数字秒数 */
+.nav-refresh.is-cooling .nav-refresh__icon {
+  opacity: 0.25;
+}
+.nav-refresh__sec {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--tracking-mono);
+}
+/* 屏幕阅读器专用（仅文本，视觉隐藏） */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  /* 减少动效：不补间 —— 进度环**按秒跳变**（秒数照常每秒更新） */
+  .nav-refresh__ring {
+    transition: none;
+  }
+}
+
+/* ── 换向键：底部线路标签**左侧**，仅双向线路显示（44×44，命中区合规） ── */
+.nav-rev {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface);
+  color: var(--accent);
+  border: 1.5px solid var(--accent);
+  border-radius: var(--radius-full);
+  box-shadow: var(--shadow-hard);
+  cursor: pointer;
+}
+.nav-rev:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.nav-rev[aria-disabled="true"] {
+  color: var(--muted);
+  border-color: var(--border-2);
+  box-shadow: none;
+  cursor: default;
+}
+
+/* ── 车辆图标层（React 覆盖层：按屏幕坐标投影，`pointer-events` 只落到图标上）── */
+.nav-vehicle-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 15; /* 高于站点 marker，低于品牌栏/按钮组 */
+  pointer-events: none;
+  overflow: hidden;
+}
+.nav-vehicle-layer > * {
+  pointer-events: auto;
+}
+
+/* ── 车辆图标（车头正视图 · 画布 32×32 · 命中区 44×44 · data-state 驱动，全部 display 切换）── */
+.vbus-wrap {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transform: translate(-50%, -50%);
+  --vbus-ink: color-mix(in srgb, var(--vbus-livery) 58%, var(--fg));
+}
+.vbus-wrap:focus-visible {
+  outline: none;
+  border-radius: var(--radius-full);
+  box-shadow: var(--focus-ring);
+}
+.vbus {
+  display: block;
+  width: 32px;
+  height: 32px;
+  overflow: visible;
+}
+.vbus__shadow {
+  fill: var(--fg);
+  opacity: 0.22;
+}
+.vbus__white {
+  fill: #fff;
+}
+.vbus__ink {
+  fill: var(--vbus-ink);
+}
+.vbus__body {
+  fill: var(--vbus-livery);
+}
+.vbus__mirror {
+  fill: var(--vbus-ink);
+}
+.vbus__bumper {
+  fill: var(--vbus-ink);
+}
+.vbus__sign {
+  fill: #fff;
+  opacity: 0.68;
+}
+.vbus__glass {
+  fill: #fff;
+  opacity: 0.92;
+}
+.vbus__lamp {
+  fill: #fff;
+  opacity: 0.96;
+}
+.vbus__badge-bg {
+  fill: #fff;
+  stroke: var(--vbus-ink);
+  stroke-width: 1.5;
+}
+.vbus__badge-mark {
+  fill: var(--vbus-ink);
+}
+.vbus__stop,
+.vbus__lost {
+  display: none;
+}
+.vbus__dash {
+  display: none;
+  fill: none;
+  stroke: var(--vbus-ink);
+  stroke-width: 1.5;
+  stroke-dasharray: 3.2 2.6;
+}
+/* ② 停靠中 ‖（右下角标） */
+.vbus-wrap[data-state="stopping"] .vbus__stop {
+  display: block;
+}
+/* ③ 总站待发：淡涂装 + 虚线白圈 */
+.vbus-wrap[data-state="terminal"] .vbus__body {
+  fill: color-mix(in srgb, var(--vbus-livery) 40%, #fff);
+}
+.vbus-wrap[data-state="terminal"] .vbus__ink,
+.vbus-wrap[data-state="terminal"] .vbus__mirror,
+.vbus-wrap[data-state="terminal"] .vbus__bumper {
+  fill: color-mix(in srgb, var(--vbus-ink) 45%, #fff);
+}
+.vbus-wrap[data-state="terminal"] .vbus__dash {
+  display: block;
+}
+.vbus-wrap[data-state="terminal"] .vbus__glass,
+.vbus-wrap[data-state="terminal"] .vbus__sign,
+.vbus-wrap[data-state="terminal"] .vbus__lamp {
+  opacity: 0.5;
+}
+/* ④ 末班车：大灯 + 线路牌变琥珀（★ 与 data-state **正交**，故用独立属性 data-last） */
+.vbus-wrap[data-last="1"] .vbus__lamp,
+.vbus-wrap[data-last="1"] .vbus__sign {
+  fill: var(--warn);
+  opacity: 1;
+}
+/* ⑤ 信号丢失：转灰 + 虚线白圈 + !（左下角标） */
+.vbus-wrap[data-state="lost"] .vbus__body {
+  fill: var(--meta);
+}
+.vbus-wrap[data-state="lost"] .vbus__ink,
+.vbus-wrap[data-state="lost"] .vbus__mirror,
+.vbus-wrap[data-state="lost"] .vbus__bumper,
+.vbus-wrap[data-state="lost"] .vbus__badge-mark {
+  fill: var(--fg-2);
+}
+.vbus-wrap[data-state="lost"] .vbus__badge-bg {
+  stroke: var(--fg-2);
+}
+.vbus-wrap[data-state="lost"] .vbus__glass,
+.vbus-wrap[data-state="lost"] .vbus__sign,
+.vbus-wrap[data-state="lost"] .vbus__lamp {
+  opacity: 0.62;
+}
+.vbus-wrap[data-state="lost"] .vbus__dash,
+.vbus-wrap[data-state="lost"] .vbus__lost {
+  display: block;
+}
+/* 多车合并角标 · 16px Ø · 锚 top/right −4px */
+.vbus__count {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-full);
+  background: var(--fg);
+  color: #fff;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  border: 1.5px solid #fff;
+}
+@media (prefers-reduced-motion: reduce) {
+  .vbus-wrap {
+    transition: none;
+  }
+}
+
+/* ── 车辆信息卡（复用 `.nav-station-card` 的落位/层级；此处只补行与状态样式）── */
+.nav-vehicle-card__rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+.nav-vehicle-card__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.nav-vehicle-card__k {
+  flex: none;
+  width: 60px;
+  color: var(--muted);
+}
+.nav-vehicle-card__v {
+  flex: 1;
+  min-width: 0;
+  color: var(--on-surface);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 行驶区间：**只表方向**（实心点 → 虚线 → 空心点），**不做行进进度填充** */
+.nav-vehicle-card__interval {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.nav-vehicle-card__dot {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+.nav-vehicle-card__dot--from {
+  background: var(--accent);
+}
+.nav-vehicle-card__dot--to {
+  background: transparent;
+  border: 2px solid var(--accent);
+}
+.nav-vehicle-card__dash {
+  flex: 1;
+  min-width: 18px;
+  height: 2px;
+  background: repeating-linear-gradient(90deg, var(--border-2) 0 5px, transparent 5px 10px);
+}
+.nav-vehicle-card__seg {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--on-surface);
+}
+/* 状态徽标（双通道：文字 + 底色，不只靠颜色） */
+.nav-vehicle-card__state {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: var(--radius-chip);
+  font-size: var(--text-2xs);
+  font-weight: var(--fw-announce);
+  letter-spacing: 0.02em;
+}
+.nav-vehicle-card__state[data-state="moving"] {
+  background: var(--success-soft);
+  color: var(--accent-deep);
+}
+.nav-vehicle-card__state[data-state="stopping"] {
+  background: var(--accent-soft);
+  color: var(--accent-deep);
+}
+.nav-vehicle-card__state[data-state="terminal"] {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+.nav-vehicle-card__state[data-state="unknown"] {
+  background: var(--surface-2);
+  color: var(--muted);
+}
+.nav-vehicle-card__note {
+  margin-top: 8px;
+  color: var(--muted);
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   ★ v2.10.0 `/help` 帮助页（数据来源/合规 · 使用说明 · FAQ）
+   ══════════════════════════════════════════════════════════════════════ */
+.help-sec {
+  margin-top: 12px;
+}
+.help-h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-lg);
+  font-weight: var(--fw-emphasize);
+  letter-spacing: var(--tracking-title);
+  color: var(--fg);
+  margin: 0;
+}
+.help-p {
+  margin-top: 8px;
+  line-height: 1.85;
+  color: var(--muted);
+}
+.help-ul {
+  margin-top: 8px;
+  padding-left: 18px;
+  line-height: 1.9;
+  color: var(--muted);
+}
+.help-ul li {
+  margin-bottom: 4px;
+}
+/* 使用说明：3 步纵列（复用 `.rc-row` 纵向轨语言，不堆卡片） */
+.help-steps {
+  margin-top: 10px;
+}
+/* FAQ 手风琴（原生 `<details>`：零 JS、键盘可访问、Esc 天然支持；默认全收） */
+.help-faq {
+  margin-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.help-faq__item {
+  border-bottom: 1px solid var(--border);
+}
+.help-faq__q {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 2px;
+  font-size: var(--text-sm);
+  font-weight: var(--fw-emphasize);
+  color: var(--fg);
+  cursor: pointer;
+  list-style: none;
+}
+.help-faq__q::-webkit-details-marker {
+  display: none;
+}
+.help-faq__q:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-chip);
+}
+.help-faq__q-text {
+  flex: 1;
+  min-width: 0;
+}
+.help-faq__caret {
+  flex: none;
+  display: inline-flex;
+  color: var(--muted);
+  transition: transform var(--dur-base) var(--ease-standard);
+}
+.help-faq__item[open] .help-faq__caret {
+  transform: rotate(180deg);
+}
+.help-faq__a {
+  padding: 0 2px 14px;
+  line-height: 1.8;
+  color: var(--muted);
+}
+@media (prefers-reduced-motion: reduce) {
+  .help-faq__caret {
+    transition: none;
+  }
 }

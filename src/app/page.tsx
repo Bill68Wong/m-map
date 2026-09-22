@@ -2,7 +2,7 @@
  * 首页 = 全屏地图 + 分步搜索（src/app/page.tsx，M Map 改版 S2 重构）
  *
  * ── 本次改造（Spec R1/R2/R4）───────────────────────────────────────────
- *   · **全屏地图**（`fixed`；底部让出「合规条 + 底部导航」带，保证高德 Logo/审图号可见）；
+ *   · **全屏地图**（`fixed`；底部让出「底部导航」带，保证高德 Logo/审图号可见）；
  *   · 顶部浮层 = 品牌字标 `M Map` + 定位按钮 + 目的地搜索条（点开分步弹层）；
  *   · **移除**旧大标题「澳门出行」与「通勤计时（旧版）」首页入口（旧计时改由 `/about` 进入）；
  *   · 底导两 tab（首页 / 路线收藏）。
@@ -15,7 +15,6 @@
  *   · 地图懒加载、失败不阻塞（§Q7）；站点图层、实时报站信息卡；「起点不记忆」（R5）。
  */
 import BottomNav from "@/components/BottomNav";
-import ComplianceBar from "@/components/nav/ComplianceBar";
 import NavShell from "@/components/nav/NavShell";
 import { getPool } from "@/lib/db";
 import { parseNavParams } from "@/lib/nav/nav-params";
@@ -55,8 +54,10 @@ export default async function Home({
   return (
     <>
       <NavShell jsKey={jsKey} colors={colors} initialFrom={initialFrom} initialTo={initialTo} />
+      {/* ★ v2.10.0：底部合规条**已从地图页移除**（内容迁至 `/help`），
+          既解决「选线路弹窗被底部遮挡」，也避免与底导重复。
+          `/nav`、`/nav/detail`、`/favorites` 仍各自保留合规条（未受影响）。 */}
       <div className="home-chrome">
-        <ComplianceBar />
         <BottomNav />
       </div>
     </>

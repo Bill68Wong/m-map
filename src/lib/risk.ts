@@ -24,9 +24,13 @@ export async function guardDsatCall(now: Date = new Date()): Promise<GuardVerdic
     // ★ v1.0.0：**排除 purpose='recommend'**（自动选线）—— 推荐一次页面加载会并发 8~16 次调用，
     //   失败若干属正常波动；若计入，一次推荐就能撞开熔断，连累计时器的自动车距快照一起哑 30 分钟。
     //   （推荐调用只记账、不参与判定，见 src/lib/dsat/client.ts#dsatPost）
+    // ★ v2.10.0：**同样排除 purpose='live_pos'**（实时车辆位置·手动刷新）—— 同 recommend 的理由：
+    //   用户连点刷新、若恰好都超时，不能让这几笔「用户主动发起的附加数据请求」撞开全局熔断，
+    //   从而静默掉计时器的自动车距快照（副作用阴、难排查）。live_pos 同样只记账、不参与判定。
     const recent = await getPool().query(
       `SELECT ok, created_at FROM dsat_call_logs
         WHERE purpose IS DISTINCT FROM 'recommend'
+          AND purpose IS DISTINCT FROM 'live_pos'
         ORDER BY id DESC LIMIT $1`,
       [RISK.circuitBreaker.failThreshold],
     );
@@ -58,7 +62,7 @@ export async function guardDsatCall(now: Date = new Date()): Promise<GuardVerdic
 
 /** ③ 调用后记账（尽力写入，失败不影响主流程） */
 export async function logDsatCall(entry: {
-  purpose: "timer_grab" | "poll" | "sync" | "recommend";
+  purpose: "timer_grab" | "poll" | "sync" | "recommend" | "live_pos";
   route_code?: string | null;
   ok: boolean;
   http_status?: number | null;

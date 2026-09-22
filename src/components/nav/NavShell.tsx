@@ -37,14 +37,18 @@
  *   · ★ 弹窗是**覆盖层**（盖住地图），不是新页面 —— 避免整页加载的等待感。
  */
 import { useCallback, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import Icon from "@/components/ui/Icon";
 import NavMap from "./NavMap";
-import RouteLinesSheet, { type RouteLineItem } from "./RouteLinesSheet";
+import RefreshButton from "./RefreshButton";
+import RouteLinesSheet from "./RouteLinesSheet";
 import RoutePanel from "./RoutePanel";
 import SearchSheet, { type QuickPair } from "./SearchSheet";
 import StationCard, { type StationCardStation } from "./StationCard";
+import VehicleCard from "./VehicleCard";
 import { queryOf } from "./StepSheet";
+import { useRouteVehicles } from "./useRouteVehicles";
 import { useCombos } from "@/lib/favorites/useCombos";
 import type { NavPoint } from "@/lib/nav/types";
 
@@ -90,7 +94,11 @@ export default function NavShell({ jsKey, colors = {}, initialFrom = null, initi
    *   用户口径：选线路后弹窗关闭回地图，底部中间出现标签 + 叉，点叉退出。
    */
   const [lineSheet, setLineSheet] = useState(false);
-  const [pickedLine, setPickedLine] = useState<RouteLineItem | null>(null);
+  /**
+   * ★ v2.10.0：**路线查看 + 实时车辆**逻辑，统一收在 `useRouteVehicles` 里
+   *   （选线路 / 方向 / 自动刷新 / 10 秒冷却 / 换向 / 手动刷新 / 选车出卡）。
+   */
+  const rv = useRouteVehicles();
 
   const favs = useCombos();
 
@@ -161,32 +169,54 @@ export default function NavShell({ jsKey, colors = {}, initialFrom = null, initi
           onLocate={onLocate}
           onStationClick={onStationClick}
           onMapClick={onMapClick}
-          /* ★ 2026-09-22：路线查看模式（非空 ⇒ 画该线路 + 本线站点高亮 + 自动装下整条线） */
-          routeLine={pickedLine}
+          /* ★ v2.10.0：路线查看模式 + 实时车辆（只画当前方向 + 本线站点高亮 + 自动装下本方向） */
+          routeLine={rv.picked}
+          onRouteDirs={rv.reportDirs}
+          vehicles={rv.vehicles}
+          onVehicleClick={rv.selectVehicle}
         />
 
-        {/* 品牌栏：品牌字标 + （路线模式下）主题色标签 + 右侧按钮组（路线选择 / 定位） */}
+        {/* 品牌栏（★ v2.10.0 重构为三栏网格）：
+            左=空（产品口径「左下角不放任何东西」）· 中=换向键+线路标签 · 右=竖排按钮组 */}
         <div className="nav-brandbar">
-          <span className="nav-brand">M Map</span>
+          <span className="nav-brandbar__left" aria-hidden="true" />
 
-          {/* ★ 2026-09-22：路线查看模式的**退出标签**（产品口径：只显示线路名 + 叉） */}
-          {pickedLine && (
-            <span className="nav-linechip" style={{ background: pickedLine.color }}>
-              <span className="nav-linechip__text">{pickedLine.label}</span>
+          <div className="nav-brandbar__mid">
+            {/* 换向键：仅**双向**线路显示（单向 = 无 shapes 第二方向） */}
+            {rv.picked && rv.canReverse && (
               <button
                 type="button"
-                className="nav-linechip__x"
-                aria-label={`退出路线查看（${pickedLine.label}）`}
-                title="退出路线查看"
-                onClick={() => setPickedLine(null)}
+                className="nav-rev"
+                aria-label="切换行驶方向"
+                title="切换行驶方向"
+                onClick={rv.reverse}
               >
-                <Icon name="close" size={16} />
+                <Icon name="exchange" size={20} />
               </button>
-            </span>
-          )}
+            )}
+            {/* 路线查看模式的退出标签（产品口径：只显示线路名 + 叉） */}
+            {rv.picked && (
+              <span className="nav-linechip" style={{ background: rv.picked.color }}>
+                <span className="nav-linechip__text">{rv.picked.label}</span>
+                <button
+                  type="button"
+                  className="nav-linechip__x"
+                  aria-label={`退出路线查看（${rv.picked.label}）`}
+                  title="退出路线查看"
+                  onClick={rv.exitLine}
+                >
+                  <Icon name="close" size={16} />
+                </button>
+              </span>
+            )}
+          </div>
 
+          {/* 右栏：竖排按钮组（自上而下 = 刷新 → 公共交通路线 → 定位 → M Map） */}
           <div className="nav-brandbar__acts">
-            {/* ★ 2026-09-22：公共交通路线选择（在定位按钮**上方**） */}
+            {/* 刷新键：仅**巴士**线路有意义（轻轨无实时车辆数据） */}
+            {rv.picked?.kind === "bus" && (
+              <RefreshButton cooling={rv.cooldownSec > 0} seconds={rv.cooldownSec} onRefresh={rv.refresh} />
+            )}
             <button
               type="button"
               className="nav-locate"
@@ -205,19 +235,12 @@ export default function NavShell({ jsKey, colors = {}, initialFrom = null, initi
             >
               <Icon name="locate" size={20} />
             </button>
+            {/* M Map 字标（★ v2.10.0 由左侧移入按钮组，改为**可点**的按钮外观 ⇒ 进 /help） */}
+            <Link href="/help" className="nav-brand" aria-label="M Map · 帮助与合规说明">
+              M Map
+            </Link>
           </div>
         </div>
-
-        {/* ★ 2026-09-22：公共交通路线全屏选择弹窗 */}
-        {lineSheet && (
-          <RouteLinesSheet
-            onPick={(l) => {
-              setPickedLine(l);
-              setLineSheet(false);
-            }}
-            onClose={() => setLineSheet(false)}
-          />
-        )}
 
         {/* 顶置搜索条 —— **只在「非全屏搜索」时出现**（全屏时由 SearchSheet 自己的输入条接管） */}
         {sheet !== "full" && (
@@ -247,6 +270,13 @@ export default function NavShell({ jsKey, colors = {}, initialFrom = null, initi
           </div>
         )}
 
+        {/* ★ v2.10.0：车辆位置获取失败提示（不阻塞地图与线路走向） */}
+        {rv.error && (
+          <div className="nav-banner t-label" role="status">
+            车辆位置：{rv.error}
+          </div>
+        )}
+
         {station && (
           <StationCard
             station={station}
@@ -266,7 +296,31 @@ export default function NavShell({ jsKey, colors = {}, initialFrom = null, initi
             }}
           />
         )}
+
+        {/* ★ v2.10.0：车辆信息卡（复用站点卡的落位/层级） */}
+        {rv.selected && (
+          <VehicleCard
+            vehicle={rv.selected.vehicle}
+            count={rv.selected.count}
+            fetchedAt={rv.fetchedAt}
+            onClose={rv.closeVehicle}
+          />
+        )}
       </div>
+
+      {/* ★ 2026-09-22 / v2.10.0：公共交通路线全屏选择弹窗。
+          ⚠️ 必须在 `.nav-map-wrap` **之外** —— wrap 是 `position:fixed; z-index:0`（层叠上下文），
+          弹窗若挂在其中，其 z-index 会被关进该上下文、永远低于底部 chrome
+          ⇒ 这正是「选线路弹窗被底部遮挡」的根因（Spec AC-13）。 */}
+      {lineSheet && (
+        <RouteLinesSheet
+          onPick={(l) => {
+            rv.pickLine(l);
+            setLineSheet(false);
+          }}
+          onClose={() => setLineSheet(false)}
+        />
+      )}
 
       {/* ── 全屏搜索层 ── */}
       {sheet === "full" && (

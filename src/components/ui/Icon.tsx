@@ -23,6 +23,7 @@
 import {
   IconArrowForwardUp,
   IconArrowRight,
+  IconArrowsExchange,
   IconArrowsLeftRight,
   IconArrowsUpDown,
   IconBookmark,
@@ -41,12 +42,17 @@ import {
   IconClock,
   IconCurrentLocation,
   IconDownload,
+  IconGauge,
+  IconHelpCircle,
   IconHome,
   IconHomeFilled,
+  IconInfoCircle,
+  IconList,
   IconLock,
   IconMapPin,
   IconPlayerPlay,
   IconRefresh,
+  IconRoute2,
   IconSearch,
   IconTrash,
   IconArrowBackUp,
@@ -76,6 +82,8 @@ const REGISTRY: Record<string, any> = {
   destination: IconMapPin,
   pin: IconMapPin,
   swap: IconArrowsLeftRight,
+  /* ★ v2.10.0（实时巴士）：换向（区别于 swap —— swap 语义是起终点互换） */
+  exchange: IconArrowsExchange,
   /* 载具 / 步行 */
   walk: IconWalk,
   bus: IconBus,
@@ -109,6 +117,12 @@ const REGISTRY: Record<string, any> = {
   dragHandle: IconGripVertical,
   pinTop: IconPinned,
   undo: IconArrowBackUp,
+  /* ★ v2.10.0（实时巴士 + 帮助页）：车辆信息卡 / 帮助页 / FAQ 用（Tabler 同库，stroke=2 不变） */
+  gauge: IconGauge,
+  "route-2": IconRoute2,
+  "help-circle": IconHelpCircle,
+  "info-circle": IconInfoCircle,
+  list: IconList,
 };
 
 export type IconName = keyof typeof REGISTRY;

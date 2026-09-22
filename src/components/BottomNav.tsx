@@ -3,8 +3,8 @@
 /**
  * 底部主导航（src/components/BottomNav.tsx，M Map 改版 S4）
  *
- * ── 结构（PRD §9 / 设计 E.1）──────────────────────────────────────────
- *   两个 Tab：**首页**（`/`）· **路线收藏**（`/favorites`）。
+ * ── 结构（PRD §9 / 设计 E.1；★ v2.10.0 增第 3 个 tab）──────────────
+ *   三个 Tab：**首页**（`/`）· **路线收藏**（`/favorites`）· **帮助**（`/help`）。
  *   · 高 `var(--tabbar-h)` + `env(safe-area-inset-bottom)`；顶边 1px 发丝线；**不透明底**（不用毛玻璃）；
  *   · 选中态：**双通道** —— ① 图标切**实心变体** ② 文字加粗；再叠**青花蓝**（不只靠颜色，利于色盲）；
  *   · 命中区：每 tab 半屏宽、高 ≥48px；
@@ -22,7 +22,7 @@ import Icon, { type IconName } from "@/components/ui/Icon";
 import { useCombos } from "@/lib/favorites/useCombos";
 
 interface TabDef {
-  key: "home" | "favorites";
+  key: "home" | "favorites" | "help";
   href: string;
   label: string;
   /** 未选态图标（线性） */
@@ -49,6 +49,15 @@ const TABS: TabDef[] = [
     icon: "bookmark",
     iconOn: "bookmarkFilled",
     match: (p) => p.startsWith("/favorites"),
+  },
+  {
+    // ★ v2.10.0：第 3 个 tab「帮助」（`/help`；旧 `/about` 已 308 重定向到此）
+    key: "help",
+    href: "/help",
+    label: "帮助",
+    icon: "help-circle",
+    iconOn: "help-circle",
+    match: (p) => p.startsWith("/help") || p.startsWith("/about"),
   },
 ];
 
