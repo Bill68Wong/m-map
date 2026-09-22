@@ -74,6 +74,17 @@ export interface SearchSheetProps {
   onBack: () => void;
 }
 
+/** 球面距离（米）—— 与 `coord.ts#haversineM` 同口径；此处**内联**，避免客户端拉进服务端模块 */
+function distMeters(a: { lng: number; lat: number }, b: { lng: number; lat: number }): number {
+  const R = 6371008.8;
+  const rad = (d: number) => (d * Math.PI) / 180;
+  const dLat = rad(b.lat - a.lat);
+  const dLng = rad(b.lng - a.lng);
+  const s =
+    Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(s)));
+}
+
 export default function SearchSheet({
   editing,
   dest,
@@ -92,6 +103,37 @@ export default function SearchSheet({
   const [err, setErr] = useState("");
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  /**
+   * ★ 附近站点推荐（**未输入时**显示 —— 就是产品说的「中间是推荐条，只列巴士/轻轨站点」）。
+   * 数据来自 `GET /api/stations`（全量巴士站，带 GCJ-02 坐标，CDN 缓存 1h）
+   * ⇒ 拉一次后**本地**按距离排序取前 12，交互过程中零请求。
+   * 失败静默：不影响用户输入关键字搜索。
+   */
+  const [nearby, setNearby] = useState<{ code: string; name: string; lng: number; lat: number; distM: number }[]>([]);
+
+  useEffect(() => {
+    if (!userPos) {
+      setNearby([]);
+      return;
+    }
+    let alive = true;
+    (async () => {
+      try {
+        const r = await fetch("/api/stations");
+        const j = (await r.json()) as { stations?: { code: string; name: string; lng: number; lat: number }[] };
+        const list = (j.stations ?? [])
+          .map((s) => ({ code: s.code, name: s.name, lng: s.lng, lat: s.lat, distM: Math.round(distMeters(userPos, s)) }))
+          .sort((a, b) => a.distM - b.distM)
+          .slice(0, 12);
+        if (alive) setNearby(list);
+      } catch {
+        /* 网络失败 ⇒ 不显示推荐（不阻塞搜索） */
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [userPos]);
 
   // 进入本层 → 聚焦输入框、清空上一次的输入（**每次进入都是新的搜索意图**）
   useEffect(() => {
@@ -227,6 +269,29 @@ export default function SearchSheet({
         {/* ── 尚未输入：推荐（只站点 / 常用地点对）── */}
         {!q.trim() && (
           <>
+            {/* ★ 附近站点推荐 —— 产品口径：「中间是推荐条（巴士轻轨站点，无其他）」 */}
+            {nearby.length > 0 && (
+              <div className="ssheet__sect">
+                <p className="ssheet__sect-title t-label">附近站点</p>
+                {nearby.map((s) => (
+                  <button
+                    key={s.code}
+                    type="button"
+                    className="ssheet__item"
+                    onClick={() =>
+                      onPick(
+                        { kind: "station", label: `${s.code} ${s.name}`.trim(), lng: s.lng, lat: s.lat, code: s.code },
+                        editing,
+                      )
+                    }
+                  >
+                    <span className="ssheet__type ssheet__type--station">公交站</span>
+                    <span className="ssheet__name">{`${s.code} ${s.name}`.trim()}</span>
+                    <span className="ssheet__meta t-muted">{s.distM} m</span>
+                  </button>
+                ))}
+              </div>
+            )}
             {quickPairs.length > 0 && (
               <div className="ssheet__sect">
                 <p className="ssheet__sect-title t-label">常用</p>
@@ -252,7 +317,7 @@ export default function SearchSheet({
               </div>
             )}
             <p className="ssheet__tip t-label t-muted">
-              输入关键字会列出**巴士站 / 轻轨站**；想找具体地点，点右侧「搜索」。
+              输入关键字会列出巴士站 / 轻轨站；想找具体地点，点右侧「搜索」。
             </p>
           </>
         )}

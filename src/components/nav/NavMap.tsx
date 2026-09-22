@@ -167,6 +167,15 @@ export default function NavMap({
   const onStationClickRef = useRef<NavMapProps["onStationClick"]>(undefined);
   const onMapClickRef = useRef<NavMapProps["onMapClick"]>(undefined);
   const onMapReadyRef = useRef<NavMapProps["onMapReady"]>(undefined);
+  /**
+   * ★ 2026-09-22：`view` 的实时镜像。
+   * 为什么需要：`applyLocateView` 是 `useCallback([])`（空依赖，避免定位回调重绑），
+   *   拿不到最新的 `view`；而**定位是异步的**，它常在 view 取景之后完成 ⇒ 又把地图拉回
+   *   「我的位置」居中 ⇒ 把目的地的取景覆盖掉（实测：标记掉进被弹窗遮住的下半屏）。
+   *   ⇒ 用 ref 让定位逻辑知道「当前有外部取景意图」，有则**不再抢镜头**。
+   */
+  const viewRef = useRef<NavMapProps["view"]>(null);
+  viewRef.current = view;
 
   const [phase, setPhase] = useState<"loading" | "ready" | "failed">("loading");
   const [note, setNote] = useState<string>("");
@@ -185,6 +194,13 @@ export default function NavMap({
       ? isInsideRings(pos.lng, pos.lat, [...dist.rings, ...dist.exclaveRings])
       : true; // 边界未知时按旧行为（居中）
     if (inMacau) {
+      // ★ 2026-09-22：若调用方正在做**外部取景**（搜索弹窗要求「目的地居上半屏」或「两点适配」），
+      //   定位**不再抢镜头** —— 否则异步定位完成后会把地图拉回「我的位置」居中，
+      //   覆盖掉刚做好的取景（实测：标记因此掉进被弹窗遮住的下半屏）。蓝点照常落位。
+      if (viewRef.current && viewRef.current.mode !== "none") {
+        canvas?.setAttribute("data-locate-skip-view", "on");
+        return;
+      }
       const w: number = map.getSize?.()?.width ?? (typeof window !== "undefined" ? window.innerWidth : 390);
       const z = zoomForAcross(pos.lat, w);
       try {
