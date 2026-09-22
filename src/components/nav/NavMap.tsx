@@ -134,6 +134,12 @@ export interface NavMapProps {
   /** 地图就绪后回传「读地图中心」的函数（S2 分步弹层第 2 步「用这个点」用） */
   onMapReady?: (probe: () => { lng: number; lat: number } | null) => void;
   /**
+   * ★ 2026-09-22 新增：**路线查看模式**。
+   *   非空 ⇒ 地图上画出该线路的走向（`route_shapes`，GCJ-02），并把该线站点放大高亮、
+   *   其他站点变灰变小；视野**自动装下整条线**。传 `null` 即退出该模式（清线恢复原样）。
+   */
+  routeLine?: { code: string; kind: "bus" | "lrt"; label: string; color: string } | null;
+  /**
    * 重新定位触发计数（右上定位按钮）—— 变化时重跑一次定位并（范围内）居中。
    * 初始为 0 时不触发（首屏定位由 `init()` 负责）。
    */
@@ -153,6 +159,7 @@ export default function NavMap({
   onMapReady,
   locateTick = 0,
   className = "",
+  routeLine = null,
 }: NavMapProps) {
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<any>(null);
@@ -173,6 +180,16 @@ export default function NavMap({
   /** 全量站点（一次拉取，ref 缓存）与已渲染标记（code → marker） */
   const stationsRef = useRef<StationPointLite[] | null>(null);
   const stationMarkersRef = useRef<Map<string, any>>(new Map());
+  /**
+   * ★ 2026-09-22 路线查看模式：
+   *   · `routePolylinesRef` 当前画的线（退出时逐个 remove）；
+   *   · `routeStopsRef` **本线站点主码集合**（站点图层据此切样式：本线高亮 / 其他变灰）。
+   *   ⚠️ 集合为空表示**不在路线模式** —— 站点样式回落到常规。
+   */
+  const routePolylinesRef = useRef<unknown[]>([]);
+  const routeStopsRef = useRef<Set<string>>(new Set());
+  /** 路线模式切换后触发站点图层重建（marker 的样式在创建时决定，必须重建才生效） */
+  const [stationRebuildTick, setStationRebuildTick] = useState(0);
   /** 点击回调放进 ref：避免 prop 变化导致图层重新绑定事件 */
   const onStationClickRef = useRef<NavMapProps["onStationClick"]>(undefined);
   const onMapClickRef = useRef<NavMapProps["onMapClick"]>(undefined);
@@ -646,9 +663,13 @@ export default function NavMap({
           //   轻轨点更大、走 `--lrt` 类（见 globals.css：不同配色 + 方形圆角以区分形状）；
           //   zIndex 再高一档，避免与巴士站重叠时被盖住。
           const isLrt = s.kind === "lrt";
+          // ★ 2026-09-22 路线查看模式：本线站点高亮放大、其他站点变灰变小（「一眼分辨」）
+          const inRoute = routeStopsRef.current.size > 0;
+          const isOnRoute = inRoute && routeStopsRef.current.has(s.code);
+          const routeCls = !inRoute ? "" : isOnRoute ? " nav-map__station--onroute" : " nav-map__station--dim";
           const marker = new AMap.Marker({
             position: [s.lng, s.lat],
-            content: `<div class="nav-map__station${isLrt ? " nav-map__station--lrt" : ""}" data-code="${esc(s.code)}" title="${esc(s.name)}"></div>`,
+            content: `<div class="nav-map__station${isLrt ? " nav-map__station--lrt" : ""}${routeCls}" data-code="${esc(s.code)}" title="${esc(s.name)}"></div>`,
             offset: new AMap.Pixel(isLrt ? -8 : -6, isLrt ? -8 : -6),
             zIndex: isLrt ? 95 : 90,
           });
@@ -715,7 +736,131 @@ export default function NavMap({
       }
       clearAll();
     };
-  }, [phase]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stationRebuildTick]);
+
+  /**
+   * ★ 2026-09-22：**路线查看模式** —— 画线 + 站点区分 + 自动装下整条线。
+   *
+   * 数据 `GET /api/route-shapes?code=`（读 `route_shapes`，离线抓取的高德真实走向）：
+   *   · 坐标是 **GCJ-02**（高德原生）⇒ **直接**喂地图，**不做任何转换**
+   *     （⚠️ 与库内 `stations` 的 WGS84 不同源，但 `/api/stations` 出口已转 GCJ-02，
+   *       所以本页两组数据在同一坐标系里，可直接叠加）；
+   *   · 双方向线路返回多条 `shapes` ⇒ 按产品口径**两个方向都画**（同色 + 方向箭头）。
+   *
+   * 站点区分（产品口径「一眼分辨」）：本线站点 → `--onroute`（放大）；其他 → `--dim`（灰小）。
+   * 视野：按所有方向 polyline 的**联合包围盒** `setBounds` —— 自动装下整条线。
+   */
+  useEffect(() => {
+    const map = mapRef.current;
+    const AMap = amapRef.current;
+    if (!map || !AMap) return;
+
+    const clearLines = () => {
+      for (const p of routePolylinesRef.current) {
+        try {
+          map.remove(p as never);
+        } catch {
+          /* ignore */
+        }
+      }
+      routePolylinesRef.current = [];
+    };
+    /** 清空站点 marker ⇒ 下一次 render 会用新样式重建 */
+    const dropStationMarkers = () => {
+      for (const [, mk] of stationMarkersRef.current) {
+        try {
+          map.remove(mk);
+        } catch {
+          /* ignore */
+        }
+      }
+      stationMarkersRef.current.clear();
+      setStationRebuildTick((t) => t + 1);
+    };
+
+    // 退出路线模式：清线 + 站点样式回落
+    if (!routeLine) {
+      clearLines();
+      if (routeStopsRef.current.size > 0) {
+        routeStopsRef.current = new Set();
+        dropStationMarkers();
+      }
+      return;
+    }
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const r = await fetch(`/api/route-shapes?code=${encodeURIComponent(routeLine.code)}`, {
+          cache: "force-cache",
+        });
+        const j = (await r.json()) as {
+          color?: string;
+          stops?: string[];
+          shapes?: { polyline: string; bounds: [number, number, number, number] }[];
+        };
+        if (cancelled || mapRef.current !== map) return;
+
+        clearLines();
+        const color = j.color ?? routeLine.color ?? "#276299";
+        const shapes = j.shapes ?? [];
+
+        for (const s of shapes) {
+          const path = s.polyline
+            .split(";")
+            .map((p) => p.split(",").map(Number))
+            .filter((a) => a.length === 2 && a.every(Number.isFinite)) as [number, number][];
+          if (path.length < 2) continue;
+          const pl = new AMap.Polyline({
+            path,
+            strokeColor: color,
+            strokeWeight: 6,
+            strokeOpacity: 0.92,
+            lineJoin: "round",
+            lineCap: "round",
+            showDir: true,
+            zIndex: 70,
+          });
+          map.add(pl);
+          routePolylinesRef.current.push(pl);
+        }
+
+        routeStopsRef.current = new Set(j.stops ?? []);
+
+        // 视野：装下整条线（各方向包围盒取并集）
+        if (shapes.length) {
+          const lngs: number[] = [];
+          const lats: number[] = [];
+          for (const s of shapes) {
+            if (!Array.isArray(s.bounds) || s.bounds.length !== 4) continue;
+            lngs.push(s.bounds[0], s.bounds[2]);
+            lats.push(s.bounds[1], s.bounds[3]);
+          }
+          if (lngs.length) {
+            try {
+              const b = new AMap.Bounds(
+                [Math.min(...lngs), Math.min(...lats)],
+                [Math.max(...lngs), Math.max(...lats)],
+              );
+              map.setBounds(b, true, [40, 40, 40, 40]);
+            } catch {
+              /* ignore */
+            }
+          }
+        }
+
+        dropStationMarkers();
+      } catch {
+        /* 静默：画不出线不影响底图 */
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [routeLine]);
 
   return (
     <div className={`nav-map ${className}`}>

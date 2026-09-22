@@ -40,6 +40,7 @@ import { useCallback, useState } from "react";
 import { useRouter } from "next/navigation";
 import Icon from "@/components/ui/Icon";
 import NavMap from "./NavMap";
+import RouteLinesSheet, { type RouteLineItem } from "./RouteLinesSheet";
 import RoutePanel from "./RoutePanel";
 import SearchSheet, { type QuickPair } from "./SearchSheet";
 import StationCard, { type StationCardStation } from "./StationCard";
@@ -81,6 +82,15 @@ export default function NavShell({ jsKey, colors = {}, initialFrom = null, initi
    * ⚠️ 用计数而不是依赖对象本身 —— 同一模式连续触发（如两次都选「目的地」）也要生效。
    */
   const [viewTick, setViewTick] = useState(0);
+
+  /**
+   * ★ 2026-09-22 新增：**路线查看模式**。
+   *   · `lineSheet`：是否展开「公共交通路线」全屏选择弹窗；
+   *   · `pickedLine`：当前正在查看的线路（非空 ⇒ 地图画该线 + 底部显示主题色标签）。
+   *   用户口径：选线路后弹窗关闭回地图，底部中间出现标签 + 叉，点叉退出。
+   */
+  const [lineSheet, setLineSheet] = useState(false);
+  const [pickedLine, setPickedLine] = useState<RouteLineItem | null>(null);
 
   const favs = useCombos();
 
@@ -151,21 +161,63 @@ export default function NavShell({ jsKey, colors = {}, initialFrom = null, initi
           onLocate={onLocate}
           onStationClick={onStationClick}
           onMapClick={onMapClick}
+          /* ★ 2026-09-22：路线查看模式（非空 ⇒ 画该线路 + 本线站点高亮 + 自动装下整条线） */
+          routeLine={pickedLine}
         />
 
-        {/* 品牌栏：品牌字标 + 定位按钮（压在地图下方） */}
+        {/* 品牌栏：品牌字标 + （路线模式下）主题色标签 + 右侧按钮组（路线选择 / 定位） */}
         <div className="nav-brandbar">
           <span className="nav-brand">M Map</span>
-          <button
-            type="button"
-            className="nav-locate"
-            aria-label="定位到我的位置"
-            title="定位到我的位置"
-            onClick={() => setLocateTick((t) => t + 1)}
-          >
-            <Icon name="locate" size={20} />
-          </button>
+
+          {/* ★ 2026-09-22：路线查看模式的**退出标签**（产品口径：只显示线路名 + 叉） */}
+          {pickedLine && (
+            <span className="nav-linechip" style={{ background: pickedLine.color }}>
+              <span className="nav-linechip__text">{pickedLine.label}</span>
+              <button
+                type="button"
+                className="nav-linechip__x"
+                aria-label={`退出路线查看（${pickedLine.label}）`}
+                title="退出路线查看"
+                onClick={() => setPickedLine(null)}
+              >
+                <Icon name="close" size={16} />
+              </button>
+            </span>
+          )}
+
+          <div className="nav-brandbar__acts">
+            {/* ★ 2026-09-22：公共交通路线选择（在定位按钮**上方**） */}
+            <button
+              type="button"
+              className="nav-locate"
+              aria-label="公共交通路线"
+              title="公共交通路线"
+              onClick={() => setLineSheet(true)}
+            >
+              <Icon name="records" size={20} />
+            </button>
+            <button
+              type="button"
+              className="nav-locate"
+              aria-label="定位到我的位置"
+              title="定位到我的位置"
+              onClick={() => setLocateTick((t) => t + 1)}
+            >
+              <Icon name="locate" size={20} />
+            </button>
+          </div>
         </div>
+
+        {/* ★ 2026-09-22：公共交通路线全屏选择弹窗 */}
+        {lineSheet && (
+          <RouteLinesSheet
+            onPick={(l) => {
+              setPickedLine(l);
+              setLineSheet(false);
+            }}
+            onClose={() => setLineSheet(false)}
+          />
+        )}
 
         {/* 顶置搜索条 —— **只在「非全屏搜索」时出现**（全屏时由 SearchSheet 自己的输入条接管） */}
         {sheet !== "full" && (

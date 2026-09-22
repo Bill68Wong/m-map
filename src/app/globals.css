@@ -4680,3 +4680,177 @@ button[aria-disabled="true"] {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ══════════════════════════════════════════════════════════════════════
+   ★ 2026-09-22 公共交通路线：全屏选择弹窗 + 路线查看模式
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* ── 全屏线路选择弹窗（⚠️ 不可滚动：全部线路必须一屏显示完）── */
+.rl-sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  overscroll-behavior: none;
+}
+.rl-sheet__bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: calc(var(--safe-top, 0px) + 12px) 14px 12px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.rl-sheet__title {
+  flex: 1;
+  font-size: 16px;
+  font-weight: 600;
+}
+.rl-sheet__close {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: var(--fg-2);
+  cursor: pointer;
+}
+.rl-sheet__body {
+  flex: 1;
+  min-height: 0;
+  padding: 12px 12px calc(12px + var(--safe-bottom, 0px));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.rl-sheet__hint {
+  text-align: center;
+  padding: 20px 0;
+  color: var(--muted);
+}
+
+/* 卡片通用：方形 + 主题色底 + 白字 + **绝不换行** */
+.rl-chip {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 8px;
+  color: #fff;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  cursor: pointer;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.18);
+  box-shadow: 0 1px 2px rgba(15, 23, 32, 0.2);
+}
+.rl-chip:active {
+  transform: scale(0.96);
+}
+
+/* 轻轨行：3 张较宽卡片（名字较长） */
+.rl-sheet__lrt {
+  flex: none;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+.rl-chip--lrt {
+  height: 44px;
+  font-size: 14px;
+  letter-spacing: 0.02em;
+}
+
+/* 巴士：7 列网格（390px 宽下每格约 52px，够放 25AX / 701X 这种 4 字符） */
+.rl-sheet__bus {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  /* 行高自适应：14 行正好铺满剩余高度（不滚动） */
+  grid-auto-rows: 1fr;
+  gap: 6px;
+}
+.rl-chip--bus {
+  font-size: 12px;
+  height: 100%;
+  min-height: 28px;
+}
+
+/* ── 底部「路线查看中」标签（M Map 与定位按钮那一行中间）── */
+.nav-linechip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 32px;
+  padding: 0 4px 0 12px;
+  border-radius: var(--radius-full, 999px);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  box-shadow: var(--shadow-hard-sm);
+  white-space: nowrap;
+}
+.nav-linechip__text {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.nav-linechip__x {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.22);
+  color: #fff;
+  cursor: pointer;
+}
+.nav-linechip__x:active {
+  background: rgba(255, 255, 255, 0.36);
+}
+
+/* 右侧按钮组：路线选择 + 定位（**竖排**，路线按钮在上） */
+.nav-brandbar__acts {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: flex-end;
+}
+
+/* ── 路线查看模式的站点区分（产品口径「一眼分辨」）──
+   · `--onroute`：本线站点 —— 放大 + 主题描边加粗 + 白底
+   · `--dim`    ：其他站点 —— 缩小 + 半透明灰（环境参照还在，但不抢镜） */
+.nav-map__station--onroute {
+  width: 16px;
+  height: 16px;
+  border-width: 3px;
+  background: #fff;
+  box-shadow: 0 0 0 1.5px rgba(15, 23, 32, 0.35);
+}
+.nav-map__station--dim {
+  width: 8px;
+  height: 8px;
+  border-width: 1.5px;
+  opacity: 0.45;
+  box-shadow: none;
+}
+/* 轻轨站在路线模式下的叠加（保持方形特征，只是更大/更小） */
+.nav-map__station--lrt.nav-map__station--onroute {
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+}
+.nav-map__station--lrt.nav-map__station--dim {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+}

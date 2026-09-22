@@ -78,19 +78,36 @@ function mainCodeOf(code: string): string {
 /**
  * 报站内容（简体）。
  * · 巴士：ok=false→取不到；无车→暂无在途车；0 站→即将到站；否则「还有 N 站 · 约 M 分」
- * · **轻轨**（★ 2026-09-22）：走**时刻表**，没有「还有几站」⇒ 显示「下一班 HH:MM · M 分后」；
- *   已收班（`etaMin === null`）⇒「今日已收班」。
+ * · **轻轨**（★ 2026-09-22）：走**时刻表** ⇒ 显示「下一班 HH:MM · M 分后」；已收班 ⇒「今日已收班」
+ *   ★ 其中 **石排湾线 / 横琴线** 额外显示**秒级倒计时**（用户口径：这两条班次疏，读秒才有意义）
  * ★ 站数 N 与「即将到站」由 `<EtaText>` 加粗 + 青花蓝（通勤决策的关键数字，第一眼可见）。
  */
-function etaNode(it: EtaItem) {
+function etaNode(it: EtaItem, nowMs: number) {
   if (it.kind === "lrt") {
     if (it.etaMin === null) return <>今日已收班</>;
-    const at = it.nextAt ? `${it.nextAt}` : "";
-    return (
-      <EtaText
-        text={it.etaMin === 0 ? `${at} 即将开出` : `下一班 ${at} · ${it.etaMin} 分后`}
-      />
-    );
+    const at = it.nextAt ?? "";
+    // ★ 石排湾线 / 横琴线：秒级倒计时（按 nextAt 那个**整分**算剩余秒数）
+    const withSeconds = /石排湾|横琴/.test(it.route);
+    if (withSeconds && it.nextAt && /^\d{1,2}:\d{2}$/.test(it.nextAt)) {
+      const macau = new Date(nowMs + 8 * 3_600_000);
+      const [hh, mm] = it.nextAt.split(":").map(Number);
+      const target = Date.UTC(
+        macau.getUTCFullYear(),
+        macau.getUTCMonth(),
+        macau.getUTCDate(),
+        hh,
+        mm,
+        0,
+      ) - 8 * 3_600_000;
+      const left = Math.max(0, Math.round((target - nowMs) / 1000));
+      const m = Math.floor(left / 60);
+      const s = left % 60;
+      if (left <= 0) return <EtaText text={`${at} 即将开出`} />;
+      return (
+        <EtaText text={`下一班 ${at} · ${m} 分 ${String(s).padStart(2, "0")} 秒后`} />
+      );
+    }
+    return <EtaText text={it.etaMin === 0 ? `${at} 即将开出` : `下一班 ${at} · ${it.etaMin} 分后`} />;
   }
   if (!it.ok) return <>这条线路暂时取不到报站</>;
   if (it.stopsAway === null) return <>暂无在途车</>;
@@ -118,6 +135,18 @@ export default function StationCard({
   const [phase, setPhase] = useState<"loading" | "ready" | "failed">("loading");
   const [items, setItems] = useState<EtaItem[]>([]);
   const [showAllGroups, setShowAllGroups] = useState(false);
+  /**
+   * ★ 2026-09-22：秒级倒计时的时钟。
+   *   **只在列表里出现「石排湾线 / 横琴线」时才起定时器**（用户口径：只给这两条读秒），
+   *   否则每秒重渲染纯属浪费。
+   */
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const needSec = items.some((it) => /石排湾|横琴/.test(it.route));
+    if (!needSec) return;
+    const t = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(t);
+  }, [items]);
 
   useEffect(() => {
     let alive = true;
@@ -201,7 +230,7 @@ export default function StationCard({
               <div className="nav-station-card__row" key={`${it.route}-${it.dir}`}>
                 <RouteStack codes={[it.route]} colorOf={(c) => colors[c] ?? null} size="sm" />
                 <span className="nav-station-card__dir t-label t-muted">{it.dirLabel}</span>
-                <span className="nav-station-card__eta t-label">{etaNode(it)}</span>
+                <span className="nav-station-card__eta t-label">{etaNode(it, nowMs)}</span>
               </div>
             ));
             // ★ 单分组（或无 platform）→ 不显示分组容器与子码行（向后兼容）
