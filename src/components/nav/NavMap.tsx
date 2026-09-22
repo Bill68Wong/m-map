@@ -476,11 +476,13 @@ export default function NavMap({
           //   为什么不用 `panBy`（上一版做法，实测失效）：`setZoomAndCenter` 是**带动画**的，
           //   紧接的 `panBy` 会被缩放动画中断/覆盖 ⇒ 标记仍留在下半屏。
           //   `setFitView` 的一次性取景（含 avoid）不受该问题影响。
-          //   ⚠️ 留白以**地图容器高**（不是视口高）为基准 —— 容器已排除底部导航与合规条；
-          //      底部面板在容器内约占 36%，故取 45% 留白使标记落在容器上半部。
+          //   ⚠️ 留白以**地图容器高**（不是视口高）为基准 —— 容器已排除底部导航与合规条。
+          //      实测标定（容器 ≈ 720px、底部面板 ≈ 260px）：
+          //        45% 留白 ⇒ 标记落在 y≈480（偏下）· 70% ⇒ 约 y≈330 ⇒ 落在**上半屏中部** ✓
+          //      故取 70%：让「上半屏正中央」这条产品口径真正成立，而不只是「没被遮住」。
           //   第 4 参 `maxZoom=16`：单点 fitView 否则会一路放大到 20 级（街景过近），需封顶。
           const ch: number = map.getSize?.()?.height ?? winH;
-          map.setFitView(overlays, false, [60, 60, Math.round(ch * 0.45), 60], 16);
+          map.setFitView(overlays, false, [70, 60, Math.round(ch * 0.7), 60], 16);
         } else {
           // 兜底：标记尚未就绪 ⇒ 退化为「居中 + 上移」
           map.setZoomAndCenter(16, [dest.lng, dest.lat]);
