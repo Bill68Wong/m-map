@@ -54,6 +54,7 @@ export default function RecommendCard({
   delayMs,
   hrefOverride,
   cardAction,
+  onCardOpen,
 }: {
   card: CardData;
   /** 线路码 → 主题色（服务端下发） */
@@ -73,6 +74,12 @@ export default function RecommendCard({
    * ★ v2.4.1：从底部动作槽移到头部 —— 底部整条已按用户要求删除。
    */
   cardAction?: React.ReactNode;
+  /**
+   * ★ 2026-09-23：**打开全屏详情弹窗**（主页「出发」推荐层 / 收藏组合页传入）。
+   *   传了则**优先于 `hrefOverride` 与默认跳转** —— 点击不再整页导航
+   *   （消除页面加载卡顿，也避免「跨链路 planId 匹配错卡」）。
+   */
+  onCardOpen?: () => void;
 }) {
   const router = useRouter();
   /** ★ v1.1.8：整卡可点 + 列表要滚动 → 位移 >8px 或长按 >700ms 判为滚动，不触发跳转 */
@@ -102,6 +109,11 @@ export default function RecommendCard({
   function onClick() {
     if (press.isGuarded()) return;
     if (!first) return;
+    // ★ 2026-09-23：优先「全屏详情弹窗」—— 传了 onCardOpen 就不做整页导航
+    if (onCardOpen) {
+      onCardOpen();
+      return;
+    }
     if (hrefOverride) {
       router.push(hrefOverride);
       return;

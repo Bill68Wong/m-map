@@ -5,29 +5,27 @@
  * + 步行/换乘 + 到达时刻。**不做开发者模式**（设计 §2.E）。
  * 数据来源：服务端 `planNav` 找 `plan` 指定的那张卡 → `buildStrips` 由我们的逐跳解出站序。
  * 设计：docs/设计-全澳导航-v1-20260918.md §2.E / §C.9
+ *
+ * ★ 2026-09-23 重构（全屏弹窗配套）：
+ *   · 详情体渲染抽到 `RouteDetailBody`（本页与全屏详情弹窗**共用**，防两处漂移）；
+ *   · `otherRoutesAt` / `foldLiveAt` 抽到 `@/lib/nav/detail-fold`（同一原因）；
+ *   · **指定 `plan` 未命中时不再静默换成第一张卡** —— 顶部明示「原方案已变化」。
+ *     （背景：收藏链路跳本页时 planId 属另一条链路，静默兜底曾造成「点 51 显示 56」。）
  */
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { Suspense } from "react";
-import type { Pool } from "pg";
 import ComplianceBar from "@/components/nav/ComplianceBar";
-import StationStrip from "@/components/card/StationStrip";
-import RouteStack from "@/components/RouteStack";
-import StationReachFold from "@/components/nav/StationReachFold";
-import FavoriteButton from "@/components/favorites/FavoriteButton";
+import RouteDetailBody from "@/components/nav/RouteDetailBody";
 import Icon from "@/components/ui/Icon";
-import { LrtEtaInline } from "@/components/LrtEta";
-import { EtaText, Row, TierBadge, macauClock } from "@/components/RoutePieces";
 import { getPool } from "@/lib/db";
 import { parseNavParams } from "@/lib/nav/nav-params";
 import { planNav } from "@/lib/nav/nav-service";
 import { buildStrips } from "@/lib/nav/strips";
+import { foldDataOfCard } from "@/lib/nav/detail-fold";
 import { endpointOf } from "@/lib/favorites/types";
 import { snapshotOfCard, routeSegsOfCard } from "@/lib/favorites/snapshot";
-import { rangeText } from "@/lib/recommend/catch-up";
-import { fetchStationLive } from "@/lib/recommend/live";
-import { loadStatics, type RecStatic } from "@/lib/recommend/query";
-import { mainCodeOf } from "@/lib/recommend/segment-lookup";
+import { loadStatics } from "@/lib/recommend/query";
 import type { NavPoint } from "@/lib/nav/types";
 import type { SchoolZone } from "@/lib/recommend/types";
 
@@ -95,9 +93,18 @@ async function DetailSection({
 }) {
   const pool = getPool();
   const result = await planNav(pool, { origin, dest, zone, limit });
-  const card =
-    (planId !== undefined ? result.cards.find((c) => c.planId === planId) : undefined) ?? result.cards[0];
+  /**
+   * ★ 2026-09-23：指定 `plan` 时**只接受命中**，miss 不再静默换卡。
+   *   此前 `?? result.cards[0]` 会把「另一条链路的 planId」静默显示成第一张卡
+   *   （用户实测「点 51 路却显示 56 路」）。现在：
+   *   · 未指定 plan → 显示第一张（正常）；
+   *   · 指定 plan 命中 → 显示该张（正常）；
+   *   · 指定 plan 未命中 → 显示第一张 + **顶部明示「原方案已变化」**（不静默）。
+   */
+  const wanted = planId !== undefined ? result.cards.find((c) => c.planId === planId) : undefined;
+  const card = wanted ?? result.cards[0];
   if (!card) redirect(backHref);
+  const planMissed = planId !== undefined && !wanted;
 
   const st = await loadStatics(pool);
   const weekday = new Date(result.generatedAt + 8 * 3_600_000).getUTCDay();
@@ -107,13 +114,8 @@ async function DetailSection({
     nameOf: st.routeIdx.nameOf,
     weekday,
   });
-  const colorOf = (c: string) => result.colors[c] ?? null;
-  const first = card.rides[0];
-  const lastRide = card.rides[card.rides.length - 1];
-  const lastAlightMain = lastRide ? mainCodeOf(lastRide.alight) : null;
-  const otherRoutes = lastAlightMain ? otherRoutesAt(st, lastAlightMain, card.rides.map((r) => r.route)) : [];
   // ★ 【5】折叠栏「本站台其他线路」的实时报站（巴士）；失败不阻塞（收敛为空）
-  const foldLive = lastAlightMain ? await foldLiveAt(pool, st, lastAlightMain, otherRoutes, result.generatedAt) : {};
+  const fold = await foldDataOfCard(pool, st, card, result.generatedAt);
   // ★ S5：本方案可用于收藏（存 query + fingerprint，不落 planId）
   const favSnap = snapshotOfCard(card);
   // ★ v2.4.0：连流程图结构一起存（收藏页可画纵向流程图）
@@ -121,174 +123,31 @@ async function DetailSection({
 
   return (
     <>
-      <div className="card rc-detail__head">
-        <div className="rc-head__main">
-          <span className="rc-total">{Math.round(card.totalMin)}</span>
-          <span className="rc-total__unit">分</span>
+      {planMissed && (
+        <div className="nav-degraded t-label" role="status">
+          原方案已随实时车况变化，以下为当前最快方案
         </div>
-        <span className="rc-arrive">
-          预计 <b>{macauClock(card.arriveAt)}</b> 到达
-          {card.crossBorder && <span className="rc-warn"> · 不含通关</span>}
-        </span>
-        {/* ⚠️ Server Component：**只能传可序列化的 `colors`**，不能传 `colorOf` 函数（RSC 边界） */}
-        <RouteStack codes={card.rides.map((r) => r.route)} colors={result.colors} size="sm" />
-        {result.degraded && <span className="nav-degraded nav-degraded--inline t-label">本地推算</span>}
-        {/* ★ 收藏入口 ②（方案）：详情头部 */}
-        <FavoriteButton
-          kind="plan"
-          entry="detail"
-          from={endpointOf(origin)}
-          to={endpointOf(dest)}
-          query={query}
-          fingerprint={favSnap.fingerprint}
-          snapshot={favSnap}
-          route={favRoute}
-          withLabel
-        />
-      </div>
-
-      <div className="rc-line">
-        <Row
-          dot="walk"
-          main={
-            <>
-              步行{" "}
-              <b className={card.walkOut.estimated ? "rc-val--est" : undefined}>{card.walkOut.minutes}</b> 分
-              {" → "}
-              {card.walkOut.toLabel}
-            </>
-          }
-        />
-        {first && (
-          <Row
-            dot="wait"
-            main={
-              /* ★ 【5】与卡片口径一致：轻轨首段的倒计时由客户端每秒重算（`LrtEtaInline`）；
-                 巴士用服务端下发的报站文案（「还有 N 站 · 约 X~Y 分」= 距站信息 + 时间）。
-                 ★ 修复包 v2.2.1：站数 N /「即将到站」加粗 + 青花蓝（与站点信息卡同款）。 */
-              first.kind === "lrt" && first.liveDepartures?.length ? (
-                <LrtEtaInline
-                  lineCode={first.route}
-                  departuresMs={first.liveDepartures}
-                  clocks={first.liveClocks}
-                  state="running"
-                  directionName={null}
-                />
-              ) : (
-                <EtaText text={first.liveText || `等 ${first.waitMin} 分`} />
-              )
-            }
-            aside={first.tierText ? <TierBadge tier={first.tier} tierText={first.tierText} /> : null}
-          />
-        )}
-      </div>
-
-      {/* 纵向站条：一趟一条（★【2a】范围 = 上车站 → 下车站） */}
-      <div className="rc-strips">
-        {strips.map((strip, i) => (
-          <StationStrip
-            key={`${strip.route}-${strip.board}-${i}`}
-            strip={strip}
-            color={colorOf(strip.route)}
-            last={i === strips.length - 1}
-          />
-        ))}
-      </div>
-
-      <div className="rc-line">
-        <Row
-          dot="walk"
-          last
-          main={
-            /* ★ 【3】下车步行引导：**下车站编号 站名 → 目的地**（不再是「步行 → 下车站编号」）。
-               `card.walkIn.toLabel` = 下车站带名标签（如「C653 金峰南岸/金譽峰」）；
-               `dest.label` = 目的地名。繁体站名 + 简体连接词。 */
-            <>
-              步行{" "}
-              <b className={card.walkIn.estimated ? "rc-val--est" : undefined}>{card.walkIn.minutes}</b> 分
-              {" → "}
-              <b>{card.walkIn.toLabel}</b>
-              {" → "}
-              {dest.label}
-            </>
-          }
-        />
-      </div>
-
-      {/* ★ T05：本站台其他线路（折叠栏，单独实现，不动 StationStrip）；★【5】含实时报站 */}
-      {lastAlightMain && (
-        <StationReachFold
-          stationLabel={lastRide?.alightLabel ?? lastAlightMain}
-          items={otherRoutes.map((r) => ({ route: r, live: foldLive[r] ?? "" }))}
-          colors={result.colors}
-        />
       )}
-
-      <div className="rc-foot">
-        <span className="rc-hint t-muted">数据来源：澳门交通事务局（DSAT）· 高德地图</span>
-      </div>
+      <RouteDetailBody
+        card={card}
+        strips={strips}
+        otherRoutes={fold.otherRoutes}
+        foldLive={fold.foldLive}
+        stationLabel={fold.stationLabel}
+        colors={result.colors}
+        destLabel={dest.label}
+        fav={{
+          from: endpointOf(origin),
+          to: endpointOf(dest),
+          query,
+          fingerprint: favSnap.fingerprint,
+          snapshot: favSnap,
+          route: favRoute,
+        }}
+        degraded={result.degraded}
+      />
     </>
   );
-}
-
-/** 该主码站台**其他**可达线路（排除本卡已用的线路；按站序索引统计） */
-function otherRoutesAt(st: Awaited<ReturnType<typeof loadStatics>>, main: string, used: string[]): string[] {
-  const usedSet = new Set(used);
-  const out = new Set<string>();
-  for (const [key, stops] of st.routeIdx.dirStops) {
-    const route = key.split("|")[0];
-    if (usedSet.has(route)) continue;
-    for (const code of stops) {
-      if (mainCodeOf(code) === main) {
-        out.add(route);
-        break;
-      }
-    }
-  }
-  return [...out].slice(0, 16);
-}
-
-/**
- * ★ 【5】「本站台其他线路」实时报站（**巴士**）：route → 文案（「还有 N 站 · 约 X~Y 分」）。
- *
- * 口径：对每条线路，取「经过本站的第一个方向」，以**本站的下一站**为目的点
- *   （DSAT 的 `queryEta` 需要目的点来定方向、并把已过站的车排除）→ 得到该线在本站的
- *   最近一班 → 距站数 + 区间时间。**轻轨**不在本表（走时刻表，非 DSAT）；失败一律收敛为空。
- */
-async function foldLiveAt(
-  pool: Pool,
-  st: RecStatic,
-  stationMain: string,
-  routes: string[],
-  nowMs: number,
-): Promise<Record<string, string>> {
-  const weekday = new Date(nowMs + 8 * 3_600_000).getUTCDay();
-  const jobs: { station: string; dest: string; routes: string[] }[] = [];
-  const stopCodeOf: Record<string, string> = {};
-  for (const r of routes) {
-    if (r.startsWith("LRT-")) continue; // 轻轨无 DSAT 实时；折叠栏暂不含
-    for (const d of st.routeIdx.dirsOf.get(r) ?? []) {
-      const stops = st.routeIdx.dirStops.get(`${r}|${d}`) ?? [];
-      const i = stops.findIndex((c) => mainCodeOf(c) === stationMain);
-      if (i >= 0 && i + 1 < stops.length) {
-        jobs.push({ station: stops[i], dest: stops[i + 1], routes: [r] });
-        stopCodeOf[r] = stops[i];
-        break;
-      }
-    }
-  }
-  if (!jobs.length) return {};
-  const out: Record<string, string> = {};
-  try {
-    const live = await fetchStationLive(pool, jobs, st.routeIdx, st.segIdx, { todayWeekday: weekday, nowMs });
-    for (const r of Object.keys(stopCodeOf)) {
-      const b = live.get(`${r}@${stopCodeOf[r]}`)?.nearest ?? null;
-      out[r] = b ? `还有 ${b.stopsAway} 站 · ${rangeText(b.loSec, b.hiSec)}` : "暂无在途车";
-    }
-  } catch {
-    /* 实时不可用 → 收敛为空（折叠栏仍显示线路标签） */
-  }
-  return out;
 }
 
 function DetailSkeleton() {

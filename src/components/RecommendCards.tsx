@@ -30,6 +30,7 @@ export default function RecommendCards({
   missed = [],
   hrefBuilder,
   cardAction,
+  onCardOpen,
 }: {
   cards: CardData[];
   colors: Record<string, string>;
@@ -45,6 +46,11 @@ export default function RecommendCards({
   hrefBuilder?: (card: CardData) => string;
   /** 头部附加角标（如「当下最快」「已保存」）；★ v2.4.1 从底部动作槽移到卡片头部 */
   cardAction?: (card: CardData, rank: number) => React.ReactNode;
+  /**
+   * ★ 2026-09-23：点击卡片 → **打开全屏详情弹窗**（优先于 `hrefBuilder`）。
+   *   主页「出发」推荐层与收藏组合页用它替代整页跳转。
+   */
+  onCardOpen?: (card: CardData) => void;
 }) {
   // 剔除原因（分两类：没车 vs 赶不上）—— 合并成一个数组只用于文案拼接
   // ★ P1-2（T05 修复）：界面文案**一律简体**（站名/线路名才用繁体；校名「澳門科技大學」属地名）
@@ -90,6 +96,7 @@ export default function RecommendCards({
           toSlug={toSlug}
           hrefOverride={hrefBuilder?.(c)}
           cardAction={cardAction?.(c, i + 1)}
+          onCardOpen={onCardOpen ? () => onCardOpen(c) : undefined}
           /* ★ v1.1.8：入场错峰（原先 5 张卡同时同速上浮，既没方向感也白花一次动画预算） */
           delayMs={i * 40}
         />

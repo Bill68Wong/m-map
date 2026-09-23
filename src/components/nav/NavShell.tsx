@@ -38,18 +38,21 @@
  */
 import { useCallback, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import Icon from "@/components/ui/Icon";
 import NavMap from "./NavMap";
 import RefreshButton from "./RefreshButton";
+import RouteDetailSheet from "./RouteDetailSheet";
 import RouteLinesSheet from "./RouteLinesSheet";
 import RoutePanel from "./RoutePanel";
+import RouteResultSheet from "./RouteResultSheet";
 import SearchSheet, { type QuickPair } from "./SearchSheet";
 import StationCard, { type StationCardStation } from "./StationCard";
 import VehicleCard from "./VehicleCard";
 import { queryOf } from "./StepSheet";
 import { useRouteVehicles } from "./useRouteVehicles";
 import { useCombos } from "@/lib/favorites/useCombos";
+import { endpointOf } from "@/lib/favorites/types";
+import type { RecommendCard } from "@/lib/recommend/types";
 import type { NavPoint } from "@/lib/nav/types";
 
 const MY_LOCATION = "我的位置";
@@ -67,13 +70,18 @@ export interface NavShellProps {
 type SheetState = "closed" | "full" | "half";
 
 export default function NavShell({ jsKey, colors = {}, initialFrom = null, initialTo = null }: NavShellProps) {
-  const router = useRouter();
   /** 定位点（GCJ-02）；null = 尚未定位/定位失败 */
   const [userPos, setUserPos] = useState<{ lng: number; lat: number } | null>(null);
   const [from, setFrom] = useState<NavPoint | null>(initialFrom);
   const [to, setTo] = useState<NavPoint | null>(initialTo);
   const [station, setStation] = useState<StationCardStation | null>(null);
-  const [picking, setPicking] = useState(false);
+  /**
+   * ★ 2026-09-23：**全屏推荐弹窗 / 详情弹窗**（替代整页跳转 `/nav`、`/nav/detail`）。
+   *   · `resultOpen`：推荐弹窗开合（数据在弹窗内保留 —— 关闭再开秒显上次结果）；
+   *   · `detail`：当前查看的卡片（非空 ⇒ 详情弹窗叠在推荐层之上）。
+   */
+  const [resultOpen, setResultOpen] = useState(false);
+  const [detail, setDetail] = useState<{ card: RecommendCard; degraded: boolean } | null>(null);
   /** 重新定位触发计数（右上定位按钮） */
   const [locateTick, setLocateTick] = useState(0);
 
@@ -111,6 +119,8 @@ export default function NavShell({ jsKey, colors = {}, initialFrom = null, initi
     : null;
   const fromPoint = from ?? myLocation;
   const canGo = !!fromPoint && !!to;
+  /** ★ 2026-09-23：推荐弹窗与详情弹窗共用的查询串（与 `/nav` URL 同口径） */
+  const resultQuery = fromPoint && to ? queryOf(fromPoint, to) : "";
 
   /**
    * 视口指令（交给 `NavMap`）：
@@ -141,10 +151,10 @@ export default function NavShell({ jsKey, colors = {}, initialFrom = null, initi
     setViewTick((t) => t + 1);
   }
 
+  /** ★ 2026-09-23：出发 → 打开全屏推荐弹窗（不再整页跳 `/nav`） */
   function go() {
     if (!fromPoint || !to) return;
-    setPicking(true);
-    router.push(`/nav?${queryOf(fromPoint, to)}`);
+    setResultOpen(true);
   }
 
   /** 常用 = **收藏组合**（排除已停用），按最近使用取前 3 */
@@ -325,6 +335,31 @@ export default function NavShell({ jsKey, colors = {}, initialFrom = null, initi
         />
       )}
 
+      {/* ★ 2026-09-23：**全屏推荐弹窗**（主页「出发」入口；常驻挂载 ⇒ 关闭再开秒显上次结果）。
+          ⚠️ 必须在 `.nav-map-wrap` **之外** —— wrap 是层叠上下文，弹窗挂进去会被底部 chrome 压住 */}
+      <RouteResultSheet
+        open={resultOpen}
+        query={resultQuery}
+        odLabel={fromPoint && to ? `${fromPoint.label} → ${to.label}` : ""}
+        fav={fromPoint && to ? { from: endpointOf(fromPoint), to: endpointOf(to) } : null}
+        onClose={() => setResultOpen(false)}
+        onOpenDetail={(card, degraded) => setDetail({ card, degraded })}
+      />
+
+      {/* ★ 2026-09-23：**全屏详情弹窗**（叠在推荐层之上 z-80）—— 用哪张卡就显示哪张，
+          不经过 planId 重算匹配（消除「点 51 显示 56」）；站条数据走轻量接口（不重算 planNav） */}
+      {detail && fromPoint && to && (
+        <RouteDetailSheet
+          card={detail.card}
+          colors={colors}
+          destLabel={to.label}
+          odLabel={`${fromPoint.label} → ${to.label}`}
+          fav={{ from: endpointOf(fromPoint), to: endpointOf(to), query: resultQuery }}
+          degraded={detail.degraded}
+          onClose={() => setDetail(null)}
+        />
+      )}
+
       {/* ── 全屏搜索层 ── */}
       {sheet === "full" && (
         <SearchSheet
@@ -352,7 +387,8 @@ export default function NavShell({ jsKey, colors = {}, initialFrom = null, initi
           from={from}
           userPos={userPos}
           canGo={canGo}
-          going={picking}
+          /* ★ 2026-09-23：规划过程移到弹窗内（骨架屏）—— 按钮不再有「正在规划」态 */
+          going={false}
           query={fromPoint && to ? queryOf(fromPoint, to) : ""}
           onGo={go}
           onTapFrom={() => openSearch("from")}

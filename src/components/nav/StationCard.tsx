@@ -60,7 +60,8 @@ interface EtaItem {
   kind?: "bus" | "lrt";
   /** ★ 2026-09-22 轻轨专用：下一班发车时刻 `HH:MM`（**已含实测偏差修正**） */
   nextAt?: string | null;
-  /** ★ v2.10.1 轻轨专用：秒级剩余（服务端算好那一刻的；前端按本地时间递减） */
+  /** ★ v2.10.1 轻轨专用：秒级剩余（服务端算出该值那一刻的快照）
+   *  ★ 2026-09-23：前端以**纯本地时基**递减（见 `baseMs`），不再与服务端时钟混算 */
   etaSec?: number | null;
   /** ★ v2.10.1 轻轨专用：该线实测偏差（秒） */
   biasSec?: number;
@@ -86,7 +87,12 @@ function mainCodeOf(code: string): string {
  *   · **横琴线 / 石排湾线**（班次疏）→「下一班还有 X 分 XX 秒」—— 逐秒递减
  *
  * ⚠️ 剩余时间口径：服务端给 `etaSec`（**已含线路实测偏差修正**，如石排湾线表定 15:00
- *   实际 14:59:55 ⇒ 该值的 0 点即 14:59:55），前端按**本地已流逝秒数**递减。
+ *   实际 14:59:55 ⇒ 该值的 0 点即 14:59:55）。
+ * ★ 2026-09-23（用户拍板）：读秒基准改为**纯用户端时基** —— 打开弹窗时记录本地
+ *   发起/到达时刻，按「往返中点」把服务端剩余秒折算成本地时间轴上的基准点（`baseMs`），
+ *   之后 `left = etaSec − (本地现在 − baseMs)` 全程用本地时钟递减。
+ *   此前实现把「服务端 fetchedAt（服务端时钟）」与「本地 now（本地时钟）」相减
+ *   ⇒ 手机与服务器时钟差几秒时，读秒整体偏慢几秒（用户实测反馈「读秒也延迟几秒」）✗
  *   不再显示「下一班 HH:MM」这种绝对时刻（用户口径：只要「还有多久」）。
  */
 function lrtEtaText(it: EtaItem, driftSec: number): string {
@@ -110,9 +116,9 @@ function lrtEtaText(it: EtaItem, driftSec: number): string {
  * · **轻轨**：时刻表制，显示「下一班还有 …」（见 `lrtEtaText`）
  * ★ 站数 N 与「即将到站」由 `<EtaText>` 加粗 + 青花蓝（通勤决策的关键数字，第一眼可见）。
  */
-function etaNode(it: EtaItem, nowMs: number, fetchedAtMs: number) {
+function etaNode(it: EtaItem, nowMs: number, baseMs: number) {
   if (it.kind === "lrt") {
-    const driftSec = fetchedAtMs ? Math.max(0, Math.floor((nowMs - fetchedAtMs) / 1000)) : 0;
+    const driftSec = baseMs ? Math.max(0, Math.floor((nowMs - baseMs) / 1000)) : 0;
     return <EtaText text={lrtEtaText(it, driftSec)} />;
   }
   if (!it.ok) return <>这条线路暂时取不到报站</>;
@@ -141,8 +147,11 @@ export default function StationCard({
   const [phase, setPhase] = useState<"loading" | "ready" | "failed">("loading");
   const [items, setItems] = useState<EtaItem[]>([]);
   const [showAllGroups, setShowAllGroups] = useState(false);
-  /** ★ v2.10.1：响应时刻（用于把服务端的 `etaSec` 换算成「本地此刻的剩余秒」） */
-  const [fetchedAtMs, setFetchedAtMs] = useState(0);
+  /**
+   * ★ 2026-09-23：**用户端时基**基准点（本地时间轴）——把服务端的 `etaSec` 折算到本地时钟，
+   *   之后读秒完全用本地时钟递减（不再引用服务端时钟，消除两端时钟差导致的读秒延迟）。
+   */
+  const [baseMs, setBaseMs] = useState(0);
   /**
    * ★ 2026-09-22：秒级倒计时的时钟。
    *   **只在列表里出现「石排湾线 / 横琴线」时才起定时器**（用户口径：只给这两条读秒），
@@ -161,12 +170,22 @@ export default function StationCard({
     setPhase("loading");
     setItems([]);
     setShowAllGroups(false);
+    /** ★ 2026-09-23：请求**发起**时刻（本地时钟） */
+    const t0 = Date.now();
     fetch(`/api/station/eta?code=${encodeURIComponent(station.code)}`, { cache: "no-store" })
       .then((r) => r.json() as Promise<EtaResponse>)
       .then((j) => {
         if (!alive) return;
+        /**
+         * ★ 用户端确认时间点：`etaSec` 是「服务端处理那一刻」的剩余秒；
+         *   请求往返 RTT = t1 − t0，按**往返中点 ≈ 服务端处理时刻**折算到本地时钟：
+         *   `baseMs = t0 + RTT/2` ⇒ 之后 `left = etaSec − (now − baseMs)` 全程本地读秒。
+         *   ⚠️ RTT 补偿上限 2s：极端网络抖动时宁可少补、不可过补（避免读秒反而偏快）。
+         */
+        const t1 = Date.now();
+        const rtt = Math.min(Math.max(0, t1 - t0), 2_000);
+        setBaseMs(t0 + Math.round(rtt / 2));
         setItems(Array.isArray(j.items) ? j.items : []);
-        setFetchedAtMs(Date.parse(j.fetchedAt) || Date.now());
         setPhase("ready");
       })
       .catch(() => {
@@ -239,7 +258,7 @@ export default function StationCard({
               <div className="nav-station-card__row" key={`${it.route}-${it.dir}`}>
                 <RouteStack codes={[it.route]} colorOf={(c) => colors[c] ?? null} size="sm" />
                 <span className="nav-station-card__dir t-label t-muted">{it.dirLabel}</span>
-                <span className="nav-station-card__eta t-label">{etaNode(it, nowMs, fetchedAtMs)}</span>
+                <span className="nav-station-card__eta t-label">{etaNode(it, nowMs, baseMs)}</span>
               </div>
             ));
             // ★ 单分组（或无 platform）→ 不显示分组容器与子码行（向后兼容）

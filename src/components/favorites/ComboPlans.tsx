@@ -28,6 +28,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Icon from "@/components/ui/Icon";
 import RecommendCards from "@/components/RecommendCards";
+import RouteDetailSheet from "@/components/nav/RouteDetailSheet";
 import RouteFlow from "./RouteFlow";
 import RouteListSheet from "./RouteListSheet";
 import { useCombos } from "@/lib/favorites/useCombos";
@@ -69,6 +70,12 @@ export default function ComboPlans({ combo, colors, onExit }: ComboPlansProps) {
   const [listOpen, setListOpen] = useState(false);
   /** ★ v2.4.0：当前查看流程图的路线（非空 → 用流程图取代卡片列表） */
   const [pickedPlanId, setPickedPlanId] = useState<string | null>(null);
+  /**
+   * ★ 2026-09-23：**全屏详情弹窗**（点卡片打开；替代整页跳 `/nav/detail`）。
+   *   旧跳转把「本组合预设链路的 planId」带进**另一条链路**的详情页重算匹配，
+   *   命中不了就静默换卡（实测「点 51 显示 56」）⇒ 弹窗直传卡片数据，从根上消除。
+   */
+  const [detail, setDetail] = useState<{ card: CardData; degraded: boolean } | null>(null);
 
   /** 组合的最新快照（写步行覆盖后要立刻反映） */
   const liveCombo = useMemo(() => c.combos.find((x) => x.id === combo.id) ?? combo, [c.combos, combo]);
@@ -234,7 +241,8 @@ export default function ComboPlans({ combo, colors, onExit }: ComboPlansProps) {
                 zone={null}
                 fromSlug={liveCombo.from.code ?? ""}
                 toSlug={liveCombo.to.code ?? ""}
-                hrefBuilder={(c) => `/nav/detail?${liveCombo.query}&plan=${c.planId}`}
+                /* ★ 2026-09-23：点卡 → 全屏详情弹窗（**不再跳 `/nav/detail`**，见 `detail` 注释） */
+                onCardOpen={(c) => setDetail({ card: c, degraded })}
                 /* ★ 动作槽：第 1 张标「当下最快」；命中已保存指纹的卡标「已保存」 */
                 cardAction={(c, rank) => {
                   const saved = savedFps.has(planFingerprint(c.rides));
@@ -296,6 +304,19 @@ export default function ComboPlans({ combo, colors, onExit }: ComboPlansProps) {
             </>
           )}
         </>
+      )}
+
+      {/* ★ 2026-09-23：全屏详情弹窗（z-80 叠在收藏页之上；关闭即回本列表） */}
+      {detail && (
+        <RouteDetailSheet
+          card={detail.card}
+          colors={colors}
+          destLabel={liveCombo.to.label}
+          odLabel={`${liveCombo.from.label} → ${liveCombo.to.label}`}
+          fav={{ from: liveCombo.from, to: liveCombo.to, query: liveCombo.query }}
+          degraded={detail.degraded}
+          onClose={() => setDetail(null)}
+        />
       )}
     </div>
   );

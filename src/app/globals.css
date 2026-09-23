@@ -2119,22 +2119,21 @@ button[aria-disabled="true"] {
   border: 1.5px solid #fff;
   box-shadow: 0 0 0 1px rgba(15, 23, 32, 0.42);
 }
-/* 换乘站 · 水平切（Spec §8）：上 `--c1` / 下 `--c2`，中间 2px 白拼缝 */
+/* 换乘站 · 水平切（Spec §8）：上 `--c1` / 下 `--c2`
+   ★ 2026-09-23（用户拍板）：**去掉原先的 2px 白拼缝**，两种颜色直接相连。 */
 .nav-map__station--lrt.lrt-cut-half {
   background: linear-gradient(
     180deg,
-    var(--c1, var(--primary)) 0 calc(50% - 1px),
-    #fff calc(50% - 1px) calc(50% + 1px),
-    var(--c2, var(--primary)) calc(50% + 1px) 100%
+    var(--c1, var(--primary)) 0 50%,
+    var(--c2, var(--primary)) 50% 100%
   );
 }
-/* 换乘站 · 斜切（Spec §8）：左下 `--c1` / 右上 `--c2`；白缝 1.4px ≈ 1÷cos45°（与水平缝同视觉宽度） */
+/* 换乘站 · 斜切（Spec §8）：左下 `--c1` / 右上 `--c2`；★ 同上——无拼缝、两色直接相接 */
 .nav-map__station--lrt.lrt-cut-diag {
   background: linear-gradient(
     to top right,
-    var(--c1, var(--primary)) 0 calc(50% - 1.4px),
-    #fff calc(50% - 1.4px) calc(50% + 1.4px),
-    var(--c2, var(--primary)) calc(50% + 1.4px) 100%
+    var(--c1, var(--primary)) 0 50%,
+    var(--c2, var(--primary)) 50% 100%
   );
 }
 .nav-station-card {
@@ -5441,4 +5440,64 @@ button[aria-disabled="true"] {
   .help-faq__caret {
     transition: none;
   }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   ★ 2026-09-23：全屏推荐弹窗 / 详情弹窗
+   · `.result-sheet` = 原 `/nav` 页（推荐列表）的弹窗形态，z-70（与 `.rl-sheet` 同级互斥）；
+   · `.detail-sheet` = 原 `/nav/detail` 页（详情）的弹窗形态，z-80（叠在推荐层之上）；
+   · 两者都必须挂在 `.nav-map-wrap` **之外** —— wrap 是层叠上下文，
+     弹窗挂进去会永远低于底部 chrome（Spec AC-13 的教训）。
+   · 层级全景：品牌栏 20 / 站点卡 30 / 底栏 30 / 搜索层 60 / 选线层 70 / 推荐层 70 / 详情层 80。
+   ══════════════════════════════════════════════════════════════════════ */
+.result-sheet {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  flex-direction: column;
+  background: var(--bg);
+  overscroll-behavior: none;
+}
+.result-sheet--open {
+  display: flex;
+}
+.result-sheet__bar,
+.detail-sheet__bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: calc(var(--safe-top, 0px) + 12px) 14px 12px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.result-sheet__od,
+.detail-sheet__od {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: center;
+}
+.result-sheet__body,
+.detail-sheet__body {
+  flex: 1;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 12px 14px calc(24px + var(--safe-bottom));
+}
+.result-sheet__body {
+  /* `.nav-result__progress`（顶部细进度线）的定位锚 */
+  position: relative;
+}
+.detail-sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  overscroll-behavior: none;
 }

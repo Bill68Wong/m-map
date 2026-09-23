@@ -67,11 +67,12 @@ const MAX_ZOOM = 18;
 
 /**
  * 站点图层显示阈值：`zoom < STATION_MIN_ZOOM` 时不显示任何站点（拉远即清空）。
- * ★ 2026-09-22：16 → **15**（用户反馈「要放得很大站点才显示出来」）。
- *   为什么取 15 而不是更低：15 级时澳门半岛/氹仔的站点分布已可读且不糊；
- *   再降到 14 会一次铺开全部站点、与街区细节叠在一起（用户明确要求「不能太小」）。
+ * · 2026-09-22：16 → 15（用户反馈「要放得很大站点才显示出来」）。
+ * ★ 2026-09-23：15 → **14**（用户拍板）——要求「打开定位后的默认视野就要能看到站点」。
+ *   实测定位完成后的视野 ≈ 14.47 级 ⇒ 阈值取 14 时定位完成即显示，不必手动放大；
+ *   而全澳总览（≈12.4 级）仍不显示，避免整屏 470+ 站点糊在街区细节上。
  */
-const STATION_MIN_ZOOM = 15;
+const STATION_MIN_ZOOM = 14;
 /**
  * ★ 2026-09-22：**路线查看模式下的站点阈值**（比常规低一档）。
  *   为什么需要：进入路线模式会 `setBounds` 把视野缩到「装下整条线」，
@@ -818,8 +819,17 @@ export default function NavMap({
       }
       clearAll();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stationRebuildTick]);
+    /**
+     * ★ 2026-09-23 修复：依赖数组补上 `phase`。
+     *
+     * 回归史：v2.9.0 为「路线模式重建站点图层」把依赖从 `[phase]` 改成了 `[stationRebuildTick]`，
+     *   而本 effect 开头有 `if (phase !== "ready") return;` —— 组件挂载时 phase 仍是 "loading"，
+     *   执行即 return；等地图就绪（phase → "ready"）时 **effect 不会重跑**（依赖没变）
+     *   ⇒ **普通地图模式下站点图层从未启动**（拉近拉远都不显示；线上实测 `data-station-count` 恒为 null）。
+     *   之所以一直没暴露：进出「路线查看模式」会触发 `stationRebuildTick` 重建，站点侥幸显示过一次。
+     * ⇒ 补回 `phase`：loading → ready 时重新执行，图层正常启动。
+     */
+  }, [phase, stationRebuildTick]);
 
   /**
    * ★ 2026-09-22：**路线查看模式** —— 画线 + 站点区分 + 自动装下整条线。
