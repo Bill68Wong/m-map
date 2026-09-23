@@ -70,8 +70,15 @@ interface StationEtaItem {
    *   （巴士说「还有 N 站 · 约 M 分」，轻轨说「下一班 HH:MM · M 分后」）。
    */
   kind: "bus" | "lrt";
-  /** ★ 2026-09-22 轻轨专用：下一班发车时刻 `HH:MM`（当天）；无班次 ⇒ null */
+  /** ★ 2026-09-22 轻轨专用：下一班发车时刻 `HH:MM`（**已含实测偏差修正**）；无班次 ⇒ null */
   nextAt?: string | null;
+  /**
+   * ★ v2.10.1 轻轨专用：**秒级剩余**（至实际发车时刻）。
+   *   前端据此做逐秒倒计时（仅横琴线/石排湾线展示到秒；氹仔线只显示分钟）。
+   */
+  etaSec?: number | null;
+  /** ★ v2.10.1 轻轨专用：该线实测偏差（秒），供透明披露/诊断 */
+  biasSec?: number;
 }
 
 interface StationEtaResponse {
@@ -124,6 +131,35 @@ const LRT_ROUTE_NAME: Record<string, string> = {
   SPVL: "LRT-石排湾线",
   HQL: "LRT-横琴线",
 };
+
+/**
+ * ★ v2.10.1：**线路级实测偏差**（来自 `lrt_route_params.dep_bias_sec`，单位秒）。
+ *
+ * 为什么需要：官方时刻表是**表定**时间，实测与表定有固定偏差——
+ *   · 石排湾线 `-5s`（表定 15:00 发车，**实际 14:59:55**）
+ *   · 横琴线 `+40s`（表定 15:00 发车，**实际 15:00:40**）
+ * ⇒ 报站必须**按修正后的时刻**报，否则用户按表定时间去等会错。
+ *
+ * ⚠️ 读库失败时不抛错 —— 回落为「全 0 偏差」（等于用表定值，行为同旧版）。
+ */
+async function loadLrtBias(pool: ReturnType<typeof getPool>): Promise<Map<string, number>> {
+  try {
+    const rows = (
+      await pool.query(`SELECT route_code, dep_bias_sec FROM lrt_route_params`)
+    ).rows as { route_code: string; dep_bias_sec: number | string }[];
+    return new Map(rows.map((r) => [r.route_code, Number(r.dep_bias_sec) || 0]));
+  } catch {
+    return new Map();
+  }
+}
+
+/** 秒级偏移（自当日 00:00 起）→ `HH:MM`（跨午夜按次日显示为 24+ 会溢出，这里取模 24h） */
+function fmtHm(secOfDay: number): string {
+  const s = ((secOfDay % 86400) + 86400) % 86400;
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
 
 /** 站码 → 显示名（去掉「站」后缀，与全站口径一致） */
 function lrtStationName(raw: string): string {
@@ -188,11 +224,26 @@ async function lrtItems(
   }
 
   const items: StationEtaItem[] = [];
+  // ★ v2.10.1：读线路级实测偏差（石排湾 -5s / 横琴 +40s）—— 报站必须按**修正后**的时刻报
+  const biasOf = await loadLrtBias(pool);
+  /** 当日**秒级**偏移（偏差是秒级，故不能只用分钟） */
+  const nowSec = nowMin * 60 + macau.getUTCSeconds();
+
   for (const [key, r] of byKey) {
     const [routeNo, direction] = key.split("|");
     const route = LRT_ROUTE_NAME[routeNo] ?? routeNo;
+    const biasSec = biasOf.get(route) ?? 0;
     const next = nextDeparture(r.minutes, r.first_min, r.last_min);
-    const etaMin = next === null ? null : Math.max(0, next - nowMin);
+    /**
+     * ★ v2.10.1：**表定发车秒 + 实测偏差 = 实际发车秒**。
+     *   例：石排湾线表定 15:00 发车、偏差 -5s ⇒ 实际 14:59:55 ⇒ `nextAt` 报 `14:59`、
+     *   倒计时以 14:59:55 为 0 点（前端把 `etaSec` 按秒递减即可）。
+     */
+    const nextSec = next === null ? null : next * 60 + biasSec;
+    const etaSec = nextSec === null ? null : Math.max(0, nextSec - nowSec);
+    // 分钟级（向后兼容旧前端）：向上取整，避免「还有 0 分」却还没发车
+    const etaMin = etaSec === null ? null : Math.ceil(etaSec / 60);
+
     items.push({
       route,
       dir: direction,
@@ -201,12 +252,13 @@ async function lrtItems(
       // 轻轨没有「还有几站」概念（时刻表制）⇒ 恒 null，前端据 `kind` 切文案
       stopsAway: null,
       etaMin,
+      /** ★ 新增：秒级剩余（前端读秒用；氹仔线只显示分钟、横琴/石排湾显示到秒） */
+      etaSec,
+      /** ★ 新增：该线实测偏差（秒），供诊断与透明披露 */
+      biasSec,
       ok: true,
       kind: "lrt",
-      nextAt:
-        next === null
-          ? null
-          : `${String(Math.floor(next / 60)).padStart(2, "0")}:${String(next % 60).padStart(2, "0")}`,
+      nextAt: nextSec === null ? null : fmtHm(nextSec),
     });
   }
   return items;

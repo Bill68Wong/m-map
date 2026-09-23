@@ -303,6 +303,9 @@ export default function NavShell({ jsKey, colors = {}, initialFrom = null, initi
             vehicle={rv.selected.vehicle}
             count={rv.selected.count}
             fetchedAt={rv.fetchedAt}
+            /* ★ v2.10.1：车牌前的线路主题色标签（用户口径：显示线路名、不显示运营商） */
+            lineLabel={rv.picked?.label}
+            lineColor={rv.picked?.color}
             onClose={rv.closeVehicle}
           />
         )}

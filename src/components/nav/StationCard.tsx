@@ -58,8 +58,12 @@ interface EtaItem {
   ok: boolean;
   /** ★ 2026-09-22：载具种类（缺省按巴士，兼容旧接口） */
   kind?: "bus" | "lrt";
-  /** ★ 2026-09-22 轻轨专用：下一班发车时刻 `HH:MM` */
+  /** ★ 2026-09-22 轻轨专用：下一班发车时刻 `HH:MM`（**已含实测偏差修正**） */
   nextAt?: string | null;
+  /** ★ v2.10.1 轻轨专用：秒级剩余（服务端算好那一刻的；前端按本地时间递减） */
+  etaSec?: number | null;
+  /** ★ v2.10.1 轻轨专用：该线实测偏差（秒） */
+  biasSec?: number;
 }
 
 interface EtaResponse {
@@ -76,38 +80,40 @@ function mainCodeOf(code: string): string {
 }
 
 /**
+ * 轻轨「还有多久」文案（★ v2.10.1 按用户口径改）。
+ *
+ *   · **氹仔线**（班次密）→「下一班还有 X 分」—— 不显示秒
+ *   · **横琴线 / 石排湾线**（班次疏）→「下一班还有 X 分 XX 秒」—— 逐秒递减
+ *
+ * ⚠️ 剩余时间口径：服务端给 `etaSec`（**已含线路实测偏差修正**，如石排湾线表定 15:00
+ *   实际 14:59:55 ⇒ 该值的 0 点即 14:59:55），前端按**本地已流逝秒数**递减。
+ *   不再显示「下一班 HH:MM」这种绝对时刻（用户口径：只要「还有多久」）。
+ */
+function lrtEtaText(it: EtaItem, driftSec: number): string {
+  if (it.etaMin === null) return "今日已收班";
+  const withSec = /石排湾|横琴/.test(it.route);
+  // 秒级优先（含偏差修正）；老接口无 etaSec 时降级用 etaMin
+  if (it.etaSec == null) {
+    return it.etaMin <= 0 ? "即将开出" : `下一班还有 ${it.etaMin} 分`;
+  }
+  const left = Math.max(0, it.etaSec - driftSec);
+  if (left <= 0) return "即将开出";
+  const m = Math.floor(left / 60);
+  const s = left % 60;
+  if (!withSec) return m <= 0 ? "即将开出" : `下一班还有 ${m} 分`;
+  return `下一班还有 ${m} 分 ${String(s).padStart(2, "0")} 秒`;
+}
+
+/**
  * 报站内容（简体）。
  * · 巴士：ok=false→取不到；无车→暂无在途车；0 站→即将到站；否则「还有 N 站 · 约 M 分」
- * · **轻轨**（★ 2026-09-22）：走**时刻表** ⇒ 显示「下一班 HH:MM · M 分后」；已收班 ⇒「今日已收班」
- *   ★ 其中 **石排湾线 / 横琴线** 额外显示**秒级倒计时**（用户口径：这两条班次疏，读秒才有意义）
+ * · **轻轨**：时刻表制，显示「下一班还有 …」（见 `lrtEtaText`）
  * ★ 站数 N 与「即将到站」由 `<EtaText>` 加粗 + 青花蓝（通勤决策的关键数字，第一眼可见）。
  */
-function etaNode(it: EtaItem, nowMs: number) {
+function etaNode(it: EtaItem, nowMs: number, fetchedAtMs: number) {
   if (it.kind === "lrt") {
-    if (it.etaMin === null) return <>今日已收班</>;
-    const at = it.nextAt ?? "";
-    // ★ 石排湾线 / 横琴线：秒级倒计时（按 nextAt 那个**整分**算剩余秒数）
-    const withSeconds = /石排湾|横琴/.test(it.route);
-    if (withSeconds && it.nextAt && /^\d{1,2}:\d{2}$/.test(it.nextAt)) {
-      const macau = new Date(nowMs + 8 * 3_600_000);
-      const [hh, mm] = it.nextAt.split(":").map(Number);
-      const target = Date.UTC(
-        macau.getUTCFullYear(),
-        macau.getUTCMonth(),
-        macau.getUTCDate(),
-        hh,
-        mm,
-        0,
-      ) - 8 * 3_600_000;
-      const left = Math.max(0, Math.round((target - nowMs) / 1000));
-      const m = Math.floor(left / 60);
-      const s = left % 60;
-      if (left <= 0) return <EtaText text={`${at} 即将开出`} />;
-      return (
-        <EtaText text={`下一班 ${at} · ${m} 分 ${String(s).padStart(2, "0")} 秒后`} />
-      );
-    }
-    return <EtaText text={it.etaMin === 0 ? `${at} 即将开出` : `下一班 ${at} · ${it.etaMin} 分后`} />;
+    const driftSec = fetchedAtMs ? Math.max(0, Math.floor((nowMs - fetchedAtMs) / 1000)) : 0;
+    return <EtaText text={lrtEtaText(it, driftSec)} />;
   }
   if (!it.ok) return <>这条线路暂时取不到报站</>;
   if (it.stopsAway === null) return <>暂无在途车</>;
@@ -135,6 +141,8 @@ export default function StationCard({
   const [phase, setPhase] = useState<"loading" | "ready" | "failed">("loading");
   const [items, setItems] = useState<EtaItem[]>([]);
   const [showAllGroups, setShowAllGroups] = useState(false);
+  /** ★ v2.10.1：响应时刻（用于把服务端的 `etaSec` 换算成「本地此刻的剩余秒」） */
+  const [fetchedAtMs, setFetchedAtMs] = useState(0);
   /**
    * ★ 2026-09-22：秒级倒计时的时钟。
    *   **只在列表里出现「石排湾线 / 横琴线」时才起定时器**（用户口径：只给这两条读秒），
@@ -158,6 +166,7 @@ export default function StationCard({
       .then((j) => {
         if (!alive) return;
         setItems(Array.isArray(j.items) ? j.items : []);
+        setFetchedAtMs(Date.parse(j.fetchedAt) || Date.now());
         setPhase("ready");
       })
       .catch(() => {
@@ -230,7 +239,7 @@ export default function StationCard({
               <div className="nav-station-card__row" key={`${it.route}-${it.dir}`}>
                 <RouteStack codes={[it.route]} colorOf={(c) => colors[c] ?? null} size="sm" />
                 <span className="nav-station-card__dir t-label t-muted">{it.dirLabel}</span>
-                <span className="nav-station-card__eta t-label">{etaNode(it, nowMs)}</span>
+                <span className="nav-station-card__eta t-label">{etaNode(it, nowMs, fetchedAtMs)}</span>
               </div>
             ));
             // ★ 单分组（或无 platform）→ 不显示分组容器与子码行（向后兼容）

@@ -15,7 +15,7 @@
  *   只补行与状态徽标样式（见 globals.css `.nav-vehicle-card__*`）。
  */
 import Icon from "@/components/ui/Icon";
-import { VEHICLE_STATE_LABEL, companyLabel, normalizeCompany, type VehicleLite } from "./VehicleMarker";
+import { VEHICLE_STATE_LABEL, type VehicleLite } from "./VehicleMarker";
 
 export interface VehicleCardProps {
   vehicle: VehicleLite;
@@ -23,6 +23,12 @@ export interface VehicleCardProps {
   count?: number;
   /** 数据取得时间（ISO 字符串，来自响应 `fetchedAt`） */
   fetchedAt?: string | null;
+  /**
+   * ★ v2.10.1（用户口径）：车牌前的**线路主题色标签**用。
+   *   `lineLabel` = 线路名（如「26」/「氹仔线」）；`lineColor` = 该线主题色。
+   */
+  lineLabel?: string;
+  lineColor?: string;
   onClose: () => void;
 }
 
@@ -36,10 +42,16 @@ function macauHm(iso?: string | null): string {
   return `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
 }
 
-export default function VehicleCard({ vehicle, count = 1, fetchedAt = null, onClose }: VehicleCardProps) {
+export default function VehicleCard({
+  vehicle,
+  count = 1,
+  fetchedAt = null,
+  lineLabel,
+  lineColor,
+  onClose,
+}: VehicleCardProps) {
   const state = vehicle.status;
   const stateLabel = VEHICLE_STATE_LABEL[state] ?? "状态未知";
-  const company = companyLabel(normalizeCompany(vehicle.company));
   const speed = typeof vehicle.speed === "number" ? `${vehicle.speed} km/h` : "—";
   const interval = vehicle.interval;
   const at = vehicle.atStation;
@@ -47,9 +59,18 @@ export default function VehicleCard({ vehicle, count = 1, fetchedAt = null, onCl
   return (
     <section className="nav-station-card nav-vehicle-card" role="dialog" aria-label={`车辆 ${vehicle.plate}`}>
       <div className="nav-station-card__head">
-        <span className="nav-station-card__name">
-          {vehicle.plate}
-          {vehicle.isLast ? " · 末班" : ""}
+        <span className="nav-station-card__name nav-vehicle-card__title">
+          {/* ★ v2.10.1：车牌**前**加线路名主题色标签（用户口径）；运营商不再显示 */}
+          {lineLabel && (
+            <span
+              className="nav-vehicle-card__line"
+              style={{ background: lineColor ?? "var(--primary)" }}
+            >
+              {lineLabel}
+            </span>
+          )}
+          <span className="nav-vehicle-card__plate">{vehicle.plate}</span>
+          {vehicle.isLast ? <span className="nav-vehicle-card__last">末班</span> : null}
         </span>
         <button
           type="button"
@@ -71,15 +92,7 @@ export default function VehicleCard({ vehicle, count = 1, fetchedAt = null, onCl
           </span>
         </div>
 
-        {/* 运营商 */}
-        <div className="nav-vehicle-card__row">
-          <span className="nav-vehicle-card__k t-label">
-            <Icon name="bus" size={16} /> 运营商
-          </span>
-          <span className="nav-vehicle-card__v">{company}</span>
-        </div>
-
-        {/* 车速 */}
+        {/* 车速（运营商行已按用户口径移除） */}
         <div className="nav-vehicle-card__row">
           <span className="nav-vehicle-card__k t-label">
             <Icon name="gauge" size={16} /> 车速
@@ -87,18 +100,21 @@ export default function VehicleCard({ vehicle, count = 1, fetchedAt = null, onCl
           <span className="nav-vehicle-card__v">{speed}</span>
         </div>
 
-        {/* 行驶区间：**只表方向**（实心点 → 空心点），不做进度填充 */}
-        <div className="nav-vehicle-card__row">
+        {/*
+          ★ v2.10.1（用户口径）：**区间改为两行**（站号+站名 ‖ 站号+站名）
+          —— 原先横向排一行，长站名会把后半段挤成省略号（如「T354 氹仔…」）✗
+          两行后每段独占一行、可完整显示；中间用竖线分隔，方向感仍保留。
+          ⚠️ 仍**不做「已行进进度」填充**（接口只给 from→to，画进度是伪造精度）。
+        */}
+        <div className="nav-vehicle-card__row nav-vehicle-card__row--stack">
           <span className="nav-vehicle-card__k t-label">
             <Icon name="route-2" size={16} /> 区间
           </span>
-          <span className="nav-vehicle-card__interval">
+          <span className="nav-vehicle-card__interval2">
             {interval ? (
               <>
-                <span className="nav-vehicle-card__dot nav-vehicle-card__dot--from" aria-hidden="true" />
                 <span className="nav-vehicle-card__seg">{`${interval.from.code} ${interval.from.name}`}</span>
-                <span className="nav-vehicle-card__dash" aria-hidden="true" />
-                <span className="nav-vehicle-card__dot nav-vehicle-card__dot--to" aria-hidden="true" />
+                <span className="nav-vehicle-card__pipe" aria-hidden="true" />
                 <span className="nav-vehicle-card__seg">{`${interval.to.code} ${interval.to.name}`}</span>
               </>
             ) : at ? (
@@ -109,9 +125,9 @@ export default function VehicleCard({ vehicle, count = 1, fetchedAt = null, onCl
           </span>
         </div>
 
-        {/* 数据时间 */}
+        {/* 数据时间（★ 标签强制不换行 —— 原先窄屏下「数据时间」四字会拆行） */}
         <div className="nav-vehicle-card__row">
-          <span className="nav-vehicle-card__k t-label">
+          <span className="nav-vehicle-card__k nav-vehicle-card__k--nowrap t-label">
             <Icon name="timer" size={16} /> 数据时间
           </span>
           <span className="nav-vehicle-card__v">{macauHm(fetchedAt)}</span>

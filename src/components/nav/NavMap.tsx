@@ -739,8 +739,9 @@ export default function NavMap({
           const marker = new AMap.Marker({
             position: [s.lng, s.lat],
             content: `<div class="${cls}" data-code="${esc(s.code)}"${styleAttr} title="${esc(s.name)}"></div>`,
-            // 站点盒 13×13 ⇒ 视觉居中偏移 -6.5（巴士/轻轨同款）
-            offset: new AMap.Pixel(-6.5, -6.5),
+            // ★ v2.10.1：站点盒尺寸**分类型**（巴士 11px / 轻轨 13px，见 globals.css）
+            //   ⇒ 居中偏移各取一半（-5.5 / -6.5），否则小圆点会偏离真实坐标约 1px
+            offset: new AMap.Pixel(isLrt ? -6.5 : -5.5, isLrt ? -6.5 : -5.5),
             zIndex: isLrt ? 95 : 90,
           });
           marker.on("click", () => onStationClickRef.current?.(s));
@@ -780,7 +781,18 @@ export default function NavMap({
     // ★ 2026-09-22：带 `include=lrt` —— 导航页地图需要**巴士 + 轻轨**两种站点
     //   （首页那个图层仍是不带参数的「只巴士」，口径各自独立、互不影响）。
     if (!stationsRef.current) {
-      fetch("/api/stations?include=lrt", { cache: "force-cache" })
+      /**
+       * ★ v2.10.1：URL 加**版本参数** `v=2` —— 强制让此前的缓存失效。
+       *
+       * 为什么必须加：v2.10.0 起 `/api/stations` 才开始下发线路色（`color/color2`），
+       * 但旧版响应已被**浏览器 HTTP 缓存 + CDN** 存下（`cache-control: public`），
+       * 而本请求用的是 `cache: "force-cache"`（最激进：宁可用过期副本也不发请求）
+       * ⇒ 实测出现「轻轨站显示成巴士同色」——因为 `--c1` 缺失，CSS 回落到 `var(--primary)` ✗
+       *
+       * 加 `v=2` 后 URL 变化 ⇒ 旧缓存自然失效；之后 `force-cache` 仍是快速路径。
+       * ⚠️ 以后 `/api/stations` 的**响应结构再变**时，把这个版本号 +1 即可。
+       */
+      fetch("/api/stations?include=lrt&v=2", { cache: "force-cache" })
         .then((r) => r.json())
         .then((j: { stations?: StationPointLite[] }) => {
           if (cancelled) return;

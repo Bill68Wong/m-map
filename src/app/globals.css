@@ -2096,8 +2096,14 @@ button[aria-disabled="true"] {
    ⚠️ 颜色是**数据**（`routes.color`），禁止把线路色硬编码进本文件。 */
 .nav-map__station {
   box-sizing: border-box;
-  width: 13px;
-  height: 13px;
+  /**
+   * ★ v2.10.1（用户口径）：巴士站**改小到 11px**，让轻轨站（13px 方点）比它大。
+   *   背景：此前两者**都是 13px**（源码重复了同值），用户实测反馈
+   *   「轻轨方点缩小到和巴士一样大 —— 放大回原来的大小」⇒ 按设计师规格
+   *   （Spec §8：巴士 Ø10 实心圆 / 轻轨 13×13 方点）把巴士收小。
+   */
+  width: 11px;
+  height: 11px;
   border-radius: 50%;
   background: var(--primary);
   border: 1.5px solid #fff;
@@ -4896,11 +4902,94 @@ button[aria-disabled="true"] {
   border-radius: 4px;
 }
 .nav-map__station--lrt.nav-map__station--dim {
-  width: 10px;
-  height: 10px;
+  width: 11px;
+  height: 11px;
   border-radius: 3px;
-  /* 转灰：路线模式下「其他轻轨站」不再保留线路色，让本线更突出 */
-  background: var(--muted);
+  /**
+   * ★ v2.10.1 修正：**不再把轻轨站转灰**。
+   *   原实现 `background: var(--muted)` 会把轻轨的**线路主题色**吃掉 ⇒
+   *   路线查看模式下满屏轻轨站全变灰点、看起来「和巴士一样」（用户实测反馈）✗
+   *   现改为：**保留线路色与切色**（不设 background，继承 `--lrt` / `lrt-cut-*`），
+   *   仅靠**缩小 + 降透明度**表达「非本线」——形状与色彩两个识别通道都不丢。
+   */
+  opacity: 0.42;
+}
+
+/* ══ v2.10.1 · 车辆卡调整（用户口径）══════════════════════════════════
+   ① 车牌**前**加线路名主题色标签；② 移除运营商行；
+   ③「数据时间」标签不换行；④ 区间改**两行**（原先横排会把长站名挤成省略号） */
+
+.nav-vehicle-card__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* 线路名主题色标签（颜色是数据 ⇒ 行内 background 注入） */
+.nav-vehicle-card__line {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 6px;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.16);
+}
+
+.nav-vehicle-card__plate {
+  font-family: var(--font-mono);
+  font-size: 15px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nav-vehicle-card__last {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: var(--warn-soft, #f7ead6);
+  color: var(--warn, #a85e00);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+/* 区间两行堆叠：每段独占一行 ⇒ 长站名可完整显示，不再省略 */
+.nav-vehicle-card__row--stack {
+  align-items: flex-start;
+}
+
+.nav-vehicle-card__interval2 {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+/* ★ 允许换行（覆盖旧横向版本的 nowrap + ellipsis） */
+.nav-vehicle-card__interval2 .nav-vehicle-card__seg {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  line-height: 1.35;
+}
+
+/* 两行之间的分隔（短竖线） */
+.nav-vehicle-card__pipe {
+  width: 14px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--border, rgba(0, 0, 0, 0.16));
+}
+
+/* 「数据时间」四字**不换行**（窄屏下原先会被拆成两行） */
+.nav-vehicle-card__k--nowrap {
+  white-space: nowrap;
+  flex: none;
 }
 
 /* ══════════════════════════════════════════════════════════════════════
