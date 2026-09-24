@@ -3,62 +3,68 @@
 /**
  * 首页导航壳（src/components/nav/NavShell.tsx）
  *
- * ── 2026-09-22 搜索界面重构（模仿高德/谷歌地图的两态交互）─────────────────
+ * ── 2026-09-23 交互改版（Spec v2.12.0「谷歌地图式弹窗」）──────────────────
+ *   状态机（单一 `RouteSheet` 宿主）：
  *
- *  **旧版**：可拖拽底部抽屉 + 4 步引导（①选目的地 ②地图标定 ③选出发地 ④出发），
- *            每步高度不同、带惯性吸附。
- *  **新版**：**两态** ——
+ *   ```
+ *   map（全屏地图）
+ *      │ 点搜索框
+ *      ▼
+ *   search（SearchSheet）
+ *      │ 选点
+ *      ▼
+ *   panel（RoutePanel，半屏可出发）
+ *      │ 点「出发」
+ *      ▼
+ *   sheet{ open, pane:'recommend', detent:'full' }   // 推荐默认 full
+ *      │ 点卡片（当帧切 pane + full→half 动画 + 骨架）
+ *      ▼
+ *   sheet{ open, pane:'detail', detent:'half' }      // 上半屏 = 路线总览
+ *      │ 上拖 → full ／ 下拖 → peek
+ *      └ 关闭/返回/peek 下拉越过 → pane:'recommend', detent:'full'
+ *                                   │ peek 下拉越过 / X
+ *                                   ▼
+ *                              panel（回可出发态；无 OD → map）
+ *   ```
  *
- *    ┌─ S0 全屏地图 ────────────────────────────────┐
- *    │  顶部只有搜索框「去哪儿？」                    │
- *    └───────────────────────────────────────────────┘
- *              ↓ 点搜索框
- *    ┌─ S1 全屏搜索（`SearchSheet`）───────────────┐
- *    │  输入条 + 结果列表（打字=站点 / 搜索=含高德）  │
- *    └───────────────────────────────────────────────┘
- *              ↓ 选中地点
- *    ┌─ S2 半屏（`RoutePanel`）────────────────────┐
- *    │  上半屏：地图，**该地点居上半屏正中**         │
- *    │  下半屏：出发地（默认我的位置）/ 目的地 + 出发 │
- *    └───────────────────────────────────────────────┘
- *              ↓ 点「出发地」行
- *    ┌─ S3 全屏搜索（两行输入条：出发地 / 目的地）──┐
- *    └───────────────────────────────────────────────┘
- *              ↓ 选中出发地
- *    ┌─ S4 半屏 ───────────────────────────────────┐
- *    │  上半屏：地图，**两点都在视野内**（自动适配） │
- *    │  下半屏：两地 + 出发 → `/nav`                │
- *    └───────────────────────────────────────────────┘
- *
- * ── 铁律（沿用）───────────────────────────────────────────────────────
+ * ── 铁律（沿用 + 本轮）────────────────────────────────────────────────
  *   · ★ **不记忆**出发点（产品 R5）；收藏是**用户显式意图**，故允许；
- *   · 「出发」→ 组 `/nav` URL（★ 坐标 **GCJ-02**）；
- *   · 地图失败**不阻塞**：搜索与出发照常；
- *   · ★ 弹窗是**覆盖层**（盖住地图），不是新页面 —— 避免整页加载的等待感。
+ *   · 「出发」→ 面板内规划（★ 坐标 **GCJ-02**），**不整页跳转**；
+ *   · 地图失败**不阻塞**：搜索/列表/详情照常；
+ *   · ★ **面板与卡片一律挂在 `.nav-map-wrap` 之外** —— wrap 是 `position:fixed; z-index:0`
+ *     的**层叠上下文**，挂进去会被底部 chrome 压住（Spec AC-13 的历史教训）；
+ *   · ★ **非模态**：无 scrim，露出的地图带可拖/可点；点地图空白**不关闭**面板；
+ *   · ★ 取景**全部自算**（`fit-box`），**禁用** `setBounds`/`setFitView`（会撑到珠海）。
  */
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import Icon from "@/components/ui/Icon";
 import NavMap from "./NavMap";
 import RefreshButton from "./RefreshButton";
-import RouteDetailSheet from "./RouteDetailSheet";
 import RouteLinesSheet from "./RouteLinesSheet";
 import RoutePanel from "./RoutePanel";
-import RouteResultSheet from "./RouteResultSheet";
+import RouteSheet from "./RouteSheet";
 import SearchSheet, { type QuickPair } from "./SearchSheet";
 import StationCard, { type StationCardStation } from "./StationCard";
 import VehicleCard from "./VehicleCard";
 import { queryOf } from "./StepSheet";
 import { useRouteVehicles } from "./useRouteVehicles";
+import { useRouteOverview } from "./useRouteOverview";
+import { DETENTS, detentTopsPx, readSafeTopPx, type Detent } from "./sheet-detents";
+import { unionBox } from "@/lib/nav/route-overview";
 import { useCombos } from "@/lib/favorites/useCombos";
 import { endpointOf } from "@/lib/favorites/types";
 import type { RecommendCard } from "@/lib/recommend/types";
 import type { NavPoint } from "@/lib/nav/types";
 
 const MY_LOCATION = "我的位置";
+/** 底层舞台：全屏地图 / 全屏搜索 / 半屏可出发 */
+type Stage = "map" | "search" | "panel";
 
 export interface NavShellProps {
   jsKey: string;
+  /** ★ AC-16：自定义地图样式 ID（隐藏底图自带公交站点）；缺省 = 用高德默认样式 */
+  mapStyleId?: string;
   colors?: Record<string, string>;
   /** 由「地点对收藏」带入的起点（收藏页回放用） */
   initialFrom?: NavPoint | null;
@@ -66,96 +72,164 @@ export interface NavShellProps {
   initialTo?: NavPoint | null;
 }
 
-/** 弹层状态：关闭（全屏地图）/ 全屏（搜索）/ 半屏（起终点面板） */
-type SheetState = "closed" | "full" | "half";
-
-export default function NavShell({ jsKey, colors = {}, initialFrom = null, initialTo = null }: NavShellProps) {
+export default function NavShell({
+  jsKey,
+  mapStyleId = "",
+  colors = {},
+  initialFrom = null,
+  initialTo = null,
+}: NavShellProps) {
   /** 定位点（GCJ-02）；null = 尚未定位/定位失败 */
   const [userPos, setUserPos] = useState<{ lng: number; lat: number } | null>(null);
   const [from, setFrom] = useState<NavPoint | null>(initialFrom);
   const [to, setTo] = useState<NavPoint | null>(initialTo);
   const [station, setStation] = useState<StationCardStation | null>(null);
-  /**
-   * ★ 2026-09-23：**全屏推荐弹窗 / 详情弹窗**（替代整页跳转 `/nav`、`/nav/detail`）。
-   *   · `resultOpen`：推荐弹窗开合（数据在弹窗内保留 —— 关闭再开秒显上次结果）；
-   *   · `detail`：当前查看的卡片（非空 ⇒ 详情弹窗叠在推荐层之上）。
-   */
-  const [resultOpen, setResultOpen] = useState(false);
-  const [detail, setDetail] = useState<{ card: RecommendCard; degraded: boolean } | null>(null);
+
+  /** 底层舞台（带 initialTo 时直接进「半屏可出发」= 与旧版一致） */
+  const [stage, setStage] = useState<Stage>(initialTo ? "panel" : "map");
+  /** 全屏搜索态正在编辑哪个端点 */
+  const [editing, setEditing] = useState<"dest" | "from">("dest");
   /** 重新定位触发计数（右上定位按钮） */
   const [locateTick, setLocateTick] = useState(0);
-
-  /** ★ 弹层状态（带 initialTo 时直接进「半屏」= 可出发态，与旧版一致） */
-  const [sheet, setSheet] = useState<SheetState>(initialTo ? "half" : "closed");
-  /** 全屏态正在编辑哪个端点 */
-  const [editing, setEditing] = useState<"dest" | "from">("dest");
   /**
    * 取景触发计数：状态变化时 +1，使 `NavMap` 重新取景。
-   * ⚠️ 用计数而不是依赖对象本身 —— 同一模式连续触发（如两次都选「目的地」）也要生效。
+   * ⚠️ 用计数而不是依赖对象本身 —— 同一模式连续触发也要生效。
    */
   const [viewTick, setViewTick] = useState(0);
 
   /**
-   * ★ 2026-09-22 新增：**路线查看模式**。
-   *   · `lineSheet`：是否展开「公共交通路线」全屏选择弹窗；
-   *   · `pickedLine`：当前正在查看的线路（非空 ⇒ 地图画该线 + 底部显示主题色标签）。
-   *   用户口径：选线路后弹窗关闭回地图，底部中间出现标签 + 叉，点叉退出。
+   * 路线查看模式（选线路看实时车辆）；`picked` 非空 ⇒ 地图画该线 + 底部主题色标签。
    */
   const [lineSheet, setLineSheet] = useState(false);
-  /**
-   * ★ v2.10.0：**路线查看 + 实时车辆**逻辑，统一收在 `useRouteVehicles` 里
-   *   （选线路 / 方向 / 自动刷新 / 10 秒冷却 / 换向 / 手动刷新 / 选车出卡）。
-   */
   const rv = useRouteVehicles();
-
   const favs = useCombos();
 
+  /* ── ★ 2026-09-23：单一 RouteSheet 宿主状态 ── */
+  const [rsOpen, setRsOpen] = useState(false);
+  const [pane, setPane] = useState<"recommend" | "detail">("recommend");
+  const [snap, setSnap] = useState<Detent>("full");
+  const [detailCard, setDetailCard] = useState<{ card: RecommendCard; degraded: boolean } | null>(null);
+  /** 面板状态镜像（供稳定回调读取最新值，避免闭包过期） */
+  const rsOpenRef = useRef(rsOpen);
+  rsOpenRef.current = rsOpen;
+
+  /** 视口尺寸 + 安全区（档位 px 现算） */
+  const [winH, setWinH] = useState(0);
+  const [safeTop] = useState(() => readSafeTopPx());
+  useEffect(() => {
+    const onResize = () => setWinH(window.innerHeight);
+    onResize();
+    window.addEventListener("resize", onResize);
+    window.addEventListener("orientationchange", onResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      window.removeEventListener("orientationchange", onResize);
+    };
+  }, []);
+  const topsPx = useMemo(() => detentTopsPx(winH || 844, safeTop), [winH, safeTop]);
+
+  /** 面板打开期间隐藏搜索框（200ms 淡出，`prefers-reduced-motion` 瞬切） */
+  useEffect(() => {
+    if (rsOpen) document.body.setAttribute("data-sheet", "open");
+    else document.body.removeAttribute("data-sheet");
+    return () => document.body.removeAttribute("data-sheet");
+  }, [rsOpen]);
+
   const onLocate = useCallback((pos: { lng: number; lat: number } | null) => setUserPos(pos), []);
-  const onStationClick = useCallback((s: StationCardStation) => setStation(s), []);
-  const onMapClick = useCallback(() => setStation(null), []);
 
   const myLocation: NavPoint | null = userPos
     ? { kind: "gps", label: MY_LOCATION, lng: userPos.lng, lat: userPos.lat }
     : null;
   const fromPoint = from ?? myLocation;
   const canGo = !!fromPoint && !!to;
-  /** ★ 2026-09-23：推荐弹窗与详情弹窗共用的查询串（与 `/nav` URL 同口径） */
+  /** 推荐/详情共用查询串（与 `/nav` URL 同口径） */
   const resultQuery = fromPoint && to ? queryOf(fromPoint, to) : "";
+  const odLabel = fromPoint && to ? `${fromPoint.label} → ${to.label}` : "";
 
-  /**
-   * 视口指令（交给 `NavMap`）：
-   *   · 半屏 + 只有目的地 → `dest-center-top`（该点居**上半屏正中**）
-   *   · 半屏 + 起终点都有 → `fit-two`（两点都在视野内）
-   *   · 全屏搜索 / 全屏地图 → `none`（弹窗盖住地图，取景无意义）
-   */
-  const viewMode: "dest-center-top" | "fit-two" | "none" =
-    sheet === "half" ? (from ? "fit-two" : to ? "dest-center-top" : "none") : "none";
+  /** 取景额外纳入的点（起点/终点）—— useMemo 稳定引用 */
+  const ovExtra = useMemo(() => {
+    const pts: { lng: number; lat: number }[] = [];
+    if (fromPoint) pts.push({ lng: fromPoint.lng, lat: fromPoint.lat });
+    if (to) pts.push({ lng: to.lng, lat: to.lat });
+    return pts;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fromPoint?.lng, fromPoint?.lat, to?.lng, to?.lat]);
 
-  /** 打开全屏搜索 */
+  /** ★ 路线总览数据流（仅 detail pane 打开时启用） */
+  const ov = useRouteOverview(
+    pane === "detail" ? detailCard?.card ?? null : null,
+    rsOpen && pane === "detail",
+    ovExtra,
+  );
+
+  /* ── 舞台操作 ── */
   function openSearch(which: "dest" | "from") {
     setEditing(which);
-    setSheet("full");
+    setStage("search");
   }
-
-  /** 全屏返回：**回到半屏**（若有目的地）否则回全屏地图 */
   function backFromSearch() {
-    setSheet(to ? "half" : "closed");
+    setStage(to ? "panel" : "map");
     setViewTick((t) => t + 1);
   }
-
-  /** 选中某个端点 */
   function pickPoint(p: NavPoint, which: "dest" | "from") {
     if (which === "dest") setTo(p);
     else setFrom(p);
-    setSheet("half");
+    setStage("panel");
     setViewTick((t) => t + 1);
   }
 
-  /** ★ 2026-09-23：出发 → 打开全屏推荐弹窗（不再整页跳 `/nav`） */
+  /** ★ 出发 → 打开推荐面板（full 档；不整页跳转） */
   function go() {
     if (!fromPoint || !to) return;
-    setResultOpen(true);
+    setDetailCard(null);
+    setPane("recommend");
+    setSnap("full");
+    setRsOpen(true);
+    setViewTick((t) => t + 1);
   }
+
+  /** ★ 点卡片：**当帧**切 detail pane + 降档动画（不等待接口，先骨架） */
+  function openDetail(card: RecommendCard, degraded: boolean) {
+    setDetailCard({ card, degraded });
+    setPane("detail");
+    setSnap("half");
+    setViewTick((t) => t + 1);
+  }
+
+  /** ★ contextual 关闭：推荐→关面板（回可出发态）；详情→回推荐列表 */
+  function contextClose() {
+    if (pane === "detail") {
+      setPane("recommend");
+      setSnap("full");
+      setViewTick((t) => t + 1);
+    } else {
+      setRsOpen(false);
+      setStage(to ? "panel" : "map");
+      setViewTick((t) => t + 1);
+    }
+  }
+
+  /** 点地图上的站/车 → 打开卡片；**打开卡片即收起面板**（同 Google Maps，z90 > z70） */
+  const onStationClick = useCallback((s: StationCardStation) => {
+    setStation(s);
+    if (rsOpenRef.current) {
+      setRsOpen(false);
+      setStage("map");
+    }
+  }, []);
+  const onMapClick = useCallback(() => setStation(null), []);
+
+  /** 车辆点击：打开车辆卡 + 收起面板 */
+  const onVehicleClick = useCallback(
+    (v: Parameters<typeof rv.selectVehicle>[0], count: number) => {
+      rv.selectVehicle(v, count);
+      if (rsOpenRef.current) {
+        setRsOpen(false);
+        setStage("map");
+      }
+    },
+    [rv],
+  );
 
   /** 常用 = **收藏组合**（排除已停用），按最近使用取前 3 */
   const quickPairs: QuickPair[] = favs.mounted
@@ -166,33 +240,64 @@ export default function NavShell({ jsKey, colors = {}, initialFrom = null, initi
         .map((c) => ({ id: c.id, from: c.from, to: c.to }))
     : [];
 
+  /**
+   * 视口指令（交给 `NavMap`）：
+   *   · 面板打开 + detail → `fit-box`（路线总览外包框 → 顶部槽）；
+   *   · 面板打开 + recommend → `fit-box`（OD 两点 → 顶部槽）；
+   *   · 半屏可出发 → `fit-two` / `dest-center-top`；
+   *   · 其余 → `none`。
+   * ⚠️ 拖动面板期间 NavShell **不重渲染**（拖拽 state 在 RouteSheet 内）⇒ 不触发取景（AC-03）。
+   */
+  const view = useMemo(() => {
+    if (rsOpen) {
+      const slot = topsPx[Math.min(topsPx.length - 1, Math.max(0, DETENTS.indexOf(snap)))];
+      const box =
+        pane === "detail"
+          ? ov.box ?? (ovExtra.length >= 2 ? unionBox([], ovExtra) : null)
+          : ovExtra.length >= 2
+            ? unionBox([], ovExtra)
+            : null;
+      return box
+        ? ({ mode: "fit-box", tick: viewTick, box, slotTopPx: slot } as const)
+        : ({ mode: "none", tick: viewTick } as const);
+    }
+    if (stage === "panel") {
+      return { mode: from ? "fit-two" : to ? "dest-center-top" : "none", tick: viewTick } as const;
+    }
+    return { mode: "none", tick: viewTick } as const;
+  }, [rsOpen, pane, snap, topsPx, ov.box, ovExtra, stage, from, to, viewTick]);
+
+  /** detail pane 打开时，总览取代「路线查看线」与其车辆 */
+  const detailActive = rsOpen && pane === "detail";
+
   return (
     <section className="nav-shell nav-shell--full">
       <div className="nav-map-wrap">
         <NavMap
           jsKey={jsKey}
+          mapStyleId={mapStyleId}
           className="nav-map--full"
           dest={to ? { lng: to.lng, lat: to.lat, label: to.label } : null}
           origin={from ? { lng: from.lng, lat: from.lat, label: from.label } : null}
-          view={{ mode: viewMode, tick: viewTick }}
+          view={view}
           locateTick={locateTick}
           onLocate={onLocate}
           onStationClick={onStationClick}
           onMapClick={onMapClick}
-          /* ★ v2.10.0：路线查看模式 + 实时车辆（只画当前方向 + 本线站点高亮 + 自动装下本方向） */
-          routeLine={rv.picked}
+          /* ★ v2.10.0：路线查看模式 + 实时车辆；★ 2026-09-23：detail pane 打开时让位给总览 */
+          routeLine={detailActive ? null : rv.picked}
           onRouteDirs={rv.reportDirs}
-          vehicles={rv.vehicles}
-          onVehicleClick={rv.selectVehicle}
+          vehicles={detailActive ? ov.vehicles : rv.vehicles}
+          onVehicleClick={onVehicleClick}
+          /* ★ 2026-09-23：路线总览（灰底线 + 彩段） */
+          overview={detailActive ? ov.legs : null}
         />
 
-        {/* 品牌栏（★ v2.10.0 重构为三栏网格）：
-            左=空（产品口径「左下角不放任何东西」）· 中=换向键+线路标签 · 右=竖排按钮组 */}
+        {/* 品牌栏（三栏网格）：左=空 · 中=换向键+线路标签 · 右=竖排按钮组 */}
         <div className="nav-brandbar">
           <span className="nav-brandbar__left" aria-hidden="true" />
 
           <div className="nav-brandbar__mid">
-            {/* 换向键：仅**双向**线路显示（单向 = 无 shapes 第二方向） */}
             {rv.picked && rv.canReverse && (
               <button
                 type="button"
@@ -204,7 +309,6 @@ export default function NavShell({ jsKey, colors = {}, initialFrom = null, initi
                 <Icon name="exchange" size={20} />
               </button>
             )}
-            {/* 路线查看模式的退出标签（产品口径：只显示线路名 + 叉） */}
             {rv.picked && (
               <span className="nav-linechip" style={{ background: rv.picked.color }}>
                 <span className="nav-linechip__text">{rv.picked.label}</span>
@@ -221,9 +325,8 @@ export default function NavShell({ jsKey, colors = {}, initialFrom = null, initi
             )}
           </div>
 
-          {/* 右栏：竖排按钮组（自上而下 = 刷新 → 公共交通路线 → 定位 → M Map） */}
+          {/* 右栏：竖排按钮组（刷新 → 公共交通路线 → 定位 → M Map） */}
           <div className="nav-brandbar__acts">
-            {/* 刷新键：仅**巴士**线路有意义（轻轨无实时车辆数据） */}
             {rv.picked?.kind === "bus" && (
               <RefreshButton cooling={rv.cooldownSec > 0} seconds={rv.cooldownSec} onRefresh={rv.refresh} />
             )}
@@ -245,15 +348,14 @@ export default function NavShell({ jsKey, colors = {}, initialFrom = null, initi
             >
               <Icon name="locate" size={20} />
             </button>
-            {/* M Map 字标（★ v2.10.0 由左侧移入按钮组，改为**可点**的按钮外观 ⇒ 进 /help） */}
             <Link href="/help" className="nav-brand" aria-label="M Map · 帮助与合规说明">
               M Map
             </Link>
           </div>
         </div>
 
-        {/* 顶置搜索条 —— **只在「非全屏搜索」时出现**（全屏时由 SearchSheet 自己的输入条接管） */}
-        {sheet !== "full" && (
+        {/* 顶置搜索条 —— 只在「非全屏搜索」时出现；面板打开期间 200ms 淡出（body[data-sheet=open]） */}
+        {stage !== "search" && (
           <button
             type="button"
             className="nav-searchbar"
@@ -264,7 +366,7 @@ export default function NavShell({ jsKey, colors = {}, initialFrom = null, initi
             <span className={`nav-searchbar__text${to ? "" : " nav-searchbar__text--ph"}`}>
               {to ? to.label : "去哪儿？"}
             </span>
-            {sheet === "half" && to && (
+            {stage === "panel" && to && (
               <span className="nav-searchbar__tag t-label">
                 <Icon name="destination" size={16} />
                 已选
@@ -273,58 +375,58 @@ export default function NavShell({ jsKey, colors = {}, initialFrom = null, initi
           </button>
         )}
 
-        {/* 带入收藏提示条（半屏可出发态才显示，避免与全屏搜索抢注意力） */}
-        {initialTo && sheet === "half" && !from && (
+        {/* 带入收藏提示条（可出发态才显示） */}
+        {initialTo && stage === "panel" && !from && (
           <div className="nav-banner t-label" role="status">
             已带入收藏：{initialFrom?.label ?? MY_LOCATION} → {initialTo.label}
           </div>
         )}
 
-        {/* ★ v2.10.0：车辆位置获取失败提示（不阻塞地图与线路走向） */}
+        {/* 车辆位置获取失败提示（不阻塞地图与线路走向） */}
         {rv.error && (
           <div className="nav-banner t-label" role="status">
             车辆位置：{rv.error}
           </div>
         )}
-
-        {station && (
-          <StationCard
-            station={station}
-            colors={colors}
-            onClose={() => setStation(null)}
-            onSetFrom={() => {
-              setFrom(stationToNavPoint(station));
-              setStation(null);
-              setSheet("half");
-              setViewTick((t) => t + 1);
-            }}
-            onSetTo={() => {
-              setTo(stationToNavPoint(station));
-              setStation(null);
-              setSheet("half");
-              setViewTick((t) => t + 1);
-            }}
-          />
-        )}
-
-        {/* ★ v2.10.0：车辆信息卡（复用站点卡的落位/层级） */}
-        {rv.selected && (
-          <VehicleCard
-            vehicle={rv.selected.vehicle}
-            count={rv.selected.count}
-            fetchedAt={rv.fetchedAt}
-            /* ★ v2.10.1：车牌前的线路主题色标签（用户口径：显示线路名、不显示运营商） */
-            lineLabel={rv.picked?.label}
-            lineColor={rv.picked?.color}
-            onClose={rv.closeVehicle}
-          />
-        )}
       </div>
 
-      {/* ★ 2026-09-22 / v2.10.0：公共交通路线全屏选择弹窗。
-          ⚠️ 必须在 `.nav-map-wrap` **之外** —— wrap 是 `position:fixed; z-index:0`（层叠上下文），
-          弹窗若挂在其中，其 z-index 会被关进该上下文、永远低于底部 chrome
-          ⇒ 这正是「选线路弹窗被底部遮挡」的根因（Spec AC-13）。 */}
+      {/* ★ 卡片浮层（车卡/站卡）—— 挂在 wrap **之外**，`.nav-card-overlay`（fixed z90）
+          ⇒ 面板打开时点地图带上的车/站，卡片不被面板（z70）压住。 */}
+      {(station || rv.selected) && (
+        <div className="nav-card-overlay">
+          {station && (
+            <StationCard
+              station={station}
+              colors={colors}
+              onClose={() => setStation(null)}
+              onSetFrom={() => {
+                setFrom(stationToNavPoint(station));
+                setStation(null);
+                setStage("panel");
+                setViewTick((t) => t + 1);
+              }}
+              onSetTo={() => {
+                setTo(stationToNavPoint(station));
+                setStation(null);
+                setStage("panel");
+                setViewTick((t) => t + 1);
+              }}
+            />
+          )}
+          {rv.selected && (
+            <VehicleCard
+              vehicle={rv.selected.vehicle}
+              count={rv.selected.count}
+              fetchedAt={rv.fetchedAt}
+              lineLabel={rv.picked?.label}
+              lineColor={rv.picked?.color}
+              onClose={rv.closeVehicle}
+            />
+          )}
+        </div>
+      )}
+
+      {/* 公共交通路线全屏选择弹窗（必须在 wrap 之外） */}
       {lineSheet && (
         <RouteLinesSheet
           onPick={(l) => {
@@ -335,33 +437,36 @@ export default function NavShell({ jsKey, colors = {}, initialFrom = null, initi
         />
       )}
 
-      {/* ★ 2026-09-23：**全屏推荐弹窗**（主页「出发」入口；常驻挂载 ⇒ 关闭再开秒显上次结果）。
-          ⚠️ 必须在 `.nav-map-wrap` **之外** —— wrap 是层叠上下文，弹窗挂进去会被底部 chrome 压住 */}
-      <RouteResultSheet
-        open={resultOpen}
+      {/* ★ 单一三档面板宿主（推荐 ⇄ 详情；必须在 wrap 之外） */}
+      <RouteSheet
+        open={rsOpen}
+        pane={pane}
+        detent={snap}
+        topsPx={topsPx}
+        onDetentChange={setSnap}
+        onContextClose={contextClose}
+        odLabel={odLabel}
         query={resultQuery}
-        odLabel={fromPoint && to ? `${fromPoint.label} → ${to.label}` : ""}
+        colors={colors}
         fav={fromPoint && to ? { from: endpointOf(fromPoint), to: endpointOf(to) } : null}
-        onClose={() => setResultOpen(false)}
-        onOpenDetail={(card, degraded) => setDetail({ card, degraded })}
+        detail={
+          detailCard && to
+            ? {
+                card: detailCard.card,
+                degraded: detailCard.degraded,
+                destLabel: to.label,
+                phase: ov.phase,
+                body: ov.body,
+                vehicles: ov.vehicles.length,
+                reload: ov.reload,
+              }
+            : null
+        }
+        onOpenDetail={openDetail}
       />
 
-      {/* ★ 2026-09-23：**全屏详情弹窗**（叠在推荐层之上 z-80）—— 用哪张卡就显示哪张，
-          不经过 planId 重算匹配（消除「点 51 显示 56」）；站条数据走轻量接口（不重算 planNav） */}
-      {detail && fromPoint && to && (
-        <RouteDetailSheet
-          card={detail.card}
-          colors={colors}
-          destLabel={to.label}
-          odLabel={`${fromPoint.label} → ${to.label}`}
-          fav={{ from: endpointOf(fromPoint), to: endpointOf(to), query: resultQuery }}
-          degraded={detail.degraded}
-          onClose={() => setDetail(null)}
-        />
-      )}
-
       {/* ── 全屏搜索层 ── */}
-      {sheet === "full" && (
+      {stage === "search" && (
         <SearchSheet
           editing={editing}
           dest={to}
@@ -373,23 +478,22 @@ export default function NavShell({ jsKey, colors = {}, initialFrom = null, initi
           onPickQuick={(f, t) => {
             setFrom(f);
             setTo(t);
-            setSheet("half");
+            setStage("panel");
             setViewTick((n) => n + 1);
           }}
           onBack={backFromSearch}
         />
       )}
 
-      {/* ── 下半屏起终点面板 ── */}
-      {sheet === "half" && (
+      {/* ── 半屏起终点面板 ── */}
+      {stage === "panel" && (
         <RoutePanel
           dest={to}
           from={from}
           userPos={userPos}
           canGo={canGo}
-          /* ★ 2026-09-23：规划过程移到弹窗内（骨架屏）—— 按钮不再有「正在规划」态 */
           going={false}
-          query={fromPoint && to ? queryOf(fromPoint, to) : ""}
+          query={resultQuery}
           onGo={go}
           onTapFrom={() => openSearch("from")}
           onTapDest={() => openSearch("dest")}

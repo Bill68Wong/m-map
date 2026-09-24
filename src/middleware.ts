@@ -27,9 +27,8 @@ const PUBLIC_PAGES = new Set([
   "/card",
   "/about",
   "/login",
-  // ★ v1.3.0 全澳导航（公众功能，R-10）—— 不加则路人用不了（fail-closed）
-  "/nav", // 导航结果页
-  "/nav/detail", // 导航详情页
+  // ⚠️ 2026-09-23 改版：`/nav`、`/nav/detail` 独立页**已删除**（功能并入首页全屏弹窗）。
+  //    旧链接由下方 middleware 顶部 **308 重定向**兜底 → 首页。故从白名单移除（fail-closed）。
   "/commute", // 旧首页（原 `/` 的 HomeClient 原样迁此）
   // ★ M Map 改版 S4：路线收藏页（新增公开页；fail-closed 必须显式加入）
   "/favorites", // 路线收藏
@@ -76,6 +75,19 @@ function isPublic(pathname: string): boolean {
 
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
+
+  // ★ 2026-09-23 改版：`/nav`、`/nav/detail` 两个独立页**已删除**（功能并入首页全屏弹窗）。
+  //   旧链接（书签 / 分享 / 收藏夹里的 `/nav/detail?...`）→ **308 永久重定向到首页**。
+  //   ⚠️ 必须放在**鉴权之前**：旧链接对「已登录」和「未登录」用户都应回到首页，
+  //      不能先被口令门拦去 `/login`（那样就把一个已删除的页面当成受保护页重定向了）。
+  //   ⚠️ query 保留（首页要从 fromLng…&toLng… 预填起终点进入「半屏可出发」态），
+  //      仅删除已废弃的 `plan`（旧版按 planId 定位方案卡，新首页不再使用）。
+  if (pathname === "/nav" || pathname === "/nav/detail") {
+    const url = req.nextUrl.clone();
+    url.pathname = "/";
+    url.searchParams.delete("plan");
+    return NextResponse.redirect(url, 308);
+  }
 
   // 公开区直接放行
   if (isPublic(pathname)) return NextResponse.next();

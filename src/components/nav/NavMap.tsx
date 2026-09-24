@@ -30,12 +30,11 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { isInsideRings, loadMacauDistrict, maskOuterRing, type MacauDistrict } from "@/lib/amap/district";
+import { DECIMATE_STEP_M, decimate, type ColoredLeg } from "@/lib/nav/route-overview";
 import { loadAMap } from "./amap-loader";
 import { lrtTransferVariantOf } from "./lrt-transfer";
-import VehicleMarker, {  clusterByScreenDistance,
-  type VehicleCluster,
-  type VehicleLite,
-} from "./VehicleMarker";
+import VehicleLayer from "./VehicleLayer";
+import type { VehicleLite } from "./VehicleMarker";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const MACAU_CENTER = { lng: 113.558, lat: 22.155 }; // 全澳门视角中心（§D.1）
@@ -99,6 +98,23 @@ function maskFill(): string | null {
 }
 const MASK_OPACITY = 0.42;
 
+/**
+ * ★ 2026-09-23：运行时读一个 CSS Token 的 **resolved 具体值**。
+ * 为什么需要：AMap `Polyline.strokeColor` / `Polygon.fillColor` 由**画布**绘制，
+ *   **拿不到 `var()`** ⇒ 必须在 JS 侧读一次真色值（与 `maskFill()` 同一做法）。
+ * 防呆：值里若仍含 `(`（= `color-mix(...)` / `var(...)` 未被解析）⇒ 视为读不到 ⇒ 返回 null，
+ *   调用方回落下一个 Token（避免把非法字符串喂给画布导致静默不绘制）。
+ */
+function readToken(name: string): string | null {
+  try {
+    const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    if (!v || v.includes("(")) return null;
+    return v;
+  } catch {
+    return null;
+  }
+}
+
 /** 空车辆数组的**稳定引用** —— 用作 prop 默认值，避免每次渲染产生新引用触发 effect 抖动 */
 const NO_VEHICLES: VehicleLite[] = [];
 
@@ -136,6 +152,13 @@ function zoomForAcross(lat: number, widthPx: number): number {
 export interface NavMapProps {
   /** Web 端（JS API）Key（服务端以 prop 传入） */
   jsKey: string;
+  /**
+   * ★ AC-16：**自定义地图样式 ID**（高德控制台创建，用于隐藏底图**自带**的公交站点图标；
+   *   我们自己的站点图层是独立 marker，不受影响）。
+   *   缺省 / 空串 ⇒ **不传 `mapStyle`，用高德默认样式（与现状逐字节一致，降级安全）**。
+   *   ⚠️ 样式须与 `jsKey` 同属一个开发者账号，否则不生效。
+   */
+  mapStyleId?: string;
   /** 目的地图标（用户选定 POI 后）；★ S2：设为该点后地图**居中**到目的地 */
   dest?: { lng: number; lat: number; label: string } | null;
   /**
@@ -152,8 +175,22 @@ export interface NavMapProps {
    *     · `dest-center-top`：目的地放在 **上半屏正中央**（弹窗半屏时用）
    *     · `fit-two`       ：出发地 + 目的地 **都在视野内**（自动缩放 + 居中）
    *   `tick` 变化即重新取景（同一模式重复触发也生效）。
+   *
+   * ★ 2026-09-23：扩展 `fit-box`（面板三档取景）——
+   *   把外包框 `box` 适配进「面板顶边以上的可视槽」（`slotTopPx`）。
+   *   ⚠️ **禁用 `setBounds` / `setFitView`**（本项目 `setLimitBounds(澳門)` 场景下会被撑到
+   *   珠海斗门、zoom 掉到最小）⇒ 一律复用 `fit-two` 的自算逻辑（反推 zoom + panBy）。
    */
-  view?: { mode: "dest-center-top" | "fit-two" | "none"; tick: number } | null;
+  view?:
+    | {
+        mode: "dest-center-top" | "fit-two" | "fit-box" | "none";
+        tick: number;
+        /** fit-box：待装下的经纬度外包框（面板顶边以上区域） */
+        box?: { minLng: number; minLat: number; maxLng: number; maxLat: number };
+        /** fit-box：可视槽底边像素（= 当前档面板顶边） */
+        slotTopPx?: number;
+      }
+    | null;
   /** 定位回调：成功给 GCJ-02 坐标；失败给 null */
   onLocate?: (pos: { lng: number; lat: number } | null) => void;
   /** 点击巴士站点回调（信息卡）——坐标 GCJ-02 */
@@ -178,6 +215,13 @@ export interface NavMapProps {
   /** ★ v2.10.0：点击车辆图标（含合并组内的其余车辆） */
   onVehicleClick?: (vehicle: VehicleLite, count: number) => void;
   /**
+   * ★ 2026-09-23：**路线总览**（详情 pane 用）。
+   *   非空 ⇒ 逐段画「灰底线（区间外 z68）+ 彩段（乘车区间 z72）」；起终点 pin 由 `origin/dest`
+   *   另行绘制。`null` ⇒ 逐个 `map.remove()` 清理（复用 routeLine 清理模式）。
+   *   几何由 `useRouteOverview` 算好（`buildColoredLegs`）；`color=null` 回落 `--accent`。
+   */
+  overview?: ColoredLeg[] | null;
+  /**
    * 重新定位触发计数（右上定位按钮）—— 变化时重跑一次定位并（范围内）居中。
    * 初始为 0 时不触发（首屏定位由 `init()` 负责）。
    */
@@ -188,6 +232,7 @@ export interface NavMapProps {
 
 export default function NavMap({
   jsKey,
+  mapStyleId = "",
   dest,
   origin,
   view,
@@ -201,6 +246,7 @@ export default function NavMap({
   onRouteDirs,
   vehicles = NO_VEHICLES,
   onVehicleClick,
+  overview = null,
 }: NavMapProps) {
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<any>(null);
@@ -229,17 +275,16 @@ export default function NavMap({
    */
   const routePolylinesRef = useRef<unknown[]>([]);
   const routeStopsRef = useRef<Set<string>>(new Set());
+  /** ★ 2026-09-23：路线总览的 polyline（灰底 z68 + 彩段 z72）；退出 detail 时逐个 remove */
+  const overviewPolylinesRef = useRef<unknown[]>([]);
   /** 路线模式切换后触发站点图层重建（marker 的样式在创建时决定，必须重建才生效） */
   const [stationRebuildTick, setStationRebuildTick] = useState(0);
-  /** ★ v2.10.0：车辆图标**屏幕投影**后的合并簇（React 覆盖层渲染） */
-  const [vehiclePts, setVehiclePts] = useState<VehicleCluster[]>([]);
   /** 点击回调放进 ref：避免 prop 变化导致图层重新绑定事件 */
   const onStationClickRef = useRef<NavMapProps["onStationClick"]>(undefined);
   const onMapClickRef = useRef<NavMapProps["onMapClick"]>(undefined);
   const onMapReadyRef = useRef<NavMapProps["onMapReady"]>(undefined);
-  /** ★ v2.10.0：方向回报 / 车辆点击回调（放进 ref，避免图层重建） */
+  /** ★ v2.10.0：方向回报回调（放进 ref，避免图层重建） */
   const onRouteDirsRef = useRef<NavMapProps["onRouteDirs"]>(undefined);
-  const onVehicleClickRef = useRef<NavMapProps["onVehicleClick"]>(undefined);
   /**
    * ★ 2026-09-22：`view` 的实时镜像。
    * 为什么需要：`applyLocateView` 是 `useCallback([])`（空依赖，避免定位回调重绑），
@@ -348,6 +393,8 @@ export default function NavMap({
         zoom: INIT_ZOOM,
         center: [MACAU_CENTER.lng, MACAU_CENTER.lat],
         viewMode: "2D",
+        // ★ AC-16：隐藏底图自带的公交站点图标（走自定义样式）；未配置 ⇒ 用默认样式（降级安全）
+        ...(mapStyleId ? { mapStyle: `amap://styles/${mapStyleId}` } : {}),
         resizeEnable: true,
         rotateEnable: false,
         pitchEnable: false,
@@ -431,7 +478,7 @@ export default function NavMap({
       setNote((e as Error)?.message ?? "地图加载失败");
       onLocate?.(null);
     }
-  }, [jsKey, runLocate, applyLocateView, onLocate]);
+  }, [jsKey, mapStyleId, runLocate, applyLocateView, onLocate]);
 
   useEffect(() => {
     void init();
@@ -620,6 +667,40 @@ export default function NavMap({
       } catch {
         /* ignore */
       }
+      return;
+    }
+
+    /**
+     * ★ 2026-09-23：`fit-box` —— 把外包框适配进「面板顶边以上的可视槽」（自算，禁 setBounds）。
+     * `slotTopPx` = 当前档面板顶边像素（full≈12vh / half=50vh / peek=80vh）；
+     * 复用 `fit-two` 的反推 zoom 逻辑（宽/高按可用区，留呼吸位），再把框中心抬到「顶部槽中心」。
+     */
+    if (view.mode === "fit-box") {
+      const box = view.box;
+      if (!box) return;
+      try {
+        const size = map.getSize?.() ?? { width: 390, height: 700 };
+        const slotTop = Math.max(80, Math.round(view.slotTopPx ?? size.height * 0.12));
+        const centerLat = (box.minLat + box.maxLat) / 2;
+        const centerLng = (box.minLng + box.maxLng) / 2;
+        // 可用区：宽留 50px/侧；高只用「顶边以上区域」，上下各留 20px 呼吸位
+        const availW = Math.max(80, size.width - 100);
+        const availH = Math.max(80, slotTop - 40);
+        const lngSpan = Math.max((box.maxLng - box.minLng) * 1.25, 1e-5);
+        const latSpan = Math.max((box.maxLat - box.minLat) * 1.25, 1e-5);
+        const zx = Math.log2((360 * availW) / (256 * lngSpan));
+        const zy = Math.log2(
+          (360 * availH) / (256 * latSpan * Math.cos((centerLat * Math.PI) / 180)),
+        );
+        const z = Math.max(12, Math.min(16, Math.floor(Math.min(zx, zy))));
+        map.setZoomAndCenter(z, [centerLng, centerLat], true);
+        // 框中心：从整屏中心（size.height/2）抬到「顶部槽中心」（slotTop/2）
+        map.panBy(0, Math.round(size.height / 2 - slotTop / 2));
+        canvasRef.current?.setAttribute("data-nav-zoom", String(z));
+        canvasRef.current?.setAttribute("data-view-mode", "fit-box-selfcalc");
+      } catch {
+        /* ignore */
+      }
     }
   }, [view, dest, origin, phase]);
 
@@ -636,13 +717,11 @@ export default function NavMap({
     onMapReadyRef.current = onMapReady;
   }, [onMapReady]);
 
-  // ★ 同步「方向回报 / 车辆点击」回调到 ref
+  // ★ 同步「方向回报」回调到 ref
   useEffect(() => {
     onRouteDirsRef.current = onRouteDirs;
   }, [onRouteDirs]);
-  useEffect(() => {
-    onVehicleClickRef.current = onVehicleClick;
-  }, [onVehicleClick]);
+  // ★ 车辆点击回调直接交给 `VehicleLayer`（原生化层自管 ref），此处不再缓存
 
   // ★ 右上定位按钮：locateTick 变化 → 重跑定位（首屏由 init 负责，tick=0 不触发）
   useEffect(() => {
@@ -966,103 +1045,114 @@ export default function NavMap({
   }, [routeLine]);
 
   /**
-   * ★ v2.10.0：**车辆图标覆盖层**（在途巴士）。
+   * ★ 2026-09-23：**路线总览绘制**（详情 pane）。
    *
-   * 为什么用 React 覆盖层而不是 AMap.Marker：车辆图标是**自绘插画 + data-state 驱动**的
-   *   React 组件（含合并角标、44×44 命中区），用 AMap 的 `content` 字符串会丢掉类型与复用。
-   * 做法：把车辆 GCJ-02 坐标经 `map.lngLatToContainer()` 投成**屏幕像素**，rAF 节流重投，
-   *   再交给 `VehicleMarker` 渲染；`clusterByScreenDistance` 按**屏距 ≤28px** 合并。
-   * ⚠️ 地图 `move/zoom/viewchange` 高频触发 ⇒ 必须 rAF 节流（同站点图层的 throttle 思路）。
+   * 双层 polyline（同宽 6px，只靠颜色区分，避免上下车站处粗细台阶）：
+   *   · 灰底线 = 所选方向整条线（区间外），`--map-line-dim`（读 Token 真色值），zIndex 68；
+   *   · 彩段   = board→alight 乘车区间，线路色（`routes.color`）/ 缺省 `--accent`，zIndex 72；
+   * `degraded`（整线着色）时 `colored === gray` ⇒ **只画彩段**（不画灰，PM 边界 #4）。
+   *
+   * 生命周期：进入 detail → 一次画完；退出 detail（`overview=null`）→ 逐个 `map.remove()` 清理
+   *   （复用 routeLine 的清理模式，防泄漏）。灰底线长线先 `decimate` 抽稀（保彩段端点）。
    */
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || phase !== "ready") return;
-    if (!vehicles.length) {
-      // 仅当当前非空才清空（返回同一引用 ⇒ 不触发多余重渲染，杜绝 effect↔state 回环）
-      setVehiclePts((prev) => (prev.length ? [] : prev));
+    const AMap = amapRef.current;
+    if (!map || !AMap) return;
+
+    const clearOverview = () => {
+      for (const p of overviewPolylinesRef.current) {
+        try {
+          map.remove(p as never);
+        } catch {
+          /* ignore */
+        }
+      }
+      overviewPolylinesRef.current = [];
+    };
+
+    // 非 ready / 无总览 → 清空；★ 显式置 0（契约语义：0 = 不可绘 / 未就绪 ⇒ QA 可稳定断言）
+    if (phase !== "ready" || !overview || !overview.length) {
+      clearOverview();
+      canvasRef.current?.setAttribute("data-overview-legs", "0");
       return;
     }
 
-    let raf = 0;
-    /**
-     * 经纬度 → 容器像素。⚠️ 高德不同版本大小写不一（`lngLatToContainer` / `lnglatToContainer`），
-     * 这里**两种都试**，任一成功即用 ⇒ 避免方法名差异导致车辆图标**静默不显示**。
-     */
-    const containerOf = (
-      fn: unknown,
-      lng: number,
-      lat: number,
-    ): { x: number; y: number } | null => {
+    clearOverview();
+    const dim = readToken("--map-line-dim") ?? readToken("--border-2") ?? readToken("--muted");
+    const accent = readToken("--accent");
+
+    /** 实际绘制的**彩段折线**数（语义 = 真正上屏的乘车段，非 leg 数） */
+    let drawn = 0;
+    for (const leg of overview) {
       try {
-        if (typeof fn === "function") {
-          const p = (
-            fn as (ll: [number, number]) => {
-              getX?: () => number;
-              getY?: () => number;
-              x?: number;
-              y?: number;
-            }
-          ).call(map, [lng, lat]);
-          const x = typeof p?.getX === "function" ? p.getX() : p?.x;
-          const y = typeof p?.getY === "function" ? p.getY() : p?.y;
-          if (typeof x === "number" && typeof y === "number") return { x, y };
+        // 灰底线：整线着色（colored===gray）时跳过（只留彩段）
+        const grayIsWhole = leg.colored === leg.gray;
+        if (dim && !grayIsWhole && leg.gray.length >= 2) {
+          const grayPath = decimate(leg.gray, DECIMATE_STEP_M);
+          const gpl = new AMap.Polyline({
+            path: grayPath,
+            strokeColor: dim,
+            strokeWeight: 6,
+            strokeOpacity: 0.85,
+            lineJoin: "round",
+            lineCap: "round",
+            showDir: true,
+            zIndex: 68,
+          });
+          map.add(gpl);
+          overviewPolylinesRef.current.push(gpl);
+        }
+        // 彩段：乘车区间（整线着色时即为整条）；色源优先线路色（数据）→ --accent Token
+        if (leg.colored.length >= 2) {
+          const stroke = leg.color ?? accent;
+          if (stroke) {
+            const cpl = new AMap.Polyline({
+              path: leg.colored,
+              strokeColor: stroke,
+              strokeWeight: 6,
+              strokeOpacity: 0.92,
+              lineJoin: "round",
+              lineCap: "round",
+              showDir: true,
+              zIndex: 72,
+            });
+            map.add(cpl);
+            overviewPolylinesRef.current.push(cpl);
+            drawn++; // ★ 仅「实际添加彩段折线」时自增（colored<2 / 无色源不计数）
+          }
         }
       } catch {
-        /* ignore */
+        /* 单段绘制失败不影响其余段 */
       }
-      return null;
-    };
-    const project = (lng: number, lat: number): { x: number; y: number } | null =>
-      containerOf(map.lngLatToContainer, lng, lat) ?? containerOf(map.lnglatToContainer, lng, lat);
-    const compute = () => {
-      raf = 0;
-      const pts: { v: VehicleLite; x: number; y: number }[] = [];
-      for (const v of vehicles) {
-        const p = project(v.lng, v.lat);
-        if (p) pts.push({ v, x: p.x, y: p.y });
-      }
-      setVehiclePts(clusterByScreenDistance(pts));
-    };
-    const schedule = () => {
-      if (raf) return;
-      raf = window.requestAnimationFrame(compute);
-    };
+    }
+    canvasRef.current?.setAttribute("data-overview-legs", String(drawn));
+    return () => clearOverview();
+  }, [overview, phase]);
 
-    compute();
-    map.on("viewchange", schedule);
-    map.on("zoomchange", schedule);
-    map.on("move", schedule);
-    map.on("zoom", schedule);
-    return () => {
-      if (raf) window.cancelAnimationFrame(raf);
-      try {
-        map.off("viewchange", schedule);
-        map.off("zoomchange", schedule);
-        map.off("move", schedule);
-        map.off("zoom", schedule);
-      } catch {
-        /* ignore */
-      }
-    };
-  }, [vehicles, phase]);
+  /**
+   * ★ 2026-09-23：**在途车辆**改由原生标记层承担（`VehicleLayer`，见其文件头说明）。
+   * 旧的「React 覆盖层 + lngLatToContainer 每帧 setState」已删除 ——
+   *   它在拖拽时落后地图一帧、且每帧触发一次 React 协调 ⇒ 视觉「飘」。
+   * 原生化后位置由地图引擎驱动，**拖拽期零 JS**；合并仅在数据刷新 + `moveend`/`zoomend`
+   *   （节流 120ms）重算。`zIndex:130` 保证「车压站点/pin」视觉不变。
+   */
 
   return (
-    <div className={`nav-map ${className}`}>
+    <div
+      className={`nav-map ${className}`}
+      /* ★ 观测钩子（契约唯一名称）：data-map = ok|failed（地图可用性；区别于画布上的 data-map-mask） */
+      data-map={phase === "failed" ? "failed" : phase === "ready" ? "ok" : undefined}
+    >
       <div ref={canvasRef} className="nav-map__canvas" />
-      {/* ★ v2.10.0：在途巴士图标（覆盖层，位置随地图实时投影） */}
-      {vehiclePts.length > 0 && (
-        <div className="nav-vehicle-layer">
-          {vehiclePts.map((c) => (
-            <VehicleMarker
-              key={c.key}
-              items={c.items}
-              x={c.x}
-              y={c.y}
-              onClick={() => onVehicleClickRef.current?.(c.items[0], c.items.length)}
-            />
-          ))}
-        </div>
-      )}
+      {/* ★ 2026-09-23：在途巴士图标（**原生 AMap.Marker** + DOM content；拖拽期零 JS） */}
+      <VehicleLayer
+        map={phase === "ready" ? mapRef.current : null}
+        amap={phase === "ready" ? amapRef.current : null}
+        enabled={phase === "ready"}
+        vehicles={vehicles}
+        onVehicleClick={onVehicleClick}
+      />
       {phase === "loading" && (
         <div className="nav-map__cover">
           <span className="rc-sk rc-sk--big" />

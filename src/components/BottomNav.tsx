@@ -39,8 +39,8 @@ const TABS: TabDef[] = [
     label: "首页",
     icon: "home",
     iconOn: "homeFilled",
-    // 首页高亮：`/` 与 `/nav` 系（结果/详情归属首页）
-    match: (p) => p === "/" || p.startsWith("/nav"),
+    // 首页高亮：`/`（★ 2026-09-23：`/nav`、`/nav/detail` 已删除 ⇒ `startsWith("/nav")` 恒不命中，简化）
+    match: (p) => p === "/",
   },
   {
     key: "favorites",

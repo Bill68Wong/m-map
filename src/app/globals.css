@@ -135,6 +135,35 @@
   --section-y-tablet: 32px;
   --section-y-desktop: 48px;
 
+  /* ---------- ★ 2026-09-23：三档可变高度面板（Spec v2.12.0 / 设计 R3） ---------- */
+  /* 停靠点几何（推荐/详情共用）；顶边 = 面板上缘 y（向下 = 收起） */
+  --sheet-top-full: clamp(max(calc(var(--safe-top) + 44px), 12vh), 96px, 128px); /* 推荐默认 / 详情上拖 */
+  --sheet-top-half: 50vh; /* 详情默认「下半屏」 */
+  --sheet-top-peek: 80vh; /* 收起档（20% 可见） */
+  --sheet-radius: var(--radius-sheet); /* 顶部圆角 14px */
+  --sheet-shadow: var(--shadow-sheet); /* 复用：唯一允许的柔和抬升 */
+  /* 抓手 grabber（与既有 .step-sheet__grip 同规格） */
+  --grab-w: 36px;
+  --grab-h: 4px;
+  --grab-hit-h: 24px;
+  --grab-color: var(--border-2);
+  --grab-color-active: var(--muted);
+  /* 过渡时长（全部 ≤300ms；禁弹跳曲线 —— 不使用 --spring-release） */
+  --sheet-dur-open: var(--dur-slow); /* 300ms */
+  --sheet-dur-settle: 260ms; /* 释放归位 */
+  --sheet-dur-close: 240ms; /* 关闭 / 下拉关闭 */
+  --sheet-dur-scrim: var(--dur-base); /* 200ms：搜索框淡出 / peek 摘要显隐 */
+  --sheet-ease: cubic-bezier(0.32, 0.72, 0, 1); /* 标准减速，无 overshoot */
+  /* 地图视野让位（自算 fit-box 的呼吸边距） */
+  --map-fit-gap: 24px;
+  /**
+   * ★ 区间外灰线（地图专属）：AMap `Polyline.strokeColor` 由**画布**绘制、拿不到 `var()`
+   * ⇒ 用 Token 定义**具体色值** + 运行时 `getComputedStyle` 读 resolved（同 `maskFill()` 模式）。
+   * ⚠️ 刻意**不用 `color-mix()`** —— 自定义属性里的 `color-mix()` 不会被 `getPropertyValue`
+   *    解析成真色值（会拿到 "color-mix(...)" 字面量，喂画布静默失效）。浅色 ≈ #9FA5AE。
+   */
+  --map-line-dim: #9fa5ae;
+
   /* ---------- ② 兼容别名（旧 M3 名 → 新 Token；既有组件零改动） ---------- */
   --primary: var(--accent);
   --on-primary: var(--accent-on);
@@ -259,6 +288,11 @@
     --shadow-hard: 3px 3px 0 0 rgba(226, 226, 233, 0.22);
     --shadow-hard-sm: 2px 2px 0 0 rgba(226, 226, 233, 0.22);
     --focus-ring: 0 0 0 3px rgba(168, 199, 250, 0.34);
+
+    /* ★ 2026-09-23：三档面板深色取值（仅需补这几个；其余 derive 自现有深色 Token） */
+    --map-line-dim: #7e8390;
+    --grab-color: var(--border-2);
+    --grab-color-active: var(--fg-2);
   }
 }
 
@@ -5104,23 +5138,11 @@ button[aria-disabled="true"] {
   cursor: default;
 }
 
-/* ── 车辆图标层（React 覆盖层：按屏幕坐标投影，`pointer-events` 只落到图标上）── */
-.nav-vehicle-layer {
-  position: absolute;
-  inset: 0;
-  z-index: 15; /* 高于站点 marker，低于品牌栏/按钮组 */
-  pointer-events: none;
-  overflow: hidden;
-}
-.nav-vehicle-layer > * {
-  pointer-events: auto;
-}
-
-/* ── 车辆图标（车头正视图 · 画布 32×32 · 命中区 44×44 · data-state 驱动，全部 display 切换）── */
+/* ── 车辆图标（车头正视图 · 画布 32×32 · 命中区 44×44 · data-state 驱动，全部 display 切换）──
+   ★ 2026-09-23：车辆已**原生化**（`VehicleLayer` 的 AMap.Marker + DOM content）。
+   故此处**删除** `position:absolute` / `left` / `top` / `transform: translate(-50%,-50%)` 四行——
+   位置由高德 marker `anchor:'center'` 负责（避免双重偏移）；保留 44×44 命中盒 + 32px svg。 */
 .vbus-wrap {
-  position: absolute;
-  left: 0;
-  top: 0;
   width: 44px;
   height: 44px;
   display: grid;
@@ -5130,7 +5152,6 @@ button[aria-disabled="true"] {
   background: none;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
-  transform: translate(-50%, -50%);
   --vbus-ink: color-mix(in srgb, var(--vbus-livery) 58%, var(--fg));
 }
 .vbus-wrap:focus-visible {
@@ -5500,4 +5521,285 @@ button[aria-disabled="true"] {
   flex-direction: column;
   background: var(--bg);
   overscroll-behavior: none;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   ★ 2026-09-23：单一三档可变高度面板（推荐 ⇄ 详情）+ 卡片浮层
+   · `.route-sheet` = 单宿主面板，z-70；三档 full/half/peek 共用一条 transform；
+   · `.nav-card-overlay` = 车卡/站卡浮层，fixed z90（> 面板 70）；
+   · 两者都**必须挂在 `.nav-map-wrap` 之外**（wrap 是层叠上下文 ⇒ 否则被底部 chrome 压住）。
+   · 只动画 `transform`；禁用弹跳曲线（--spring-release 不用）。
+   ══════════════════════════════════════════════════════════════════════ */
+.route-sheet {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 100dvh;
+  z-index: 70;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-top-left-radius: var(--sheet-radius);
+  border-top-right-radius: var(--sheet-radius);
+  box-shadow: var(--sheet-shadow);
+  /* 位移只走 transform（GPU 合成）；--sheet-y-anim 每帧喂、拖动中 transition:none */
+  transform: translateY(var(--sheet-y-anim, 100dvh));
+  transition: transform var(--sheet-dur-settle) var(--sheet-ease);
+  overscroll-behavior: none;
+}
+/* 拖动中：0ms 跟手；★ `will-change` **仅拖动期挂载**（常态挂会吃显存） */
+.route-sheet[data-dragging="on"] {
+  transition: none;
+  will-change: transform;
+}
+/* 关闭（未打开）：推出视口后不吃事件（inert 由 JS 设置） */
+.route-sheet[data-open="off"] {
+  pointer-events: none;
+}
+
+/* ── 抓手（grip）── */
+.route-sheet__grip {
+  display: block;
+  flex: none;
+  width: var(--grab-w);
+  height: var(--grab-h);
+  margin: 8px auto 0;
+  border-radius: var(--radius-full);
+  background: var(--grab-color);
+  transition: background-color var(--dur-fast) var(--ease-standard);
+}
+.route-sheet[data-dragging="on"] .route-sheet__grip {
+  background: var(--grab-color-active);
+}
+
+/* ── 非 peek 头部（grip + bar）——流内首元素，panes 在其下 ── */
+.route-sheet__handle {
+  flex: none;
+  position: relative;
+  z-index: 2;
+  background: var(--surface);
+  border-top-left-radius: var(--sheet-radius);
+  border-top-right-radius: var(--sheet-radius);
+  /* 起拖区命中高度 ≥44×24（抓手视觉 36×4 + 头部） */
+  padding-bottom: var(--space-1);
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.route-sheet__bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 44px;
+  padding: var(--space-2) var(--space-4) 0;
+}
+.route-sheet__od {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: center;
+}
+.route-sheet__iconbtn {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+.route-sheet__iconbtn:focus-visible {
+  outline: none;
+  border-radius: var(--radius-full);
+  box-shadow: var(--focus-ring);
+}
+
+/* ── 内容区（两个 pane 叠加；列表 pane 常驻不卸载 ⇒ 保滚动位置）── */
+.route-sheet__panes {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+}
+.route-sheet__pane {
+  position: absolute;
+  inset: 0;
+  opacity: 1;
+  transition: opacity var(--sheet-dur-scrim) var(--ease-standard);
+}
+.route-sheet__pane[aria-hidden="true"] {
+  opacity: 0;
+  pointer-events: none;
+  visibility: hidden;
+}
+.route-sheet__scroll {
+  height: 100%;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+  overscroll-behavior: contain;
+  /* ★ R2.1 修正：padding 加在**面板滚动容器**（不是文档 body）——
+     文档 body 不滚动，加在 body 无效、列表底部会被推出不可达。
+     --sheet-y-layout 仅档位落定时同步（拖动中不动 ⇒ 零重排）。 */
+  padding: var(--space-2) var(--space-4)
+    calc(env(safe-area-inset-bottom, 0px) + var(--sheet-y-layout, 0px) + var(--space-4));
+}
+.route-pane {
+  position: relative;
+}
+
+/* ── peek 档（20%）：隐藏 handle/panes，显示紧凑摘要 ── */
+.route-sheet__peek {
+  display: none;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 3;
+  background: var(--surface);
+  border-top-left-radius: var(--sheet-radius);
+  border-top-right-radius: var(--sheet-radius);
+  padding-bottom: var(--space-3);
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: pointer;
+}
+.route-sheet[data-detent="peek"] .route-sheet__peek {
+  display: block;
+}
+.route-sheet[data-detent="peek"] .route-sheet__handle {
+  display: none;
+}
+.route-sheet[data-detent="peek"] .route-sheet__panes {
+  opacity: 0;
+  pointer-events: none;
+}
+.sheet-peek-summary {
+  padding: var(--space-2) var(--space-4) 0;
+}
+.sheet-peek__od {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sheet-peek__metric {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+  min-height: 28px;
+}
+.sheet-peek__big {
+  font-size: var(--text-2xl);
+  font-weight: var(--fw-announce);
+  color: var(--fg);
+  line-height: 1.1;
+}
+.sheet-peek__unit {
+  font-size: var(--text-sm);
+  font-weight: var(--fw-read);
+  color: var(--muted);
+  margin-left: 2px;
+}
+.sheet-peek__meta {
+  font-size: var(--text-xs);
+  color: var(--meta);
+  white-space: nowrap;
+}
+.sheet-peek__chev {
+  margin-left: auto;
+  color: var(--muted);
+}
+
+/* ── 卡片浮层（车卡/站卡移出 wrap 后）：fixed z90 > 面板 70 ── */
+.nav-card-overlay {
+  position: fixed;
+  left: var(--space-4);
+  right: var(--space-4);
+  bottom: calc(var(--tabbar-h) + var(--safe-bottom) + var(--space-3));
+  z-index: 90;
+  max-height: 62dvh;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  padding: var(--space-3);
+  background: var(--surface);
+  border: var(--frame-w) solid var(--stroke);
+  border-radius: var(--r-card);
+  box-shadow: var(--shadow-1);
+  animation: fade-up var(--dur-base) var(--ease-standard) backwards;
+}
+/* 内层卡片：容器样式已由浮层承担 ⇒ 去掉自身定位/容器视觉（避免"卡中卡"） */
+.nav-card-overlay .nav-station-card {
+  position: static;
+  left: auto;
+  right: auto;
+  bottom: auto;
+  z-index: auto;
+  max-height: none;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+/* ── 面板打开期间隐藏顶部搜索框（200ms 淡出；Safari 16.4+ / Chrome 支持 :has 前的兼容做法）── */
+.nav-searchbar {
+  transition: opacity var(--sheet-dur-scrim) var(--ease-standard);
+}
+body[data-sheet="open"] .nav-searchbar {
+  opacity: 0;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .route-sheet,
+  .route-sheet__pane,
+  .route-sheet__grip,
+  .nav-searchbar,
+  .nav-card-overlay {
+    transition: none;
+    animation: none;
+  }
+  /* 档位瞬切 */
+  .route-sheet {
+    --sheet-dur-settle: 0ms;
+    --sheet-dur-close: 0ms;
+  }
+}
+
+/* 桌面 ≥1024：面板改为右上固定面板（沿用既有 .step-sheet 桌面策略；不做 peek） */
+@media (min-width: 1024px) {
+  .route-sheet {
+    left: auto;
+    right: 16px;
+    top: 96px;
+    bottom: 16px;
+    width: 420px;
+    height: auto;
+    transform: none;
+    border-radius: var(--r-card);
+  }
+  .route-sheet[data-detent="peek"] .route-sheet__handle {
+    display: flex;
+  }
+  .route-sheet[data-detent="peek"] .route-sheet__panes {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .route-sheet[data-detent="peek"] .route-sheet__peek {
+    display: none;
+  }
 }

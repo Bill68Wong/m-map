@@ -43,6 +43,8 @@ export default async function Home({
 }) {
   // ★ JS Key 由服务端以 prop 传入（JS Key 本身可公开；安全密钥只在 /_AMapService 代理里）
   const jsKey = (process.env.AMAP_JS_KEY ?? "").trim();
+  // ★ AC-16：自定义地图样式 ID（隐藏底图自带公交站点）；**空字符串 = 用默认样式（降级安全）**
+  const mapStyleId = (process.env.AMAP_MAP_STYLE_ID ?? "").trim();
   const colors = await loadRouteColors();
 
   // 地点对收藏回放：URL 带 `fromLng…&toLng…` → 预填起终点（进「可出发」态）
@@ -53,7 +55,7 @@ export default async function Home({
 
   return (
     <>
-      <NavShell jsKey={jsKey} colors={colors} initialFrom={initialFrom} initialTo={initialTo} />
+      <NavShell jsKey={jsKey} mapStyleId={mapStyleId} colors={colors} initialFrom={initialFrom} initialTo={initialTo} />
       {/* ★ v2.10.0：底部合规条**已从地图页移除**（内容迁至 `/help`），
           既解决「选线路弹窗被底部遮挡」，也避免与底导重复。
           `/nav`、`/nav/detail`、`/favorites` 仍各自保留合规条（未受影响）。 */}

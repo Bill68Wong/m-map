@@ -113,16 +113,21 @@ export function clusterByScreenDistance(
 export interface VehicleMarkerProps {
   /** 合并组内的车辆（≥1；`items[0]` 代表该组） */
   items: VehicleLite[];
-  /** 屏幕坐标（px，容器左上为原点） */
-  x: number;
-  y: number;
+  /**
+   * @deprecated ★ 2026-09-23：车辆已**原生化**（`VehicleLayer` 的 AMap.Marker 驱动位置）
+   *   ⇒ 屏幕坐标不再使用（调用方传 0）；保留字段仅为兼容签名，**不影响渲染**。
+   */
+  x?: number;
+  /** @deprecated 同上（屏幕坐标不再使用） */
+  y?: number;
   onClick?: () => void;
 }
 
 /**
- * 单枚车辆图标。位置由 `left/top` 指定，居中交由 CSS `transform: translate(-50%,-50%)`。
+ * 单枚车辆图标。**位置由外层决定**：
+ *   · 原生化后由 `AMap.Marker`（`anchor:'center'`）定位 ⇒ 本组件只画 44×44 命中盒 + 32px svg。
  */
-export default function VehicleMarker({ items, x, y, onClick }: VehicleMarkerProps) {
+export default function VehicleMarker({ items, onClick }: VehicleMarkerProps) {
   const v = items[0];
   const count = items.length;
   const company = normalizeCompany(v.company);
@@ -137,7 +142,7 @@ export default function VehicleMarker({ items, x, y, onClick }: VehicleMarkerPro
       className="vbus-wrap"
       data-state={state}
       data-last={v.isLast ? "1" : undefined}
-      style={{ left: x, top: y, "--vbus-livery": VEHICLE_LIVERY[company] } as CSSProperties}
+      style={{ "--vbus-livery": VEHICLE_LIVERY[company] } as CSSProperties}
       aria-label={label}
       title={label}
       onClick={onClick}

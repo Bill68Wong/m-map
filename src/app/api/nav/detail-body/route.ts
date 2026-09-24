@@ -9,22 +9,140 @@
  *
  * ── 输入 / 输出 ────────────────────────────────────────────────────────
  *   输入：JSON `{ card: RecommendCard }`（结构同 `/api/nav` 响应的 cards[] 元素）
- *   输出：`{ ok, strips, otherRoutes, foldLive, stationLabel }`
+ *   输出：`{ ok, strips, otherRoutes, foldLive, stationLabel, legs }`
+ *   · ★ 2026-09-23 改版：新增 `legs[]`（路线总览逐段几何锚点；契约见附录 A.1）——
+ *     与 `card.rides` **一一对应、同序**，每段含线路主题色 + 上/下车站坐标（**GCJ-02**）。
+ *     `card.rides` 不含坐标（`RideLegView` 仅站码）⇒ 必须服务端补。
+ *     纯**新增字段**，老前端忽略即可 ⇒ 无破坏性变更。
  *
  * ⚠️ 只读接口（不写库）。公开白名单由 `/api/nav` 前缀覆盖（middleware fail-closed 规则）。
- * ⚠️ `card` 仅用于**只读解算**（站序查表 + 实时报站），逐段浅校验，无注入面。
+ * ⚠️ `card` 仅用于**只读解算**（站序查表 + 实时报站 + 段几何），逐段浅校验，无注入面。
+ *
+ * ── 降级铁律（对齐附录 A.1.4）───────────────────────────────────────────
+ *   站坐标 / 线路色**两条批量查询并行**（`Promise.all`，**绝不进循环** —— 防 N+1），
+ *   且各自 `try/catch`：**色查询失败 → 该段 color=null（客户端回落 var(--accent)）**；
+ *   **站查询失败 → 所有 board/alight=null（整体降级，不 500）**。
+ *   即：附加几何**永不阻塞**详情主体（失败也照常返回 strips/fold）。
  */
 import { NextResponse } from "next/server";
+import type { Pool } from "pg";
 import { getPool } from "@/lib/db";
 import { buildStrips } from "@/lib/nav/strips";
 import { foldDataOfCard } from "@/lib/nav/detail-fold";
 import { loadStatics } from "@/lib/recommend/query";
+import { mainCodeOf } from "@/lib/recommend/segment-lookup";
+import { wgs84ToGcj02 } from "@/lib/amap/coord";
 import type { RecommendCard } from "@/lib/recommend/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const preferredRegion = "sin1";
 export const maxDuration = 30;
+
+/** 路线总览的逐段几何锚点（与 card.rides 一一对应、同序；见附录 A.1.2） */
+interface OverviewLeg {
+  /** 段索引 = card.rides 下标（客户端据此与 card 对齐，勿依赖数组顺序） */
+  index: number;
+  route: string;
+  kind: "bus" | "lrt";
+  /** 线路主题色（routes.color）；缺省 null → 客户端回落 var(--accent) */
+  color: string | null;
+  /** 上车站（GCJ-02）；解析失败 = null（客户端降级，不阻塞） */
+  board: { code: string; lng: number; lat: number } | null;
+  /** 下车站（GCJ-02）；同上 */
+  alight: { code: string; lng: number; lat: number } | null;
+}
+
+/** 主码 → 坐标（GCJ-02） */
+type Coord = { lng: number; lat: number };
+
+/**
+ * 由「卡片载具段」组装路线总览所需的 `legs[]`。
+ *
+ * ① 收集去重：全部 `ride.route`（色）与 `board/alight` 主码（坐标）；
+ * ② 两条批量查询**并行**（`Promise.all`）：站坐标（WGS84）+ 线路色（数据）；
+ * ③ 主码 → 坐标内存索引（同站多台 → 保留首个非空，合成一个物理点）；
+ * ④ 坐标 WGS84 → GCJ-02（与 /api/stations、/api/route-vehicles 同源）。
+ * 任一查询失败**只降级该段字段**（color / board / alight → null），**绝不抛错**。
+ */
+async function buildOverviewLegs(pool: Pool, rides: RecommendCard["rides"]): Promise<OverviewLeg[]> {
+  // ① 收集（去重）
+  const routeCodes = [...new Set(rides.map((r) => r.route))];
+  const mains = new Set<string>();
+  for (const r of rides) {
+    mains.add(mainCodeOf(r.board));
+    mains.add(mainCodeOf(r.alight));
+  }
+  const mainCodes = [...mains];
+
+  // ② 两条批量查询并行；各自 try/catch 降级
+  const [coordMap, colorMap] = await Promise.all([
+    // ── 站坐标（WGS84；取主码，容忍 `/<平台>` 后缀）──
+    (async (): Promise<Map<string, Coord>> => {
+      const m = new Map<string, Coord>();
+      if (!mainCodes.length) return m;
+      try {
+        const res = await pool.query(
+          `SELECT code, lat, lng FROM stations
+            WHERE lat IS NOT NULL AND lng IS NOT NULL
+              AND (code = ANY($1::text[]) OR regexp_replace(code, '/\\d+$', '') = ANY($1::text[]))`,
+          [mainCodes],
+        );
+        for (const row of res.rows as { code: string; lat: number; lng: number }[]) {
+          const main = mainCodeOf(String(row.code));
+          if (m.has(main)) continue; // 同站多台 → 保留首个非空
+          const lat = Number(row.lat);
+          const lng = Number(row.lng);
+          if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+          const gcj = wgs84ToGcj02({ lat, lng }); // ★ 出口一律 GCJ-02
+          m.set(main, { lng: gcj.lng, lat: gcj.lat });
+        }
+      } catch (e) {
+        console.warn(
+          "[api/nav/detail-body] 站坐标查询失败（board/alight 整体降级为 null）：",
+          (e as Error).message,
+        );
+      }
+      return m;
+    })(),
+    // ── 线路主题色（数据；勿硬编码）──
+    (async (): Promise<Map<string, string>> => {
+      const m = new Map<string, string>();
+      if (!routeCodes.length) return m;
+      try {
+        const res = await pool.query(
+          `SELECT code, color FROM routes WHERE code = ANY($1::text[])`,
+          [routeCodes],
+        );
+        for (const row of res.rows as { code: string; color: string | null }[]) {
+          const color = row.color != null ? String(row.color).trim() : "";
+          if (color) m.set(String(row.code), color);
+        }
+      } catch (e) {
+        console.warn(
+          "[api/nav/detail-body] 线路色查询失败（color 置 null，客户端回落）：",
+          (e as Error).message,
+        );
+      }
+      return m;
+    })(),
+  ]);
+
+  // ③ 组装：与 card.rides 一一对应、同序（index = 下标）
+  const coordOf = (code: string): { code: string; lng: number; lat: number } | null => {
+    const main = mainCodeOf(code);
+    const c = coordMap.get(main);
+    return c ? { code: main, lng: c.lng, lat: c.lat } : null;
+  };
+  return rides.map((r, i) => ({
+    index: i,
+    route: r.route,
+    kind: r.kind,
+    color: colorMap.get(r.route) ?? null,
+    board: coordOf(r.board),
+    alight: coordOf(r.alight),
+  }));
+}
 
 export async function POST(req: Request) {
   try {
@@ -46,7 +164,8 @@ export async function POST(req: Request) {
     }
 
     const pool = getPool();
-    const st = await loadStatics(pool);
+    // ★ 静态索引与 leg 几何互相独立 ⇒ 并行（缩短 p95）；leg 内部查询也各自降级
+    const [st, legs] = await Promise.all([loadStatics(pool), buildOverviewLegs(pool, card.rides)]);
     const nowMs = Date.now();
     const weekday = new Date(nowMs + 8 * 3_600_000).getUTCDay();
     const strips = buildStrips(card, {
@@ -64,6 +183,7 @@ export async function POST(req: Request) {
         otherRoutes: fold.otherRoutes,
         foldLive: fold.foldLive,
         stationLabel: fold.stationLabel,
+        legs,
       },
       { headers: { "cache-control": "no-store" } },
     );

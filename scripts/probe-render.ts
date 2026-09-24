@@ -4,12 +4,14 @@
  * 用法：npx tsx scripts/probe-render.ts <baseUrl>
  *   例： npx tsx scripts/probe-render.ts http://127.0.0.1:3100
  *
- * 目的：撤销【8】（needsWait / 「需等下一班」）后，对 **5 条主链路**做真浏览器回归：
- *   /recommend · /card · /commute · /nav · /nav/detail
+ * 目的：对 **3 条主链路**做真浏览器回归：
+ *   /recommend · /card · /commute
+ *   ⚠️ 2026-09-23 改版：原 `/nav` · `/nav/detail` 两页**已删除**（功能并入首页全屏弹窗，
+ *      见 Spec §5.6 / 附录 A.3）⇒ 本脚本对应探针段一并移除（旧链接改由 middleware 308 兜底）。
  *
  * 断言：
  *   ① 每页 HTTP 200、无 pageerror / console.error（除已知 pre-existing 的 @vercel/analytics 404）
- *   ② /recommend · /card · /nav 至少渲染 1 张真卡片（非骨架）
+ *   ② /recommend · /card 至少渲染 1 张真卡片（非骨架）
  *   ③ ★ **不再出现 `.rc-tier--miss`**（needsWait 的中性徽章）—— 即撤销【8】在渲染层生效
  *   ④ 「后续车次」（`.rc-altrow`）若存在则记录（altBuses 机制，与 needsWait 无关）
  *
@@ -18,7 +20,6 @@
  */
 import { createRequire } from "node:module";
 import path from "node:path";
-import { wgs84ToGcj02 } from "@/lib/amap/coord";
 
 const require = createRequire(import.meta.url);
 const PW = path.join("C:", "Users", "ASUS", ".workbuddy", "binaries", "node", "workspace", "node_modules", "playwright-core");
@@ -28,21 +29,6 @@ const CHROME = path.join(process.env.LOCALAPPDATA ?? "", "ms-playwright", "chrom
 const { chromium } = require(PW) as { chromium: any };
 
 const BASE = process.argv[2] ?? "http://127.0.0.1:3100";
-
-/** 已知点（WGS）→ GCJ-02（`/nav` · `/nav/detail` URL 契约要求 GCJ-02） */
-const home = wgs84ToGcj02({ lat: 22.1301754167269, lng: 113.55910051177 }); // 擎天匯
-const school = wgs84ToGcj02({ lat: 22.1519150877303, lng: 113.566924771965 }); // 澳科大
-const navQ = new URLSearchParams({
-  fromLng: String(home.lng),
-  fromLat: String(home.lat),
-  toLng: String(school.lng),
-  toLat: String(school.lat),
-  fromLabel: "擎天匯",
-  toLabel: "澳科大",
-  fromKind: "place",
-  toKind: "place",
-  zone: "N/O",
-}).toString();
 
 /** 已知可忽略的错误（pre-existing：@vercel/analytics 在本机/无网环境下 404） */
 const IGNORE = [/vercel\/analytics/i, /_vercel\/insights/i, /favicon/i];
@@ -116,7 +102,6 @@ async function visit(browser: any, name: string, url: string, markers: Record<st
 
 async function run(): Promise<void> {
   console.log(`\n[probe-render] base = ${BASE}`);
-  console.log(`   nav 查询串 = ${navQ}`);
   const browser = await chromium.launch({ headless: true, executablePath: CHROME });
   const reports: PageReport[] = [];
 
@@ -133,22 +118,7 @@ async function run(): Promise<void> {
         "页面容器(.page)": "main.page",
       }),
     );
-    // ③ /nav：全澳导航结果页
-    reports.push(
-      await visit(browser, "/nav", `${BASE}/nav?${navQ}`, {
-        "导航页容器(.nav-page)": ".nav-page",
-        "总用时大字(.rc-total)": ".rc-total",
-      }),
-    );
-    // ④ /nav/detail：导航详情页（自带站条）
-    reports.push(
-      await visit(browser, "/nav/detail", `${BASE}/nav/detail?${navQ}`, {
-        "总用时大字(.rc-total)": ".rc-total",
-        "站条(.rc-strip)": ".rc-strip",
-      }),
-    );
-
-    // ⑤ /card：从 /recommend 点第一张真卡进入（构造合法 URL 更繁琐 → 用真实点击）
+    // ③ /card：从 /recommend 点第一张真卡进入（构造合法 URL 更繁琐 → 用真实点击）
     const ctxC = await browser.newContext({ viewport: { width: 390, height: 844 } });
     const pageC = await ctxC.newPage();
     const errC: string[] = [];
@@ -202,7 +172,7 @@ async function run(): Promise<void> {
     await browser.close();
   }
 
-  console.log("\n══════════════ 真浏览器回归（5 条主链路）══════════════");
+  console.log("\n══════════════ 真浏览器回归（3 条主链路）══════════════");
   let bad = 0;
   for (const r of reports) {
     const markerStr = Object.entries(r.markers)
@@ -218,7 +188,7 @@ async function run(): Promise<void> {
     if (r.netIssues.length) console.log(`   网络非 2xx：${r.netIssues.join(" || ")}`);
   }
   console.log(
-    `\n═══ 汇总：${bad === 0 ? "5 条主链路全部正常 ✓" : `${bad} 条异常 ✗`}` +
+    `\n═══ 汇总：${bad === 0 ? "3 条主链路全部正常 ✓" : `${bad} 条异常 ✗`}` +
       ` · 全站 .rc-tier--miss 出现 ${reports.reduce((s, r) => s + r.missBadges, 0)} 次（应为 0）═══`,
   );
   console.log(
