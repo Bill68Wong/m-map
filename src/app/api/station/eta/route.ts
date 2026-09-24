@@ -77,6 +77,13 @@ interface StationEtaItem {
    *   前端据此做逐秒倒计时（仅横琴线/石排湾线展示到秒；氹仔线只显示分钟）。
    */
   etaSec?: number | null;
+  /**
+   * ★ 2026-09-24 轻轨专用：**下一班发车的绝对时刻**（UTC 毫秒，已含实测偏差 `biasSec`）。
+   *   前端据此用**设备时钟**直接倒计时（不受网络往返 / 服务端缓存延迟影响）。
+   *   背景：旧口径 `etaSec` 是「服务端处理那一刻」的相对快照，命中 20s 缓存时会整体偏大
+   *   （用户实测反馈「时间不准确」）⇒ 改为下发绝对时刻，客户端 `left = depMs − now()`。
+   */
+  depMs?: number | null;
   /** ★ v2.10.1 轻轨专用：该线实测偏差（秒），供透明披露/诊断 */
   biasSec?: number;
 }
@@ -199,8 +206,21 @@ async function lrtItems(
   ).rows as { api_id: string; name_tc: string }[];
   const nameOfApi = new Map(nameRows.map((r) => [r.api_id, lrtStationName(r.name_tc)]));
 
-  /** 取某个 (线路×方向) 在**当日类型**下的下一班 */
-  function nextDeparture(minutes: unknown, firstMin: number, lastMin: number): number | null {
+  /**
+   * 取某个 (线路×方向) 在**当日类型**下的下一班（★ 2026-09-24 改**秒级**判定）。
+   *
+   * 旧口径 `v >= nowMin` 是分钟级：偏差为负（如石排湾 -5s）时，会把「该分钟内实际已开出」的
+   * 班次继续报为下一班（etaSec 夹到 0 显示「即将开出」却迟迟不滚动）⇒ 改为按
+   * **修正后发车秒** `v*60 + biasSec` 与当前秒 `nowSec` 比较，只取仍在未来的最近一班。
+   * @returns 表定发车「当日分钟偏移」（调用方再叠 `biasSec` 得绝对秒）
+   */
+  function nextDeparture(
+    minutes: unknown,
+    firstMin: number,
+    lastMin: number,
+    biasSec: number,
+    nowSec: number,
+  ): number | null {
     let blocks: { hour: number; minutes: number[] }[] = [];
     try {
       blocks = typeof minutes === "string" ? JSON.parse(minutes) : ((minutes as typeof blocks) ?? []);
@@ -214,7 +234,7 @@ async function lrtItems(
     all.sort((a, b) => a - b);
     if (!all.length) return null;
     if (nowMin > lastMin) return null; // 已收班
-    return all.find((v) => v >= nowMin) ?? null;
+    return all.find((v) => v * 60 + biasSec > nowSec) ?? null;
   }
 
   const byKey = new Map<string, { route_no: string; direction: string; minutes: unknown; first_min: number; last_min: number }>();
@@ -228,19 +248,28 @@ async function lrtItems(
   const biasOf = await loadLrtBias(pool);
   /** 当日**秒级**偏移（偏差是秒级，故不能只用分钟） */
   const nowSec = nowMin * 60 + macau.getUTCSeconds();
+  /**
+   * ★ 2026-09-24：澳门当日 00:00 的 **UTC 毫秒**（绝对发车时刻的基准）。
+   *   `nowMs + 8h` 的「日内毫秒」直接扣掉即得当日零点（不依赖任何时区 API）。
+   */
+  const dayStartMs = nowMs - ((nowMs + 8 * 3_600_000) % 86_400_000);
 
   for (const [key, r] of byKey) {
     const [routeNo, direction] = key.split("|");
     const route = LRT_ROUTE_NAME[routeNo] ?? routeNo;
     const biasSec = biasOf.get(route) ?? 0;
-    const next = nextDeparture(r.minutes, r.first_min, r.last_min);
+    // ★ 2026-09-24：秒级选班（偏差为负时，该分钟内实际已开出的班次不再被错报为「下一班」）
+    const next = nextDeparture(r.minutes, r.first_min, r.last_min, biasSec, nowSec);
     /**
      * ★ v2.10.1：**表定发车秒 + 实测偏差 = 实际发车秒**。
      *   例：石排湾线表定 15:00 发车、偏差 -5s ⇒ 实际 14:59:55 ⇒ `nextAt` 报 `14:59`、
-     *   倒计时以 14:59:55 为 0 点（前端把 `etaSec` 按秒递减即可）。
+     *   倒计时以 14:59:55 为 0 点。
+     * ★ 2026-09-24：另下发 `depMs`（绝对时刻）—— 前端用设备时钟直接倒计时，不受缓存/延迟影响。
      */
     const nextSec = next === null ? null : next * 60 + biasSec;
     const etaSec = nextSec === null ? null : Math.max(0, nextSec - nowSec);
+    // ★ 2026-09-24：绝对发车时刻（含偏差）；前端读秒的唯一依据（设备时钟倒计时）
+    const depMs = nextSec === null ? null : dayStartMs + nextSec * 1000;
     // 分钟级（向后兼容旧前端）：向上取整，避免「还有 0 分」却还没发车
     const etaMin = etaSec === null ? null : Math.ceil(etaSec / 60);
 
@@ -254,6 +283,8 @@ async function lrtItems(
       etaMin,
       /** ★ 新增：秒级剩余（前端读秒用；氹仔线只显示分钟、横琴/石排湾显示到秒） */
       etaSec,
+      /** ★ 2026-09-24：绝对发车时刻（UTC 毫秒）——设备时钟倒计时用 */
+      depMs,
       /** ★ 新增：该线实测偏差（秒），供诊断与透明披露 */
       biasSec,
       ok: true,
@@ -272,10 +303,15 @@ export async function GET(req: NextRequest) {
   }
   const main = mainCodeOf(code);
   const nowMs = Date.now();
+  /**
+   * ★ 2026-09-24：轻轨站**跳过内存缓存** —— 数据源是本地库（非 DSAT），查询廉价，
+   *   且必须每次最新：① 发车时刻需按键滚动到「下一班」② `depMs` 绝对时刻不可陈旧。
+   */
+  const isLrt = main.startsWith("LRT-");
 
-  // ① 内存缓存（连点保护）
+  // ① 内存缓存（连点保护；仅巴士 —— 保护 DSAT）
   const cached = g.__stationEtaCache!.get(main);
-  if (cached && nowMs - cached.ts < CACHE_TTL_MS) {
+  if (!isLrt && cached && nowMs - cached.ts < CACHE_TTL_MS) {
     return NextResponse.json(cached.data, { headers: { "Cache-Control": "no-store" } });
   }
 
@@ -338,6 +374,7 @@ export async function GET(req: NextRequest) {
   items.sort((a, b) => (a.etaMin ?? Number.POSITIVE_INFINITY) - (b.etaMin ?? Number.POSITIVE_INFINITY) || a.route.localeCompare(b.route));
 
   const data: StationEtaResponse = { code: main, fetchedAt: new Date(nowMs).toISOString(), items };
-  g.__stationEtaCache!.set(main, { ts: nowMs, data });
+  // ★ 2026-09-24：轻轨不写缓存（见上方 isLrt 说明）——保证时刻滚动与 depMs 新鲜
+  if (!isLrt) g.__stationEtaCache!.set(main, { ts: nowMs, data });
   return NextResponse.json(data, { headers: { "Cache-Control": "no-store" } });
 }

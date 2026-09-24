@@ -16,7 +16,7 @@ const EMPTY_TEXT: Record<string, { title: string; body: string }> = {
   too_close: { title: "距离很近", body: "起点与目的地很近，建议直接步行前往。" },
   no_live: { title: "暂时没有可用的班次", body: "这个时段通往该方向的线路大多已收班，或暂时没有在途车辆。" },
   no_candidate: { title: "找不到可用路线", body: "试试更近的车站，或换一个目的地。" },
-  amap_unavailable: { title: "路网数据暂时不可用", body: "本地也没能算出可用路线。请稍后重试。" },
+  amap_unavailable: { title: "路网数据暂时不可用", body: "暂时没能算出可用路线。请稍后重试。" },
 };
 
 export interface RouteResultPaneProps {
@@ -59,7 +59,7 @@ export default function RouteResultPane({ phase, data, err, onRetry, onCardOpen 
       {data && (
         <>
           {data.degraded && (
-            <div className="nav-degraded t-label">路网数据暂时不可用，以下为本地推算结果</div>
+            <div className="nav-degraded t-label">路网数据暂时不可用，以下为估算结果</div>
           )}
           {empty ? (
             <div className="card rc-empty">

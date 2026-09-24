@@ -88,6 +88,13 @@ export function useSnapSheet(opts: UseSnapSheetOpts): UseSnapSheet {
 
   function onPointerDown(e: React.PointerEvent<HTMLDivElement>) {
     /**
+     * ★ 2026-09-24：**桌面（≥1024）忽略整段拖拽手势**。
+     *   桌面端 CSS 把面板固定为右上栏（`transform:none`、不做 peek）——拖 handle
+     *   不会改变面板视觉，却会改档位 ⇒ 触发地图重取景（用户实测反馈：
+     *   「拖动调整弹窗时后面的地图也会动」）。档位在桌面仅由程序控制。
+     */
+    if (typeof window !== "undefined" && window.matchMedia?.("(min-width: 1024px)").matches) return;
+    /**
      * ★ 2026-09-23：**交互控件不启动拖拽**（否则鼠标口径下头部按钮点击被吞）。
      * 根因：整条 bar（含返回箭头 / 关闭 X / 刷新）都包在 `.route-sheet__handle` 里，
      *   而本函数**无条件** `setPointerCapture` 到 handle ⇒ pointerup/click 被重定向到 handle、

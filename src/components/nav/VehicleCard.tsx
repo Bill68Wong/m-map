@@ -137,7 +137,7 @@ export default function VehicleCard({
       {(count > 1 || !interval) && (
         <p className="nav-vehicle-card__note t-label">
           {count > 1 && `此处合并显示 ${count} 辆车。`}
-          {!interval && " 报站接口未返回行驶区间，仅显示位置与车牌。"}
+          {!interval && " 暂无行驶区间，仅显示位置与车牌。"}
         </p>
       )}
     </section>

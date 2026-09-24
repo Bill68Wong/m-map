@@ -5826,3 +5826,239 @@ body[data-sheet="open"] .nav-searchbar {
     display: none;
   }
 }
+
+/* ══════════════════════════════════════════════════════════════════════
+   ★ 2026-09-24：v2.13 导航追踪（开始导航条 / 站条进度 / 「您」标记 / 可切换方案）
+   · 全部走 Token（换主题零改动）；动效支持 prefers-reduced-motion
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* ── 导航追踪条（详情头部下方）── */
+.nav-track {
+  margin-top: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border: var(--frame-w) solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+}
+.nav-track__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.nav-track__state {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nav-track__hint {
+  color: var(--muted);
+}
+.nav-track__note {
+  margin-top: var(--space-2);
+  color: var(--muted);
+  line-height: var(--leading-body);
+}
+.nav-track__alarm {
+  margin-bottom: var(--space-3);
+  padding: 10px 12px;
+  border-radius: var(--radius-card);
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-weight: var(--fw-emphasize);
+}
+.nav-track__alarm.is-now {
+  background: var(--danger-soft);
+  color: var(--danger);
+  animation: navAlarmPulse 1.2s ease-in-out infinite;
+}
+.nav-track__pick {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+.nav-track__chip {
+  padding: 2px 8px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-chip);
+  background: var(--surface);
+  color: var(--fg-2);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+.nav-track__chip:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+@keyframes navAlarmPulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.72;
+  }
+}
+
+/* ── 站条导航态（已过=绿 / 下一站=蓝 / 下车站=橙 / 到站=红脉动）── */
+.rc-strip__node--passed .rc-strip__label {
+  color: var(--brand-green);
+}
+.rc-strip__node--passed .rc-strip__hop {
+  color: var(--brand-green);
+  opacity: 0.75;
+}
+.rc-strip__node--next .rc-strip__label {
+  color: var(--accent);
+  font-weight: var(--fw-emphasize);
+}
+.rc-strip__node--at .rc-strip__dot {
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.rc-strip__node--alight .rc-strip__label,
+.rc-strip__node--alight .rc-strip__label b {
+  color: var(--warn);
+}
+.rc-strip__node--alight-now .rc-strip__label,
+.rc-strip__node--alight-now .rc-strip__label b {
+  color: var(--danger);
+  font-weight: var(--fw-announce);
+}
+.rc-strip__you {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-1) 0;
+  padding-left: 30px; /* 与站节点文字左缘对齐（圆点 20 + gap） */
+  color: var(--accent);
+  font-size: var(--text-xs);
+  font-weight: var(--fw-emphasize);
+}
+.rc-strip__you-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-soft);
+  animation: navYouPulse 1.6s ease-in-out infinite;
+}
+@keyframes navYouPulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+  50% {
+    box-shadow: 0 0 0 6px var(--accent-soft);
+  }
+}
+
+/* ── 地图「您」标记（TrackLayer；原生 marker 的 DOM content）── */
+.nav-you {
+  position: relative;
+  width: 16px;
+  height: 16px;
+}
+.nav-you__dot {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 14px;
+  height: 14px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  border: 2px solid #fff;
+  box-shadow:
+    0 0 0 2px rgba(27, 77, 143, 0.35),
+    0 0 10px rgba(27, 77, 143, 0.5);
+  animation: navYouPulse 1.6s ease-in-out infinite;
+}
+.nav-you__tag {
+  position: absolute;
+  left: 18px;
+  top: 50%;
+  transform: translateY(-50%);
+  white-space: nowrap;
+  padding: 2px 6px;
+  border-radius: var(--radius-chip);
+  background: var(--accent);
+  color: var(--accent-on);
+  font-size: var(--text-2xs);
+  font-weight: var(--fw-announce);
+  letter-spacing: 0.02em;
+}
+
+/* ── 「本站台其他线路」· 可切换方案行 ── */
+.rc-fold__badge {
+  margin-left: var(--space-2);
+  padding: 1px 6px;
+  border-radius: var(--radius-chip);
+  background: var(--success-soft);
+  color: var(--brand-green-deep);
+  font-size: var(--text-2xs);
+  font-weight: var(--fw-announce);
+  letter-spacing: 0.02em;
+}
+.rc-fold__plans {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: var(--space-3);
+}
+.fold-plan {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border);
+}
+.fold-plan:first-child {
+  border-top: 1px solid var(--border);
+}
+.fold-plan__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.fold-plan__time {
+  color: var(--fg);
+  font-size: var(--text-sm);
+}
+.fold-plan__delta {
+  font-size: var(--text-xs);
+  font-weight: var(--fw-announce);
+  color: var(--muted);
+}
+.fold-plan__delta.is-fast {
+  color: var(--brand-green);
+}
+.fold-plan__delta.is-slow {
+  color: var(--warn);
+}
+.fold-plan__go {
+  flex: none;
+  padding: 4px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-btn);
+  background: var(--surface);
+  color: var(--accent);
+  font-size: var(--text-xs);
+  font-weight: var(--fw-emphasize);
+  cursor: pointer;
+}
+.fold-plan__go:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nav-track__alarm.is-now,
+  .rc-strip__you-dot,
+  .nav-you__dot {
+    animation: none;
+  }
+}

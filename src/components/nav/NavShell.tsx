@@ -50,6 +50,7 @@ import VehicleCard from "./VehicleCard";
 import { queryOf } from "./StepSheet";
 import { useRouteVehicles } from "./useRouteVehicles";
 import { useRouteOverview } from "./useRouteOverview";
+import { useRideTracking } from "./useRideTracking";
 import { DETENTS, detentTopsPx, readSafeTopPx, type Detent } from "./sheet-detents";
 import { unionBox } from "@/lib/nav/route-overview";
 import { useCombos } from "@/lib/favorites/useCombos";
@@ -161,6 +162,15 @@ export default function NavShell({
     rsOpen && pane === "detail",
     ovExtra,
   );
+
+  /** ★ 2026-09-24：乘车追踪（开始导航 → 我已上车 → 实时进度/下车提醒；关闭详情即停） */
+  const ride = useRideTracking({
+    card: pane === "detail" ? detailCard?.card ?? null : null,
+    legs: ov.legs,
+    anchors: ov.body?.legs ?? null,
+    strips: ov.body?.strips ?? null,
+    active: rsOpen && pane === "detail",
+  });
 
   /* ── 舞台操作 ── */
   function openSearch(which: "dest" | "from") {
@@ -291,6 +301,17 @@ export default function NavShell({
           onVehicleClick={onVehicleClick}
           /* ★ 2026-09-23：路线总览（灰底线 + 彩段） */
           overview={detailActive ? ov.legs : null}
+          /* ★ 2026-09-24：导航追踪 ——「您」标记（= 已驶过路径末端点）+ 已驶过路段（绿色覆层） */
+          navYou={
+            detailActive && ride.phase === "riding" && ride.traveled && ride.traveled.length >= 2
+              ? {
+                  lng: ride.traveled[ride.traveled.length - 1][0],
+                  lat: ride.traveled[ride.traveled.length - 1][1],
+                  label: ride.plate ?? "您",
+                }
+              : null
+          }
+          traveled={detailActive && ride.phase === "riding" ? ride.traveled : null}
         />
 
         {/* 品牌栏（三栏网格）：左=空 · 中=换向键+线路标签 · 右=竖排按钮组 */}
@@ -385,7 +406,7 @@ export default function NavShell({
         {/* 车辆位置获取失败提示（不阻塞地图与线路走向） */}
         {rv.error && (
           <div className="nav-banner t-label" role="status">
-            车辆位置：{rv.error}
+            车辆位置暂时不可用
           </div>
         )}
       </div>
@@ -459,6 +480,10 @@ export default function NavShell({
                 body: ov.body,
                 vehicles: ov.vehicles.length,
                 reload: ov.reload,
+                /* ★ 2026-09-24：导航追踪态 + 可切换方案上下文 */
+                track: ride,
+                destCoord: { lng: to.lng, lat: to.lat },
+                onSwitchCard: openDetail,
               }
             : null
         }

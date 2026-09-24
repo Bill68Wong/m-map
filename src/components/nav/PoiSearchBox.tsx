@@ -219,7 +219,7 @@ export default function PoiSearchBox({
           onClick={runSearch}
           disabled={loading || !q.trim()}
           aria-label={`${label}搜索`}
-          title="搜索（本地优先，必要时联网）"
+          title="搜索站点或地点"
         >
           搜索
         </button>
@@ -243,7 +243,7 @@ export default function PoiSearchBox({
               type="button"
               className="nav-sbox__row nav-sbox__row--pending"
               onClick={() => pickPending(p.name)}
-              title="点「搜索」用高德确认坐标"
+              title="点「搜索」获取精确位置"
             >
               {/* ★ 搜索优化（2026-09-21）：pending 现在只可能是「无坐标的站点」
                   ⇒ 徽章按真实类型渲染，不再硬编码「地点」 */}

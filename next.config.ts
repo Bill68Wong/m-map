@@ -1,6 +1,13 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  /**
+   * ★ 2026-09-24：构建目录可被 `NEXT_DIST_DIR` 覆盖（缺省 = 默认 `.next`，线上零影响）。
+   *   动机：本机 `.next` 目录树在构建进程被强杀后出现过 NTFS 级异常状态——
+   *   `next build` 会固定卡在 `EPERM: open '.next/trace'`（清目录/换环境均复现）；
+   *   ⇒ 本地构建与启动统一改用全新目录绕开。⚠️ Vercel 端未设该变量 ⇒ 行为与既有完全一致。
+   */
+  distDir: process.env.NEXT_DIST_DIR || ".next",
   // DSAT 接口仅由服务端调用，无需跨域配置
   experimental: {},
   async rewrites() {

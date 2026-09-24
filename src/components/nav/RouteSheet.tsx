@@ -35,6 +35,7 @@ import RouteResultPane from "./RouteResultPane";
 import { useRecommend } from "./useRecommend";
 import { useSnapSheet } from "./useSnapSheet";
 import type { DetailBody } from "./useDetailBody";
+import type { RideTrackView } from "./useRideTracking";
 import { DETENTS, detentIndex, type Detent } from "./sheet-detents";
 import type { FavoriteEndpoint } from "@/lib/favorites/types";
 import type { RecommendCard } from "@/lib/recommend/types";
@@ -48,6 +49,12 @@ export interface RouteSheetDetail {
   /** 该详情当前在途车辆数（观测钩子 `data-live` 用） */
   vehicles: number;
   reload: () => void;
+  /** ★ 2026-09-24：导航追踪态（宿主注入；缺省 = 静态详情） */
+  track?: RideTrackView | null;
+  /** ★ 目的地坐标（可切换方案查询用） */
+  destCoord?: { lng: number; lat: number } | null;
+  /** ★ 点「切过去」→ 打开新方案导航 */
+  onSwitchCard?: (card: RecommendCard, degraded: boolean) => void;
 }
 
 export interface RouteSheetProps {
@@ -267,6 +274,9 @@ export default function RouteSheet({
               phase={detail.phase === "idle" ? "loading" : detail.phase}
               body={detail.body}
               reload={detail.reload}
+              track={detail.track ?? null}
+              destCoord={detail.destCoord ?? null}
+              onSwitchCard={detail.onSwitchCard}
             />
           )}
         </div>

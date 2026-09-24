@@ -30,7 +30,7 @@
  * ★ 站名/线路名用**繁体**，界面文案用**简体**（§6.2）。
  * ★ 报站的**站数 N** 与「**即将到站**」用 `<b>` + 青花蓝突出（与卡片报站行同款）。
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import RouteStack from "@/components/RouteStack";
 import Icon from "@/components/ui/Icon";
 import { EtaText } from "@/components/RoutePieces";
@@ -60,9 +60,11 @@ interface EtaItem {
   kind?: "bus" | "lrt";
   /** ★ 2026-09-22 轻轨专用：下一班发车时刻 `HH:MM`（**已含实测偏差修正**） */
   nextAt?: string | null;
-  /** ★ v2.10.1 轻轨专用：秒级剩余（服务端算出该值那一刻的快照）
-   *  ★ 2026-09-23：前端以**纯本地时基**递减（见 `baseMs`），不再与服务端时钟混算 */
+  /** ★ v2.10.1 轻轨专用：秒级剩余（服务端算出该值那一刻的快照；新接口已由 depMs 取代） */
   etaSec?: number | null;
+  /** ★ 2026-09-24 轻轨专用：下一班**发车绝对时刻**（UTC 毫秒，已含偏差）。
+   *   倒计时 = `depMs − 设备时钟`（不再折算服务端时基 ⇒ 缓存/网络延迟不影响读数） */
+  depMs?: number | null;
   /** ★ v2.10.1 轻轨专用：该线实测偏差（秒） */
   biasSec?: number;
 }
@@ -81,33 +83,38 @@ function mainCodeOf(code: string): string {
 }
 
 /**
- * 轻轨「还有多久」文案（★ v2.10.1 按用户口径改）。
+ * 轻轨「还有多久」文案（★ 2026-09-24 改为「绝对发车时刻 + 设备时钟」）。
  *
  *   · **氹仔线**（班次密）→「下一班还有 X 分」—— 不显示秒
  *   · **横琴线 / 石排湾线**（班次疏）→「下一班还有 X 分 XX 秒」—— 逐秒递减
  *
- * ⚠️ 剩余时间口径：服务端给 `etaSec`（**已含线路实测偏差修正**，如石排湾线表定 15:00
- *   实际 14:59:55 ⇒ 该值的 0 点即 14:59:55）。
- * ★ 2026-09-23（用户拍板）：读秒基准改为**纯用户端时基** —— 打开弹窗时记录本地
- *   发起/到达时刻，按「往返中点」把服务端剩余秒折算成本地时间轴上的基准点（`baseMs`），
- *   之后 `left = etaSec − (本地现在 − baseMs)` 全程用本地时钟递减。
- *   此前实现把「服务端 fetchedAt（服务端时钟）」与「本地 now（本地时钟）」相减
- *   ⇒ 手机与服务器时钟差几秒时，读秒整体偏慢几秒（用户实测反馈「读秒也延迟几秒」）✗
- *   不再显示「下一班 HH:MM」这种绝对时刻（用户口径：只要「还有多久」）。
+ * ★ 2026-09-24（用户拍板，替代 baseMs 方案）：服务端下发 `depMs`（**发车绝对时刻**，
+ *   已含线路实测偏差）⇒ 倒计时直接 `depMs − 设备时钟`：
+ *   · 完全不受网络往返 / 服务端 20s 缓存延迟影响（旧 `etaSec` 快照命中缓存时会整体偏大）；
+ *   · 不依赖服务端时钟（手机与服务器时钟差不再影响读数）。
+ * 降级：老接口无 `depMs` 时退回 `etaSec` 快照（宁简勿错）。
+ * 不再显示「下一班 HH:MM」这种绝对时刻（用户口径：只要「还有多久」）。
  */
-function lrtEtaText(it: EtaItem, driftSec: number): string {
-  if (it.etaMin === null) return "今日已收班";
+function lrtEtaText(it: EtaItem, nowMs: number): string {
+  if (it.depMs == null && it.etaMin === null) return "今日已收班";
   const withSec = /石排湾|横琴/.test(it.route);
-  // 秒级优先（含偏差修正）；老接口无 etaSec 时降级用 etaMin
-  if (it.etaSec == null) {
-    return it.etaMin <= 0 ? "即将开出" : `下一班还有 ${it.etaMin} 分`;
+  // ★ 首选：绝对时刻（depMs）—— 设备时钟直接倒计时
+  if (it.depMs != null) {
+    const left = Math.max(0, Math.floor((it.depMs - nowMs) / 1000));
+    if (left <= 0) return "即将开出";
+    const m = Math.floor(left / 60);
+    if (!withSec) return m <= 0 ? "即将开出" : `下一班还有 ${m} 分`;
+    return `下一班还有 ${m} 分 ${String(left % 60).padStart(2, "0")} 秒`;
   }
-  const left = Math.max(0, it.etaSec - driftSec);
+  // 降级：老接口（无 depMs）→ etaSec 快照；再无则分钟级
+  if (it.etaSec == null) {
+    return (it.etaMin ?? 0) <= 0 ? "即将开出" : `下一班还有 ${it.etaMin} 分`;
+  }
+  const left = Math.max(0, it.etaSec);
   if (left <= 0) return "即将开出";
   const m = Math.floor(left / 60);
-  const s = left % 60;
   if (!withSec) return m <= 0 ? "即将开出" : `下一班还有 ${m} 分`;
-  return `下一班还有 ${m} 分 ${String(s).padStart(2, "0")} 秒`;
+  return `下一班还有 ${m} 分 ${String(left % 60).padStart(2, "0")} 秒`;
 }
 
 /**
@@ -116,10 +123,10 @@ function lrtEtaText(it: EtaItem, driftSec: number): string {
  * · **轻轨**：时刻表制，显示「下一班还有 …」（见 `lrtEtaText`）
  * ★ 站数 N 与「即将到站」由 `<EtaText>` 加粗 + 青花蓝（通勤决策的关键数字，第一眼可见）。
  */
-function etaNode(it: EtaItem, nowMs: number, baseMs: number) {
+function etaNode(it: EtaItem, nowMs: number) {
   if (it.kind === "lrt") {
-    const driftSec = baseMs ? Math.max(0, Math.floor((nowMs - baseMs) / 1000)) : 0;
-    return <EtaText text={lrtEtaText(it, driftSec)} />;
+    // ★ 2026-09-24：倒计时直接以设备时钟对「绝对发车时刻 depMs」递减（见 lrtEtaText）
+    return <EtaText text={lrtEtaText(it, nowMs)} />;
   }
   if (!it.ok) return <>这条线路暂时取不到报站</>;
   if (it.stopsAway === null) return <>暂无在途车</>;
@@ -148,53 +155,73 @@ export default function StationCard({
   const [items, setItems] = useState<EtaItem[]>([]);
   const [showAllGroups, setShowAllGroups] = useState(false);
   /**
-   * ★ 2026-09-23：**用户端时基**基准点（本地时间轴）——把服务端的 `etaSec` 折算到本地时钟，
-   *   之后读秒完全用本地时钟递减（不再引用服务端时钟，消除两端时钟差导致的读秒延迟）。
-   */
-  const [baseMs, setBaseMs] = useState(0);
-  /**
    * ★ 2026-09-22：秒级倒计时的时钟。
-   *   **只在列表里出现「石排湾线 / 横琴线」时才起定时器**（用户口径：只给这两条读秒），
+   *   **只在需要逐秒刷新时才起定时器**（轻轨含 `depMs`，或列表里出现「石排湾线 / 横琴线」），
    *   否则每秒重渲染纯属浪费。
    */
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
-    const needSec = items.some((it) => /石排湾|横琴/.test(it.route));
+    const needSec = items.some(
+      (it) => it.kind === "lrt" && (it.depMs != null || /石排湾|横琴/.test(it.route)),
+    );
     if (!needSec) return;
     const t = window.setInterval(() => setNowMs(Date.now()), 1000);
     return () => window.clearInterval(t);
   }, [items]);
 
+  /** ★ 2026-09-24：非首屏的「静默重拉」序号（发车到点后滚动到下一班用；不闪加载态） */
+  const [reloadTick, setReloadTick] = useState(0);
+  const lastAutoRefetchRef = useRef(0);
+  /** items 实时镜像（静默重拉时判断是否需要加载态） */
+  const itemsRef = useRef<EtaItem[]>([]);
+  itemsRef.current = items;
+  /** 最近一次取数对应的站码（站码变化 ⇒ 非静默，防串台） */
+  const lastCodeRef = useRef("");
+
+  /**
+   * ★ 2026-09-24：**发车到点自动重拉** —— 倒计时归零后把它滚动到「下一班」。
+   *   轻轨站服务端已跳过缓存（每次都是最新时刻表）⇒ 重拉即生效；4s 护栏防连发。
+   */
+  useEffect(() => {
+    if (phase !== "ready") return;
+    const passed = items.some(
+      (it) => it.kind === "lrt" && it.depMs != null && nowMs - it.depMs > 2_000,
+    );
+    if (!passed) return;
+    if (Date.now() - lastAutoRefetchRef.current < 4_000) return;
+    lastAutoRefetchRef.current = Date.now();
+    setReloadTick((t) => t + 1);
+  }, [items, nowMs, phase]);
+
   useEffect(() => {
     let alive = true;
-    setPhase("loading");
-    setItems([]);
-    setShowAllGroups(false);
-    /** ★ 2026-09-23：请求**发起**时刻（本地时钟） */
-    const t0 = Date.now();
+    /**
+     * ★ 2026-09-24：静默重拉（同站、已有数据、非首屏）不闪加载态、不清空列表；
+     *   站码变化 / 首屏仍按原口径显示加载态。
+     */
+    const codeChanged = lastCodeRef.current !== station.code;
+    lastCodeRef.current = station.code;
+    const silent = !codeChanged && reloadTick > 0 && itemsRef.current.length > 0;
+    if (!silent) {
+      setPhase("loading");
+      setItems([]);
+      setShowAllGroups(false);
+    }
     fetch(`/api/station/eta?code=${encodeURIComponent(station.code)}`, { cache: "no-store" })
       .then((r) => r.json() as Promise<EtaResponse>)
       .then((j) => {
         if (!alive) return;
-        /**
-         * ★ 用户端确认时间点：`etaSec` 是「服务端处理那一刻」的剩余秒；
-         *   请求往返 RTT = t1 − t0，按**往返中点 ≈ 服务端处理时刻**折算到本地时钟：
-         *   `baseMs = t0 + RTT/2` ⇒ 之后 `left = etaSec − (now − baseMs)` 全程本地读秒。
-         *   ⚠️ RTT 补偿上限 2s：极端网络抖动时宁可少补、不可过补（避免读秒反而偏快）。
-         */
-        const t1 = Date.now();
-        const rtt = Math.min(Math.max(0, t1 - t0), 2_000);
-        setBaseMs(t0 + Math.round(rtt / 2));
         setItems(Array.isArray(j.items) ? j.items : []);
         setPhase("ready");
       })
       .catch(() => {
-        if (alive) setPhase("failed");
+        if (!alive) return;
+        if (!silent) setPhase("failed");
       });
     return () => {
       alive = false;
     };
-  }, [station.code]);
+  }, [station.code, reloadTick]);
 
   const main = mainCodeOf(station.code);
   /**
@@ -258,7 +285,7 @@ export default function StationCard({
               <div className="nav-station-card__row" key={`${it.route}-${it.dir}`}>
                 <RouteStack codes={[it.route]} colorOf={(c) => colors[c] ?? null} size="sm" />
                 <span className="nav-station-card__dir t-label t-muted">{it.dirLabel}</span>
-                <span className="nav-station-card__eta t-label">{etaNode(it, nowMs, baseMs)}</span>
+                <span className="nav-station-card__eta t-label">{etaNode(it, nowMs)}</span>
               </div>
             ));
             // ★ 单分组（或无 platform）→ 不显示分组容器与子码行（向后兼容）

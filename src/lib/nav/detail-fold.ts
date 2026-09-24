@@ -80,26 +80,29 @@ export async function foldLiveAt(
 
 /**
  * 由「已算好的卡」直接组装折叠栏所需的三件套（页面与弹窗共用）：
- * `{ lastAlightMain, otherRoutes, foldLive, stationLabel }`。
- * `card` 只用到 `rides[].route/alight/alightLabel`（结构兼容 `RecommendCard`）。
+ * `{ otherRoutes, foldLive, stationLabel }`。
+ *
+ * ★ 2026-09-24 重构（用户口径）：站台 = **第一程「上车站」**（原为末程下车站——「都搞错了」）。
+ *   目的：用户在站台等车/没赶上本班时，可就地看**同一站台**还有哪些线路可换乘到目的地。
+ * `card` 只用到 `rides[].route/board/boardLabel`（结构兼容 `RecommendCard`）。
  */
 export async function foldDataOfCard(
   pool: Pool,
   st: RecStatic,
-  card: { rides: { route: string; alight: string; alightLabel?: string }[] },
+  card: { rides: { route: string; board: string; boardLabel?: string }[] },
   nowMs: number,
 ): Promise<{
   otherRoutes: string[];
   foldLive: Record<string, string>;
   stationLabel: string | null;
 }> {
-  const lastRide = card.rides[card.rides.length - 1];
-  const lastAlightMain = lastRide ? mainCodeOf(lastRide.alight) : null;
-  const otherRoutes = lastAlightMain ? otherRoutesAt(st, lastAlightMain, card.rides.map((r) => r.route)) : [];
-  const foldLive = lastAlightMain ? await foldLiveAt(pool, st, lastAlightMain, otherRoutes, nowMs) : {};
+  const firstRide = card.rides[0];
+  const firstBoardMain = firstRide ? mainCodeOf(firstRide.board) : null;
+  const otherRoutes = firstBoardMain ? otherRoutesAt(st, firstBoardMain, card.rides.map((r) => r.route)) : [];
+  const foldLive = firstBoardMain ? await foldLiveAt(pool, st, firstBoardMain, otherRoutes, nowMs) : {};
   return {
     otherRoutes,
     foldLive,
-    stationLabel: lastRide?.alightLabel ?? lastAlightMain ?? null,
+    stationLabel: firstRide?.boardLabel ?? firstBoardMain ?? null,
   };
 }

@@ -189,7 +189,7 @@ export default function CardDetailClient({
               在 <b>{first?.boardLabel ?? card.walkOut.toLabel}</b> 上车
               <span className="rc-sub">
                 （站台 {first?.board ?? "—"} ·{" "}
-                {card.walkOut.samples ? `步行样本 ${card.walkOut.samples} 次` : "步行为兜底值"}）
+                {card.walkOut.samples ? `步行样本 ${card.walkOut.samples} 次` : "步行按默认值估算"}）
               </span>
             </>
           }

@@ -140,7 +140,7 @@ async function loadStationMapCached(pool: Pool, force = false): Promise<StationM
 }
 
 /** 站点地理（主码去重；**WGS84**，供本地图枚举的近站筛选） */
-async function loadStationGeoCached(pool: Pool, force = false): Promise<GeoStation[]> {
+export async function loadStationGeoCached(pool: Pool, force = false): Promise<GeoStation[]> {
   const c = g.__navCaches!.geo;
   if (!force && c && Date.now() - c.ts < TTL_MS) return c.data;
   const res = await pool.query(`SELECT code, lat, lng FROM stations WHERE lat IS NOT NULL AND lng IS NOT NULL`);
@@ -158,7 +158,7 @@ async function loadStationGeoCached(pool: Pool, force = false): Promise<GeoStati
 
 /** ★ P1-4：`walk_cache` 内存索引（供**本地/降级**路径的首末步行解析器；表小，整体载入） */
 const gWalk = globalThis as unknown as { __navWalkCache?: { ts: number; data: WalkCacheMap } };
-async function loadWalkCacheCached(pool: Pool, force = false): Promise<WalkCacheMap> {
+export async function loadWalkCacheCached(pool: Pool, force = false): Promise<WalkCacheMap> {
   const c = gWalk.__navWalkCache;
   if (!force && c && Date.now() - c.ts < TTL_MS) return c.data;
   const m: WalkCacheMap = new Map();

@@ -30,9 +30,10 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { isInsideRings, loadMacauDistrict, maskOuterRing, type MacauDistrict } from "@/lib/amap/district";
-import { DECIMATE_STEP_M, decimate, type ColoredLeg } from "@/lib/nav/route-overview";
+import { DECIMATE_STEP_M, decimate, type ColoredLeg, type LL } from "@/lib/nav/route-overview";
 import { loadAMap } from "./amap-loader";
 import { lrtTransferVariantOf } from "./lrt-transfer";
+import TrackLayer from "./TrackLayer";
 import VehicleLayer from "./VehicleLayer";
 import type { VehicleLite } from "./VehicleMarker";
 
@@ -149,6 +150,33 @@ function zoomForAcross(lat: number, widthPx: number): number {
   return Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.round(z * 100) / 100));
 }
 
+/**
+ * ★ 2026-09-24：读「半屏可出发」面板（`.rpanel`）的**真实顶边像素**（取景用）。
+ * 为什么：`dest-center-top` / `fit-two` 此前把「下半屏被面板遮住」**写死成 50%**——
+ *   而 RoutePanel 的高度随内容变化（且桌面端是右栏、非底部面板）⇒ 取景与实际遮挡不吻合。
+ * 读不到 / 数值异常（桌面右栏 / 元素隐藏 / SSR）⇒ 返回 null，调用方回落旧口径。
+ */
+function panelTopPx(fallbackH: number): number | null {
+  try {
+    const el = document.querySelector<HTMLElement>(".rpanel");
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    if (!r || r.height <= 0) return null;
+    const top = Math.round(r.top);
+    if (top < 80 || top > fallbackH - 40) return null; // 异常值 ⇒ 回落
+    return top;
+  } catch {
+    return null;
+  }
+}
+
+/** ★ 2026-09-24：读设计 Token `--map-fit-gap`（px）——取景呼吸边距（此前悬空未接线）；回落 20 */
+function fitGapPx(): number {
+  const v = readToken("--map-fit-gap");
+  const n = v ? Number.parseFloat(v) : Number.NaN;
+  return Number.isFinite(n) && n > 0 && n < 200 ? n : 20;
+}
+
 export interface NavMapProps {
   /** Web 端（JS API）Key（服务端以 prop 传入） */
   jsKey: string;
@@ -222,6 +250,16 @@ export interface NavMapProps {
    */
   overview?: ColoredLeg[] | null;
   /**
+   * ★ 2026-09-24：**导航追踪 · 「您」标记**（锁定车辆的实时位置）。
+   *   非空 ⇒ 画一个「您」圆点（原生 marker z140 > 车辆 130）；`null` ⇒ 移除（退出追踪）。
+   */
+  navYou?: { lng: number; lat: number; label?: string } | null;
+  /**
+   * ★ 2026-09-24：**导航追踪 · 已驶过路段**（绿色覆层 polyline，z74 —— 压在乘车彩段 72 之上）。
+   *   路径 = 乘车段 polyline 由车辆实时投影切割所得（`useRideTracking`）；`null` ⇒ 不画。
+   */
+  traveled?: LL[] | null;
+  /**
    * 重新定位触发计数（右上定位按钮）—— 变化时重跑一次定位并（范围内）居中。
    * 初始为 0 时不触发（首屏定位由 `init()` 负责）。
    */
@@ -247,6 +285,8 @@ export default function NavMap({
   vehicles = NO_VEHICLES,
   onVehicleClick,
   overview = null,
+  navYou = null,
+  traveled = null,
 }: NavMapProps) {
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<any>(null);
@@ -612,9 +652,15 @@ export default function NavMap({
         //     ③ 留白提到 70% ⇒ **过度矫正，标记被推出视野**。
         //   ⇒ 正解：先**无动画**居中，再平移固定比例 —— 可控且可预期。
         map.setZoomAndCenter(16, [dest.lng, dest.lat], true);
-        const ch: number = map.getSize?.()?.height ?? winH;
-        // 上移 1/5 容器高：使该点落在「上半屏（弹窗上方的可见区）中部」而不是整屏中心
-        map.panBy(0, Math.round(ch * 0.2));
+        const size = map.getSize?.() ?? { width: 390, height: winH };
+        const h: number = size.height ?? winH;
+        /**
+         * ★ 2026-09-24：改按**真实遮挡区**取景 —— 读 RoutePanel（`.rpanel`）真实顶边，
+         *   把点从整屏中心抬到「面板上方可见区」的中心；读不到（桌面右栏 / 异常）⇒
+         *   回落旧口径「上移 1/5 屏」。
+         */
+        const panelTop = panelTopPx(h);
+        map.panBy(0, panelTop !== null ? Math.round(h / 2 - panelTop / 2) : Math.round(h * 0.2));
       } catch {
         /* ignore */
       }
@@ -633,23 +679,21 @@ export default function NavMap({
        *
        * 现改为**完全自算**，不依赖任何 marker 或 fitView：
        *   ① 中心 = 两点中点；
-       *   ② 由经纬跨度**反推 zoom**（留 2.2 倍余量），并**只用上半屏**的可用像素，
-       *      因为下半屏被面板遮住；
-       *   ③ `setZoomAndCenter(..., immediately=true)` 无动画落位，再 `panBy` 上移 1/4 屏，
-       *      使两点落在**上半屏中间**。
+       *   ② 由经纬跨度**反推 zoom**（留 1.25 倍余量），可用像素 = **未被面板遮挡的区域**；
+       *   ③ `setZoomAndCenter(..., immediately=true)` 无动画落位，再 `panBy` 把中点抬到
+       *      「可见槽中心」。
+       * ★ 2026-09-24：可用高度由「写死半屏」改为 **RoutePanel 真实顶边**（读不到回落半屏）。
        */
       try {
         const centerLat = (origin.lat + dest.lat) / 2;
         const centerLng = (origin.lng + dest.lng) / 2;
         const size = map.getSize?.() ?? { width: 390, height: 700 };
-        // 可用视野（★ 2026-09-22 三次修正）：
-        //   宽：留 50px/侧（marker 宽约 30px + 呼吸位）。
-        //   高：**下半屏被弹窗完全遮住**，所以只用上半屏；只留 20px 顶/底呼吸位
-        //      （上一版多减了 40px，等于白白缩了一档 zoom）。
+        // 可用视野：宽留 50px/侧（marker 宽约 30px + 呼吸位）；高 = 面板顶边以上，留 20px 呼吸位
         const availW = Math.max(80, size.width - 100);
-        const availH = Math.max(80, Math.round(size.height / 2) - 20);
-        // 两点跨度 × **1.25**：让两点占据可用区的大部分（上一版取 2.8 太保守 ⇒ zoom 被压到 11）✓
-        //   ×1.25 的含义：两点跨度只用掉可视区的 80%，余 20% 给 marker 尺寸与呼吸位。
+        const panelTop = panelTopPx(size.height);
+        const slotTop = panelTop !== null ? panelTop : Math.round(size.height / 2);
+        const availH = Math.max(80, slotTop - 20);
+        // 两点跨度 × 1.25：让两点占据可用区的大部分（取 2.8 会太保守 ⇒ zoom 被压到 11）
         const lngSpan = Math.max(Math.abs(origin.lng - dest.lng) * 1.25, 1e-5);
         const latSpan = Math.max(Math.abs(origin.lat - dest.lat) * 1.25, 1e-5);
         const zx = Math.log2((360 * availW) / (256 * lngSpan));
@@ -659,9 +703,8 @@ export default function NavMap({
         // 下限 12：跨全澳的远距离 OD 也至少能看清陆地方位；上限 16：两点很近时不要怼到街景级
         const z = Math.max(12, Math.min(16, Math.floor(Math.min(zx, zy))));
         map.setZoomAndCenter(z, [centerLng, centerLat], true);
-        // ★ 上移 1/4 容器高：把「两点中点」从整屏中心抬到**上半屏中心**（= size.height/4）。
-        //   这一版 zoom 已到 12（两点只占屏高约 1/3），上移 1/4 不会把靠下的点推出可见区。
-        map.panBy(0, Math.round(size.height / 4));
+        // 把「两点中点」从整屏中心抬到「可见槽中心」；回落口径 = 上移 1/4 屏
+        map.panBy(0, panelTop !== null ? Math.round(size.height / 2 - panelTop / 2) : Math.round(size.height / 4));
         canvasRef.current?.setAttribute("data-nav-zoom", String(z));
         canvasRef.current?.setAttribute("data-view-mode", "fit-two-selfcalc");
       } catch {
@@ -674,6 +717,7 @@ export default function NavMap({
      * ★ 2026-09-23：`fit-box` —— 把外包框适配进「面板顶边以上的可视槽」（自算，禁 setBounds）。
      * `slotTopPx` = 当前档面板顶边像素（full≈12vh / half=50vh / peek=80vh）；
      * 复用 `fit-two` 的反推 zoom 逻辑（宽/高按可用区，留呼吸位），再把框中心抬到「顶部槽中心」。
+     * ★ 2026-09-24：呼吸边距接上设计 Token `--map-fit-gap`（此前悬空未接线；回落 20）。
      */
     if (view.mode === "fit-box") {
       const box = view.box;
@@ -683,9 +727,10 @@ export default function NavMap({
         const slotTop = Math.max(80, Math.round(view.slotTopPx ?? size.height * 0.12));
         const centerLat = (box.minLat + box.maxLat) / 2;
         const centerLng = (box.minLng + box.maxLng) / 2;
-        // 可用区：宽留 50px/侧；高只用「顶边以上区域」，上下各留 20px 呼吸位
+        // 可用区：宽留 50px/侧；高只用「顶边以上区域」，上下各留 gap 呼吸位
+        const gap = fitGapPx();
         const availW = Math.max(80, size.width - 100);
-        const availH = Math.max(80, slotTop - 40);
+        const availH = Math.max(80, slotTop - gap * 2);
         const lngSpan = Math.max((box.maxLng - box.minLng) * 1.25, 1e-5);
         const latSpan = Math.max((box.maxLat - box.minLat) * 1.25, 1e-5);
         const zx = Math.log2((360 * availW) / (256 * lngSpan));
@@ -1152,6 +1197,14 @@ export default function NavMap({
         enabled={phase === "ready"}
         vehicles={vehicles}
         onVehicleClick={onVehicleClick}
+      />
+      {/* ★ 2026-09-24：导航追踪（「您」标记 z140 + 已驶过路段绿色覆层 z74） */}
+      <TrackLayer
+        map={phase === "ready" ? mapRef.current : null}
+        amap={phase === "ready" ? amapRef.current : null}
+        enabled={phase === "ready"}
+        you={navYou}
+        traveled={traveled}
       />
       {phase === "loading" && (
         <div className="nav-map__cover">

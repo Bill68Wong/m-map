@@ -477,7 +477,7 @@ export default function ComboEditor({ combo, colors, readOnly, onClose }: ComboE
         预览：
         {preview.segCount > 0 ? `${preview.segCount} 段` : "未编排（自动选线）"}
         {` · ${preview.transfers} 次换乘`}
-        {preview.known && preview.totalMin !== null ? ` · 步行合计约 ${preview.totalMin} 分` : " · 步行含自动段（合计待服务端算）"}
+        {preview.known && preview.totalMin !== null ? ` · 步行合计约 ${preview.totalMin} 分` : " · 步行含自动段（合计稍后计算）"}
       </div>
 
       {/* 未保存二次确认（08 §C.3(c)） */}

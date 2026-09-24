@@ -251,7 +251,7 @@ export default function SearchSheet({
               className="ssheet__go"
               onClick={runSearch}
               disabled={loading || !q.trim()}
-              title="搜索（本地优先，必要时联网）"
+              title="搜索站点或地点"
             >
               搜索
             </button>
@@ -343,7 +343,7 @@ export default function SearchSheet({
                 type="button"
                 className="ssheet__item ssheet__item--pending"
                 onClick={() => void pickPending(p.name)}
-                title="点「搜索」用高德确认坐标"
+                title="点「搜索」获取精确位置"
               >
                 <span className={`ssheet__type ssheet__type--${p.targetKind}`}>
                   {TYPE_LABEL[p.targetKind as PoiKind] ?? "站点"}

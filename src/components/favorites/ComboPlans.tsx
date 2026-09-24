@@ -206,13 +206,13 @@ export default function ComboPlans({ combo, colors, onExit }: ComboPlansProps) {
         <>
           <p className="fav-note t-label t-muted">
             {/* ★ 2026-09-22：明确告知数据来源 —— 只有本组合的预设路线参与排序 */}
-            只按本组合的 {presetTotal || "…"} 条预设路线排序（不掺高德 / 本地模型方案）
+            只按本组合的 {presetTotal || "…"} 条预设路线排序
             {liveCombo.plans.length > 0 ? ` · 另有 ${liveCombo.plans.length} 条历史保存` : ""}
           </p>
 
           {degraded && (
             <p className="nav-degraded t-label" role="status">
-              路网数据暂时不可用，以下为本地推算结果
+              路网数据暂时不可用，以下为估算结果
             </p>
           )}
 

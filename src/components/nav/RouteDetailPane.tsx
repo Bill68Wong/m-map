@@ -7,6 +7,11 @@
  *   · `RouteSheet` 宿主的 detail pane（主页「出发 → 推荐 → 详情」）；
  *   · 收藏页 `RouteDetailSheet` 薄壳。
  * 数据由调用方下发（宿主用 `useRouteOverview`，收藏壳用 `useDetailBody`）⇒ 防两处漂移。
+ *
+ * ★ 2026-09-24：新增三类透传（均可选，收藏薄壳不传 ⇒ 与旧行为一致）：
+ *   · `track`       —— 导航追踪态（开始导航 / 我已上车 / 实时进度 / 下车提醒）；
+ *   · `destCoord`   —— 目的地坐标（「本站台其他线路 · 可切换方案」查询用）；
+ *   · `onSwitchCard`—— 折叠栏「切过去」→ 打开新方案导航（宿主提供）。
  */
 import { useMemo } from "react";
 import RouteDetailBody from "./RouteDetailBody";
@@ -14,6 +19,7 @@ import { snapshotOfCard, routeSegsOfCard } from "@/lib/favorites/snapshot";
 import type { FavoriteEndpoint } from "@/lib/favorites/types";
 import type { RecommendCard } from "@/lib/recommend/types";
 import type { DetailBody } from "./useDetailBody";
+import type { RideTrackView } from "./useRideTracking";
 
 export interface RouteDetailPaneProps {
   card: RecommendCard;
@@ -29,6 +35,12 @@ export interface RouteDetailPaneProps {
   phase: "loading" | "ready" | "failed";
   body: DetailBody | null;
   reload: () => void;
+  /** ★ 2026-09-24：导航追踪态（主页链注入；收藏薄壳不传 = 静态详情） */
+  track?: RideTrackView | null;
+  /** ★ 2026-09-24：目的地坐标（GCJ-02；可切换方案查询用） */
+  destCoord?: { lng: number; lat: number } | null;
+  /** ★ 2026-09-24：点「切过去」→ 打开新方案导航 */
+  onSwitchCard?: (card: RecommendCard, degraded: boolean) => void;
 }
 
 export default function RouteDetailPane({
@@ -41,6 +53,9 @@ export default function RouteDetailPane({
   phase,
   body,
   reload,
+  track = null,
+  destCoord = null,
+  onSwitchCard,
 }: RouteDetailPaneProps) {
   /** 收藏数据（纯函数在客户端现算：指纹 / 快照 / 流程图结构） */
   const favData = useMemo(() => {
@@ -85,6 +100,9 @@ export default function RouteDetailPane({
           destLabel={destLabel}
           fav={favData}
           degraded={degraded}
+          track={track}
+          destCoord={destCoord}
+          onSwitchCard={onSwitchCard}
         />
       )}
     </div>
