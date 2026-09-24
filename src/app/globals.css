@@ -5675,6 +5675,29 @@ button[aria-disabled="true"] {
 .route-sheet[data-detent="peek"] .route-sheet__peek {
   display: block;
 }
+/* ★ 2026-09-24：peek 档独立关闭键（右上角）——bar 的 X 被本摘要层遮挡，
+   且推荐层已禁用"下拉关闭"⇒ 此处提供唯一可见的关闭途径（按 pane 语义：推荐=关面板 / 详情=回推荐） */
+.route-sheet__peek-close {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 5;
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.route-sheet__peek-close:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
 .route-sheet[data-detent="peek"] .route-sheet__handle {
   display: none;
 }

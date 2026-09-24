@@ -46,6 +46,11 @@ export interface UseSnapSheetOpts {
   onDetentChange: (d: Detent) => void;
   /** contextual 关闭（pane 决定语义；调用方处理） */
   onDismiss: () => void;
+  /**
+   * ★ 2026-09-24：是否允许「最低档继续下拉关闭」。
+   *   推荐 pane 传 `false` ⇒ 拉到底**硬停/回弹**（不再整体拖没）；详情 pane 传 `true`（下拉 = 回推荐）。
+   */
+  dismissible?: boolean;
 }
 
 export interface UseSnapSheet {
@@ -62,7 +67,7 @@ export interface UseSnapSheet {
 }
 
 export function useSnapSheet(opts: UseSnapSheetOpts): UseSnapSheet {
-  const { open, detent, topsPx, onDetentChange, onDismiss } = opts;
+  const { open, detent, topsPx, onDetentChange, onDismiss, dismissible = true } = opts;
   const [dragPx, setDragPx] = useState(0);
   const [dragging, setDragging] = useState(false);
   const moved = useRef(false);
@@ -155,8 +160,10 @@ export function useSnapSheet(opts: UseSnapSheetOpts): UseSnapSheet {
     const dt = Math.max(1, performance.now() - d.t0);
     const v = rawDy / dt; // px/ms，向下为正
 
-    // ① contextual 关闭：仅最低档 peek 才允许「继续下拉关闭」
-    if (index === last && (rawDy > CLOSE_DIST || (v > FLICK_V && rawDy > CLOSE_MIN_DIST))) {
+    // ① contextual 关闭：仅最低档 peek **且 dismissible** 才允许「继续下拉关闭」
+    //    ★ 2026-09-24：推荐 pane 传 dismissible=false ⇒ 拉到底硬停（走下方回弹分支落回 peek），
+    //    不再"整体拖没"；关闭改走 X 键。详情 pane 保持 true（下拉 = 回推荐）。
+    if (dismissible && index === last && (rawDy > CLOSE_DIST || (v > FLICK_V && rawDy > CLOSE_MIN_DIST))) {
       onDismiss();
       return;
     }

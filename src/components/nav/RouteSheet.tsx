@@ -90,6 +90,12 @@ export default function RouteSheet({
     topsPx,
     onDetentChange,
     onDismiss: onContextClose,
+    /**
+     * ★ 2026-09-24（用户实测反馈）：推荐 pane **禁用**「最低档继续下拉关闭」——
+     *   拉到底硬停/回弹，不再"整体拖没"；关闭走 X 键。
+     *   详情 pane 保留（下拉 = 回推荐列表）。
+     */
+    dismissible: pane === "detail",
   });
 
   /** peek 点整区 → 回该 pane 的默认档（推荐→full / 详情→half） */
@@ -152,6 +158,7 @@ export default function RouteSheet({
       onPointerUp={snap.onPointerUp}
       onPeekTap={() => onDetentChange(defaultDetent)}
       peekTapGuard={snap.tapOk}
+      onDismiss={onContextClose}
       bar={
         <>
           {pane === "detail" && detail && (

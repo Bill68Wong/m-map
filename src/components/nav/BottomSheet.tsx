@@ -24,6 +24,7 @@
  * ⚠️ 必须挂在 `.nav-map-wrap` **之外**（wrap 是层叠上下文，挂进去会被底部 chrome 压住）。
  */
 import type { CSSProperties, PointerEvent, ReactNode } from "react";
+import Icon from "@/components/ui/Icon";
 import type { Detent } from "./sheet-detents";
 
 export interface BottomSheetProps {
@@ -46,6 +47,12 @@ export interface BottomSheetProps {
   /** 点 peek 区回该 pane 默认档（`peekTapGuard()` 为 false 时忽略，避免拖完误触） */
   onPeekTap: () => void;
   peekTapGuard: () => boolean;
+  /**
+   * ★ 2026-09-24：peek 档的**关闭途径**（设计规范：「peek 仅留抓手 + 摘要 + 关闭途径」）。
+   *   背景：推荐层禁用"下拉关闭"后，bar 上的 X 会被 peek 摘要层（z3）盖住
+   *   ⇒ 在摘要层右上角提供独立关闭键；不传则不渲染。
+   */
+  onDismiss?: () => void;
   /** 非 peek 头部（OD + 动作键） */
   bar: ReactNode;
   /** peek 摘要内容（不含 grip） */
@@ -69,6 +76,7 @@ export default function BottomSheet({
   onPointerUp,
   onPeekTap,
   peekTapGuard,
+  onDismiss,
   bar,
   peek,
   children,
@@ -130,6 +138,20 @@ export default function BottomSheet({
       >
         <span className="route-sheet__grip" aria-hidden="true" />
         {peek}
+        {/* ★ 2026-09-24：peek 档独立关闭键（bar 的 X 被本摘要层遮挡；推荐层又已禁用下拉关闭） */}
+        {onDismiss && (
+          <button
+            type="button"
+            className="route-sheet__peek-close"
+            aria-label="关闭面板"
+            onClick={(e) => {
+              e.stopPropagation(); // 不触发 peek 整区的「回默认档」
+              onDismiss();
+            }}
+          >
+            <Icon name="close" size={20} />
+          </button>
+        )}
       </div>
     </section>
   );

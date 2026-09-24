@@ -485,8 +485,10 @@ export default function NavShell({
         />
       )}
 
-      {/* ── 半屏起终点面板 ── */}
-      {stage === "panel" && (
+      {/* ── 半屏起终点面板 ──
+          ★ 2026-09-24：面板（RouteSheet）打开期间**整体隐藏**——否则它在 z55 持续渲染，
+          推荐面板被拖到 peek 档（只占底部）时，会从面板后方露出（用户实测反馈）。 */}
+      {stage === "panel" && !rsOpen && (
         <RoutePanel
           dest={to}
           from={from}
