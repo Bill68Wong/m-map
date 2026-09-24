@@ -1,6 +1,6 @@
 {
   "name": "must-dengxiao",
-  "version": "2.12.1",
+  "version": "2.12.2",
   "private": true,
   "description": "MUST登校 · 擎天汇↔澳门科技大学↔横琴 通勤计时与数据采集系统",
   "scripts": {

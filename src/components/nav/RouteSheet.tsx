@@ -91,11 +91,11 @@ export default function RouteSheet({
     onDetentChange,
     onDismiss: onContextClose,
     /**
-     * ★ 2026-09-24（用户实测反馈）：推荐 pane **禁用**「最低档继续下拉关闭」——
-     *   拉到底硬停/回弹，不再"整体拖没"；关闭走 X 键。
-     *   详情 pane 保留（下拉 = 回推荐列表）。
+     * ★ 2026-09-24（用户实测反馈·二轮）：**两个 pane 统一禁用**「最低档继续下拉关闭」——
+     *   拉到底一律硬停/回弹，不再"整体拖没"（详情层此前下拉会退回推荐页，用户要求一致硬停）。
+     *   关闭途径：推荐层 = bar 的 X / peek 关闭键；详情层 = bar 返回箭头 / peek 关闭键（= 回推荐）。
      */
-    dismissible: pane === "detail",
+    dismissible: false,
   });
 
   /** peek 点整区 → 回该 pane 的默认档（推荐→full / 详情→half） */
