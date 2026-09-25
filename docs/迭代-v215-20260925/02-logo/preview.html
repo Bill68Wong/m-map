@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>M Map · 品牌标志（第二轮：M×钉 深度融合）· 终点钉 · 慢速色 — v2.15</title>
+<title>M Map · 品牌标志（第四轮：短钉 × 两站/三站 × 留缝/无缝 组合对比）— v2.15</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
@@ -29,6 +29,7 @@
     --brand-green-soft: #dcebe2;
     --brand-green-dk: #6dd58c;
     --plate-dark: #14161c;
+    --map-stage: #dfe4da;
     --warn: #a85e00;
     --danger: #b4342a;
     --slow-ink: #8a6400;
@@ -51,7 +52,8 @@
   .wrap { max-width: 1120px; margin: 0 auto; }
 
   /* ── 页头 ── */
-  .masthead { display: flex; align-items: center; gap: 16px; padding-bottom: 20px; border-bottom: 1px solid var(--border); }
+  .masthead { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; padding-bottom: 20px; border-bottom: 1px solid var(--border); }
+  .masthead > div { min-width: 0; }
   .masthead svg { flex: none; }
   .masthead__t { font-size: 22px; font-weight: 700; letter-spacing: -0.01em; }
   .masthead__s { font-size: 13px; color: var(--muted); margin-top: 2px; }
@@ -153,6 +155,51 @@
   .diag { font-size: 12.5px; color: var(--muted); }
   .diag b { color: var(--fg-2); }
 
+  /* ── 第三轮 · 变体对比 ── */
+  .cmp { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); }
+  @media (max-width: 760px) { .cmp { grid-template-columns: 1fr; } }
+  .cmp__col {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-card);
+    padding: var(--space-5); display: flex; flex-direction: column; gap: 12px;
+  }
+  .cmp__col--pick { border-color: var(--border-strong); }
+  .cmp__hd { display: flex; align-items: center; gap: 8px; }
+  .cmp__tag { font-family: var(--font-mono); font-size: 12px; color: var(--accent); }
+  .cmp__t { font-size: 16.5px; font-weight: 700; letter-spacing: -0.01em; }
+  .cmp__pick {
+    margin-left: auto; font-size: 11px; font-weight: 700; letter-spacing: .04em;
+    color: var(--surface); background: var(--brand-green); border-radius: 999px; padding: 3px 9px;
+  }
+  .cmp__stage {
+    background: var(--map-stage); border-radius: var(--radius-btn);
+    display: grid; place-items: center; padding: 14px; min-height: 184px;
+  }
+  .cmp__stage svg { display: block; }
+  .cmp__note { font-size: 13px; color: var(--fg-2); margin: 0; }
+  .cmp__note b { color: var(--fg); font-weight: 700; }
+  .cmp__note em { font-style: normal; color: var(--accent); font-weight: 600; }
+  .cmp__kv { font-family: var(--font-mono); font-size: 11.5px; color: var(--meta); margin: 0; }
+  .cmp__mini { display: flex; align-items: flex-end; gap: 22px; justify-content: center; padding-top: 4px; }
+  .cmp__mini figure { margin: 0; text-align: center; }
+  .cmp__mini figcaption { font-family: var(--font-mono); font-size: 10.5px; color: var(--meta); margin-top: 6px; }
+  .zoomrow { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 14px 18px; }
+  .zoomfig { margin: 0; text-align: center; flex: 0 1 auto; min-width: 0; }
+  .zoomfig svg { width: 100%; height: auto; display: block; }
+  .zoomfig figcaption { font-size: 11px; color: var(--muted); margin-top: 6px; }
+  .zoomrow__arrow { font-family: var(--font-mono); font-size: 18px; color: var(--meta); }
+
+  .cmp__lgd { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+  .cmp__lgd i { display: inline-block; width: 18px; height: 0; border-top-width: 2px; border-top-style: dashed; vertical-align: 4px; margin-right: 6px; }
+  .lgd-foot i { border-top-color: var(--danger); }
+  .lgd-tip i { border-top-color: var(--brand-green); }
+  /* 第四轮图例 */
+  .lgd-slot i {
+    width: 12px; height: 12px; border: 2px solid var(--accent); border-radius: 999px;
+    border-top-style: solid; border-top-color: var(--accent); vertical-align: -2px;
+  }
+  .lgd-join i { border-top-style: solid; border-top-color: var(--accent); }
+  .lgd-gap i { border-top-color: var(--brand-green); }
+
   /* ── 慢速色 ── */
   .swatches { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--space-4); }
   .sw { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-card); padding: var(--space-4); }
@@ -216,19 +263,395 @@
 
   <header class="masthead">
     <svg viewBox="0 0 64 64" width="52" height="52" aria-label="M Map" role="img">
-      <path d="M12 48 L12 16 L30 34 L48 16" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" />
+      <path d="M12 48 L12 16 L30 34 L37.5 26.5" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" />
       <circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
       <circle cx="30" cy="34" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
-      <path d="M15.06 23.87 L21 25 L19.87 19.06" fill="none" stroke="var(--surface)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
-      <path d="M40.2 17.78 L48 52 L55.8 17.78 A8 8 0 1 0 40.2 17.78 Z" fill="var(--brand-green)" />
+      <path d="M40.15 17.52 L48 58 L55.85 17.52 A8 8 0 1 0 40.15 17.52 Z" fill="var(--brand-green)" />
       <circle cx="48" cy="16" r="2.7" fill="var(--surface)" />
     </svg>
     <div>
-      <div class="masthead__t">品牌标志（第二轮）· 终点钉 · 慢速色</div>
-      <div class="masthead__s">M Map（MUST登校）· v2.15 · 按反馈重做：M 与终点钉深度融合</div>
+      <div class="masthead__t">品牌标志（第四轮）· 组合对比</div>
+      <div class="masthead__s">M Map（MUST登校）· v2.15 · 基于「收笔即钉」：短钉已定 · 两站/三站 × 留缝/无缝</div>
     </div>
     <span class="masthead__tag">2026-09-25 · 设计师 颜好看</span>
   </header>
+
+  <!-- ==================== 第四轮 · 组合对比 ==================== -->
+  <section id="r4">
+    <h2>第四轮 · 组合对比（短钉已定 · 两站/三站 × 留缝/无缝）</h2>
+    <p class="note">
+      <b>钉长已定：短钉</b>（第三轮 1-B，钉尖 <code>y=46</code>，高于 M 左脚底）。本轮把剩下两个维度交叉成 4 格：<b>站点数（两站 / 三站）× 接合（留缝 / 无缝）</b>。四格<b>只差这两项</b>，其余全部一致（去箭头、短钉、站点环样式、留缝 3.6 单位）。
+      文件：<code>logo-r4-{2st,3st}-{gap,join}.svg</code>。
+    </p>
+
+    <div class="cmp__lgd" style="margin-bottom:14px">
+      <span class="lgd-slot"><i></i>站点环 = 蓝色圆环（空心，与路线同色）</span>
+      <span class="lgd-join"><i></i>无缝 = 路线直接连入钉帽（不留缝）</span>
+      <span class="lgd-gap"><i></i>留缝 = 路线在缝前收住（缝 ≈3.6 单位）</span>
+    </div>
+
+    <!-- ── 「三站」几何定义澄清 ── -->
+    <div class="card" style="margin-bottom:14px">
+      <div class="card__top"><span class="card__name" style="font-size:14px">「三站」＝ M 左侧的三个几何端点（本轮按你的描述布点）</span></div>
+      <div style="display:flex; flex-wrap:wrap; align-items:center; gap:24px">
+        <svg viewBox="0 0 64 64" width="150" height="150" role="img" aria-label="三站几何位置示意">
+          <path d="M12 48 L12 16 L30 34 L37.5 26.5" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.28" />
+          <path d="M40.29 18.13 L48 46 L55.71 18.13 A8 8 0 1 0 40.29 18.13 Z" fill="var(--brand-green)" opacity="0.28" />
+          <circle cx="12" cy="48" r="5.2" fill="none" stroke="var(--accent)" stroke-width="1.6" />
+          <circle cx="12" cy="16" r="5.2" fill="none" stroke="var(--accent)" stroke-width="1.6" />
+          <circle cx="30" cy="34" r="5.2" fill="none" stroke="var(--accent)" stroke-width="1.6" />
+          <text x="12" y="63" text-anchor="middle" font-family="var(--font-mono)" font-size="7" fill="var(--accent)">①</text>
+          <text x="4" y="14" text-anchor="middle" font-family="var(--font-mono)" font-size="7" fill="var(--accent)">②</text>
+          <text x="34" y="47" text-anchor="middle" font-family="var(--font-mono)" font-size="7" fill="var(--accent)">③</text>
+        </svg>
+        <ul class="chg" style="flex:1 1 320px; min-width:0">
+          <li><b>① 起笔点</b> <code>(12,48)</code> — 左竖下端＝路线起点（真正的「始发站」）。</li>
+          <li><b>② 左上角拐点</b> <code>(12,16)</code> — 左竖上端与左斜的转折点（拐点站）。</li>
+          <li><b>③ 中间折点</b> <code>(30,34)</code> — v 的底部中点＝「换乘站」。</li>
+          <li style="color:var(--accent)">本轮「三站」＝ ①②③ 全放站点环；「两站」＝ 只留 ①③（去掉拐点 ②）。</li>
+        </ul>
+      </div>
+      <p class="diag" style="margin:0">说明：第三轮的「三站」用的是左竖中点 <code>(12,32)</code>（人为增站）；本轮改为<b>你描述的三个几何端点</b>，② 落在真实拐角上，更「本来就是路线」。</p>
+    </div>
+
+    <!-- ==================== 4 组合 ==================== -->
+    <div class="cmp">
+      <!-- 4-1 两站 · 留缝 -->
+      <article class="cmp__col">
+        <div class="cmp__hd"><span class="cmp__tag">4-1</span><span class="cmp__t">两站 · 留缝</span></div>
+        <div class="cmp__stage">
+          <svg viewBox="0 0 64 64" width="172" height="172" role="img" aria-label="组合4-1：短钉 两站 留缝">
+            <path d="M12 48 L12 16 L30 34 L37.5 26.5" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" />
+            <circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+            <circle cx="30" cy="34" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+            <path d="M40.29 18.13 L48 46 L55.71 18.13 A8 8 0 1 0 40.29 18.13 Z" fill="var(--brand-green)" />
+            <circle cx="48" cy="16" r="2.7" fill="var(--surface)" />
+          </svg>
+        </div>
+        <div class="cmp__mini">
+          <figure><svg viewBox="0 0 64 64" width="40" height="40" aria-label="4-1 40"><path d="M12 48 L12 16 L30 34 L37.5 26.5" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><circle cx="30" cy="34" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><path d="M40.29 18.13 L48 46 L55.71 18.13 A8 8 0 1 0 40.29 18.13 Z" fill="var(--brand-green)"/><circle cx="48" cy="16" r="2.7" fill="var(--surface)"/></svg><figcaption>40</figcaption></figure>
+          <figure><svg viewBox="0 0 64 64" width="24" height="24" aria-label="4-1 24"><path d="M12 48 L12 16 L30 34 L37.5 26.5" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><circle cx="30" cy="34" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><path d="M40.29 18.13 L48 46 L55.71 18.13 A8 8 0 1 0 40.29 18.13 Z" fill="var(--brand-green)"/><circle cx="48" cy="16" r="2.7" fill="var(--surface)"/></svg><figcaption>24</figcaption></figure>
+          <figure><svg viewBox="0 0 64 64" width="16" height="16" aria-label="4-1 16"><path d="M12 48 L12 16 L30 34 L37.5 26.5" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><circle cx="30" cy="34" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><path d="M40.29 18.13 L48 46 L55.71 18.13 A8 8 0 1 0 40.29 18.13 Z" fill="var(--brand-green)"/><circle cx="48" cy="16" r="2.7" fill="var(--surface)"/></svg><figcaption>16</figcaption></figure>
+        </div>
+        <p class="cmp__kv">站点：① 起笔 + ③ 折点　·　接合：留缝 ≈3.6 单位</p>
+        <p class="cmp__note">缝把「路线」与「终点钉」<b>分成两个层次</b>，钉像地图上落下的标记；但接钉的那段斜线<b>停在 M 右上角之前</b>，字母 M 的右上角没被连上 —— 字形略「断」，一笔到底的叙事也没走完。</p>
+      </article>
+
+      <!-- 4-2 两站 · 无缝 -->
+      <article class="cmp__col cmp__col--pick">
+        <div class="cmp__hd"><span class="cmp__tag">4-2</span><span class="cmp__t">两站 · 无缝</span><span class="cmp__pick">推荐</span></div>
+        <div class="cmp__stage">
+          <svg viewBox="0 0 64 64" width="172" height="172" role="img" aria-label="组合4-2：短钉 两站 无缝">
+            <path d="M12 48 L12 16 L30 34 L48 16" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" />
+            <circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+            <circle cx="30" cy="34" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+            <path d="M40.29 18.13 L48 46 L55.71 18.13 A8 8 0 1 0 40.29 18.13 Z" fill="var(--brand-green)" />
+            <circle cx="48" cy="16" r="2.7" fill="var(--surface)" />
+          </svg>
+        </div>
+        <div class="cmp__mini">
+          <figure><svg viewBox="0 0 64 64" width="40" height="40" aria-label="4-2 40"><path d="M12 48 L12 16 L30 34 L48 16" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><circle cx="30" cy="34" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><path d="M40.29 18.13 L48 46 L55.71 18.13 A8 8 0 1 0 40.29 18.13 Z" fill="var(--brand-green)"/><circle cx="48" cy="16" r="2.7" fill="var(--surface)"/></svg><figcaption>40</figcaption></figure>
+          <figure><svg viewBox="0 0 64 64" width="24" height="24" aria-label="4-2 24"><path d="M12 48 L12 16 L30 34 L48 16" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><circle cx="30" cy="34" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><path d="M40.29 18.13 L48 46 L55.71 18.13 A8 8 0 1 0 40.29 18.13 Z" fill="var(--brand-green)"/><circle cx="48" cy="16" r="2.7" fill="var(--surface)"/></svg><figcaption>24</figcaption></figure>
+          <figure><svg viewBox="0 0 64 64" width="16" height="16" aria-label="4-2 16"><path d="M12 48 L12 16 L30 34 L48 16" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><circle cx="30" cy="34" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><path d="M40.29 18.13 L48 46 L55.71 18.13 A8 8 0 1 0 40.29 18.13 Z" fill="var(--brand-green)"/><circle cx="48" cy="16" r="2.7" fill="var(--surface)"/></svg><figcaption>16</figcaption></figure>
+        </div>
+        <p class="cmp__kv">站点：① 起笔 + ③ 折点　·　接合：路线直连钉帽（无缝）</p>
+        <p class="cmp__note">路线<b>一路连到 M 右上角（钉帽）</b>，字母 M 的四笔完整、一笔到底，正是「收笔即钉」；蓝绿两色在钉帽边缘<b>平接</b>，衔接干脆，小尺寸也不会断。</p>
+      </article>
+
+      <!-- 4-3 三站 · 留缝 -->
+      <article class="cmp__col">
+        <div class="cmp__hd"><span class="cmp__tag">4-3</span><span class="cmp__t">三站 · 留缝</span></div>
+        <div class="cmp__stage">
+          <svg viewBox="0 0 64 64" width="172" height="172" role="img" aria-label="组合4-3：短钉 三站 留缝">
+            <path d="M12 48 L12 16 L30 34 L37.5 26.5" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" />
+            <circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+            <circle cx="12" cy="16" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+            <circle cx="30" cy="34" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+            <path d="M40.29 18.13 L48 46 L55.71 18.13 A8 8 0 1 0 40.29 18.13 Z" fill="var(--brand-green)" />
+            <circle cx="48" cy="16" r="2.7" fill="var(--surface)" />
+          </svg>
+        </div>
+        <div class="cmp__mini">
+          <figure><svg viewBox="0 0 64 64" width="40" height="40" aria-label="4-3 40"><path d="M12 48 L12 16 L30 34 L37.5 26.5" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><circle cx="12" cy="16" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><circle cx="30" cy="34" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><path d="M40.29 18.13 L48 46 L55.71 18.13 A8 8 0 1 0 40.29 18.13 Z" fill="var(--brand-green)"/><circle cx="48" cy="16" r="2.7" fill="var(--surface)"/></svg><figcaption>40</figcaption></figure>
+          <figure><svg viewBox="0 0 64 64" width="24" height="24" aria-label="4-3 24"><path d="M12 48 L12 16 L30 34 L37.5 26.5" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><circle cx="12" cy="16" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><circle cx="30" cy="34" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><path d="M40.29 18.13 L48 46 L55.71 18.13 A8 8 0 1 0 40.29 18.13 Z" fill="var(--brand-green)"/><circle cx="48" cy="16" r="2.7" fill="var(--surface)"/></svg><figcaption>24</figcaption></figure>
+          <figure><svg viewBox="0 0 64 64" width="16" height="16" aria-label="4-3 16"><path d="M12 48 L12 16 L30 34 L37.5 26.5" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><circle cx="12" cy="16" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><circle cx="30" cy="34" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><path d="M40.29 18.13 L48 46 L55.71 18.13 A8 8 0 1 0 40.29 18.13 Z" fill="var(--brand-green)"/><circle cx="48" cy="16" r="2.7" fill="var(--surface)"/></svg><figcaption>16</figcaption></figure>
+        </div>
+        <p class="cmp__kv">站点：① 起笔 + ② 拐点 + ③ 折点　·　接合：留缝 ≈3.6 单位</p>
+        <p class="cmp__note">三个端点各有一站，<b>「整条左半都是路线」最直白</b>；但 ② 落在拐角上、三环密集，<b>16px 会糊成一串</b>，且拐点站略显「为站点而站点」。</p>
+      </article>
+
+      <!-- 4-4 三站 · 无缝 -->
+      <article class="cmp__col">
+        <div class="cmp__hd"><span class="cmp__tag">4-4</span><span class="cmp__t">三站 · 无缝</span></div>
+        <div class="cmp__stage">
+          <svg viewBox="0 0 64 64" width="172" height="172" role="img" aria-label="组合4-4：短钉 三站 无缝">
+            <path d="M12 48 L12 16 L30 34 L48 16" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" />
+            <circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+            <circle cx="12" cy="16" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+            <circle cx="30" cy="34" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+            <path d="M40.29 18.13 L48 46 L55.71 18.13 A8 8 0 1 0 40.29 18.13 Z" fill="var(--brand-green)" />
+            <circle cx="48" cy="16" r="2.7" fill="var(--surface)" />
+          </svg>
+        </div>
+        <div class="cmp__mini">
+          <figure><svg viewBox="0 0 64 64" width="40" height="40" aria-label="4-4 40"><path d="M12 48 L12 16 L30 34 L48 16" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><circle cx="12" cy="16" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><circle cx="30" cy="34" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><path d="M40.29 18.13 L48 46 L55.71 18.13 A8 8 0 1 0 40.29 18.13 Z" fill="var(--brand-green)"/><circle cx="48" cy="16" r="2.7" fill="var(--surface)"/></svg><figcaption>40</figcaption></figure>
+          <figure><svg viewBox="0 0 64 64" width="24" height="24" aria-label="4-4 24"><path d="M12 48 L12 16 L30 34 L48 16" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><circle cx="12" cy="16" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><circle cx="30" cy="34" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><path d="M40.29 18.13 L48 46 L55.71 18.13 A8 8 0 1 0 40.29 18.13 Z" fill="var(--brand-green)"/><circle cx="48" cy="16" r="2.7" fill="var(--surface)"/></svg><figcaption>24</figcaption></figure>
+          <figure><svg viewBox="0 0 64 64" width="16" height="16" aria-label="4-4 16"><path d="M12 48 L12 16 L30 34 L48 16" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><circle cx="12" cy="16" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><circle cx="30" cy="34" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><path d="M40.29 18.13 L48 46 L55.71 18.13 A8 8 0 1 0 40.29 18.13 Z" fill="var(--brand-green)"/><circle cx="48" cy="16" r="2.7" fill="var(--surface)"/></svg><figcaption>16</figcaption></figure>
+        </div>
+        <p class="cmp__kv">站点：① 起笔 + ② 拐点 + ③ 折点　·　接合：路线直连钉帽（无缝）</p>
+        <p class="cmp__note">信息量最大（三站 + 连成一笔），<b>场景感最强但最「满」</b>；三环 + 蓝绿相接，小尺寸最吃力，属于「大图好看、图标吃亏」一档。</p>
+      </article>
+    </div>
+
+    <!-- ── 推荐组合落地 ── -->
+    <h2 style="margin-top:34px">推荐落地：4-2（短钉 · 两站 · 无缝）</h2>
+    <p class="note">
+      理由：<b>两站</b>对上「起点 → 换乘 → 终点」三段叙事，留白足、16px 最稳；<b>无缝</b>让路线一路连到 M 的右上角（钉帽），<b>M 的四笔才完整</b>，「一笔到底 · 收笔即钉」也才成立。留缝看着更「分层」，但代价是把 M 的右上角留空；而 16px 下 3.6 单位的缝只剩不到 1px、几乎看不见 —— 等于白付了这个代价。<span style="color:var(--accent)">（注：此处与第三轮推荐的「留缝」相反，本轮以字形完整度优先。）</span>
+    </p>
+    <div class="concepts">
+      <article class="card card--pick">
+        <div class="card__top"><span class="card__name" style="font-size:14px">短钉 · 两站 · 无缝</span><span class="card__badge">建议定稿</span></div>
+        <div class="lockup-plate">
+          <svg viewBox="0 0 300 96" role="img" aria-label="推荐组合横排">
+            <g transform="translate(6 18)">
+              <path d="M12 48 L12 16 L30 34 L48 16" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" />
+              <circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+              <circle cx="30" cy="34" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+              <path d="M40.29 18.13 L48 46 L55.71 18.13 A8 8 0 1 0 40.29 18.13 Z" fill="var(--brand-green)" />
+              <circle cx="48" cy="16" r="2.7" fill="var(--surface)" />
+            </g>
+            <text x="84" y="56" font-family="var(--font-display)" font-size="38" font-weight="700" letter-spacing="-0.015em" fill="var(--fg)">M Map</text>
+            <text x="86" y="79" font-family="var(--font-display)" font-size="13" fill="var(--muted)">澳门公交 · 实时导航</text>
+          </svg>
+        </div>
+        <p class="diag">横排：钉尖（y=46）略高于字标基线，钉「落在字的高度里」，不再向下刺出；字标从 x=84 起，与标志右侧不打架。</p>
+      </article>
+      <article class="card">
+        <div class="card__top"><span class="card__name" style="font-size:14px">深色底 / 单色</span></div>
+        <div class="plate" style="gap:26px; display:flex; align-items:center; justify-content:center; background:var(--plate-dark)">
+          <svg viewBox="0 0 64 64" width="84" height="84" role="img" aria-label="深色底">
+            <path d="M12 48 L12 16 L30 34 L48 16" fill="none" stroke="var(--accent-dk)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" />
+            <circle cx="12" cy="48" r="4.6" fill="var(--plate-dark)" stroke="var(--accent-dk)" stroke-width="2.2" />
+            <circle cx="30" cy="34" r="4.6" fill="var(--plate-dark)" stroke="var(--accent-dk)" stroke-width="2.2" />
+            <path d="M40.29 18.13 L48 46 L55.71 18.13 A8 8 0 1 0 40.29 18.13 Z" fill="var(--brand-green-dk)" />
+            <circle cx="48" cy="16" r="2.7" fill="var(--plate-dark)" />
+          </svg>
+          <svg viewBox="0 0 64 64" width="84" height="84" role="img" aria-label="单色">
+            <path d="M12 48 L12 16 L30 34 L48 16" fill="none" stroke="currentColor" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" />
+            <circle cx="12" cy="48" r="4.6" fill="var(--surface-2)" stroke="currentColor" stroke-width="2.2" />
+            <circle cx="30" cy="34" r="4.6" fill="var(--surface-2)" stroke="currentColor" stroke-width="2.2" />
+            <path d="M40.29 18.13 L48 46 L55.71 18.13 A8 8 0 1 0 40.29 18.13 Z" fill="currentColor" />
+            <circle cx="48" cy="16" r="2.7" fill="var(--surface-2)" />
+          </svg>
+        </div>
+        <p class="diag">左：深色底（亮蓝 #a8c7fa + 亮绿 #6dd58c）；右：单色版（currentColor，站点环取页面底色）。</p>
+      </article>
+    </div>
+  </section>
+
+  <!-- ==================== 第三轮 · 变体对比 ==================== -->
+  <section id="r3">
+    <h2>第三轮 · 变体对比（去箭头 · 留缝 · 钉长 · 站点数）</h2>
+    <p class="note">
+      基准 = 第二轮 <b>A「收笔即钉」</b>。本轮按你的四条意见改：<b>①去箭头</b>（删掉左竖上的白色方向箭头）、<b>②留缝</b>（M 与右钉不再直接相连，留一小段缝）、<b>③钉长对比</b>（钉尖比左脚长 / 短）、<b>④站点数对比</b>（左侧三站 / 两站）。下面每项并排 + 一句话说明 + 推荐。文件名：<code>logo-r3-a-{long,short,3st}.svg</code>。
+    </p>
+
+    <!-- ① ② 两条固定调整（放大对照） -->
+    <div class="concepts">
+      <div class="card">
+        <p class="subttl">① 去箭头（左竖局部放大）</p>
+        <div class="zoomrow">
+          <figure class="zoomfig" style="width:86px">
+            <svg viewBox="4 12 22 40" role="img" aria-label="第二轮 A 带箭头">
+              <path d="M12 48 L12 16 L30 34" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" />
+              <circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+              <path d="M15.06 23.87 L21 25 L19.87 19.06" fill="none" stroke="var(--surface)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
+              <circle cx="41" cy="16" r="12" fill="none" stroke="var(--danger)" stroke-width="1.4" opacity="0.9" />
+              <path d="M33 6 L49 6" stroke="var(--danger)" stroke-width="1.4" />
+              <path d="M41 5 L41 7 M41 25 L41 27" stroke="var(--danger)" stroke-width="1.4" />
+            </svg>
+            <figcaption>第二轮 A · 有箭头</figcaption>
+          </figure>
+          <span class="zoomrow__arrow">→</span>
+          <figure class="zoomfig" style="width:86px">
+            <svg viewBox="4 12 22 40" role="img" aria-label="第三轮 无箭头">
+              <path d="M12 48 L12 16 L30 34" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" />
+              <circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+            </svg>
+            <figcaption>第三轮 · 无箭头</figcaption>
+          </figure>
+        </div>
+        <p class="diag" style="margin:0">红圈处即原箭头。<b>已整条删除</b>：左竖只留「线 + 站点环」，路线语言靠站点环承担，画面更干净。</p>
+      </div>
+
+      <div class="card card--pick">
+        <p class="subttl">② 留缝（右上接点局部放大）</p>
+        <div class="zoomrow">
+          <figure class="zoomfig" style="width:150px">
+            <svg viewBox="30 6 32 26" role="img" aria-label="第二轮 A 直接相连">
+              <path d="M12 48 L12 16 L30 34 L48 16" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" />
+              <path d="M40.2 17.78 L48 52 L55.8 17.78 A8 8 0 1 0 40.2 17.78 Z" fill="var(--brand-green)" />
+              <circle cx="48" cy="16" r="2.7" fill="var(--surface)" />
+            </svg>
+            <figcaption>第二轮 A · 直接相连</figcaption>
+          </figure>
+          <span class="zoomrow__arrow">→</span>
+          <figure class="zoomfig" style="width:150px">
+            <svg viewBox="30 6 32 26" role="img" aria-label="第三轮 留缝">
+              <path d="M12 48 L12 16 L30 34 L37.5 26.5" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" />
+              <path d="M40.15 17.52 L48 58 L55.85 17.52 A8 8 0 1 0 40.15 17.52 Z" fill="var(--brand-green)" />
+              <circle cx="48" cy="16" r="2.7" fill="var(--surface)" />
+            </svg>
+            <figcaption>第三轮 · 留缝</figcaption>
+          </figure>
+        </div>
+        <p class="diag" style="margin:0">路线右端收住在缝前，<b>缝宽 ≈ 3.6 单位（约标志宽 6%）</b>。层级分明（路线 / 钉各归各层），但缝很窄，仍读得成一枚「钉住地图」的钉，不会散架。</p>
+      </div>
+    </div>
+
+    <!-- ================= 对比 1 · 钉长 ================= -->
+    <h2 style="margin-top:34px">对比 1 · 钉尖比 M 左脚「长」vs「短」（请二选一）</h2>
+    <p class="note">两版<b>只差钉尖长度</b>；去箭头 / 留缝 3.6 单位 / 两站完全一致。参照线说明见对比下方。</p>
+    <div class="cmp">
+      <article class="cmp__col cmp__col--pick">
+        <div class="cmp__hd"><span class="cmp__tag">1-A</span><span class="cmp__t">长钉</span><span class="cmp__pick">推荐</span></div>
+        <div class="cmp__stage">
+          <svg viewBox="0 0 64 64" width="176" height="176" role="img" aria-label="长钉版：钉尖低于左脚底">
+            <line x1="0.6" y1="53.7" x2="63.4" y2="53.7" stroke="var(--danger)" stroke-width="0.55" stroke-dasharray="2.4 2" opacity="0.8" />
+            <line x1="0.6" y1="58" x2="63.4" y2="58" stroke="var(--brand-green)" stroke-width="0.55" stroke-dasharray="2.4 2" opacity="0.8" />
+            <path d="M12 48 L12 16 L30 34 L37.5 26.5" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" />
+            <circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+            <circle cx="30" cy="34" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+            <path d="M40.15 17.52 L48 58 L55.85 17.52 A8 8 0 1 0 40.15 17.52 Z" fill="var(--brand-green)" />
+            <circle cx="48" cy="16" r="2.7" fill="var(--surface)" />
+          </svg>
+        </div>
+        <div class="cmp__mini">
+          <figure><svg viewBox="0 0 64 64" width="40" height="40" aria-label="长钉 40"><path d="M12 48 L12 16 L30 34 L37.5 26.5" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><circle cx="30" cy="34" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><path d="M40.15 17.52 L48 58 L55.85 17.52 A8 8 0 1 0 40.15 17.52 Z" fill="var(--brand-green)"/><circle cx="48" cy="16" r="2.7" fill="var(--surface)"/></svg><figcaption>40</figcaption></figure>
+          <figure><svg viewBox="0 0 64 64" width="24" height="24" aria-label="长钉 24"><path d="M12 48 L12 16 L30 34 L37.5 26.5" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><circle cx="30" cy="34" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><path d="M40.15 17.52 L48 58 L55.85 17.52 A8 8 0 1 0 40.15 17.52 Z" fill="var(--brand-green)"/><circle cx="48" cy="16" r="2.7" fill="var(--surface)"/></svg><figcaption>24</figcaption></figure>
+          <figure><svg viewBox="0 0 64 64" width="16" height="16" aria-label="长钉 16"><path d="M12 48 L12 16 L30 34 L37.5 26.5" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><circle cx="30" cy="34" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><path d="M40.15 17.52 L48 58 L55.85 17.52 A8 8 0 1 0 40.15 17.52 Z" fill="var(--brand-green)"/><circle cx="48" cy="16" r="2.7" fill="var(--surface)"/></svg><figcaption>16</figcaption></figure>
+        </div>
+        <p class="cmp__kv">钉尖 y=58 · 低于左脚底 <b>4.3</b> 单位（左脚底＝起点站环外缘 y≈53.7）</p>
+        <p class="cmp__note">钉尖<b>扎到左脚之下</b> → 读作「钉穿过基线、把 M 钉在地图上」；绿色钉与蓝色字形成上下<b>两个层次</b>，钉的独立性更清楚。</p>
+      </article>
+
+      <article class="cmp__col">
+        <div class="cmp__hd"><span class="cmp__tag">1-B</span><span class="cmp__t">短钉</span></div>
+        <div class="cmp__stage">
+          <svg viewBox="0 0 64 64" width="176" height="176" role="img" aria-label="短钉版：钉尖高于左脚底">
+            <line x1="0.6" y1="53.7" x2="63.4" y2="53.7" stroke="var(--danger)" stroke-width="0.55" stroke-dasharray="2.4 2" opacity="0.8" />
+            <line x1="0.6" y1="46" x2="63.4" y2="46" stroke="var(--brand-green)" stroke-width="0.55" stroke-dasharray="2.4 2" opacity="0.8" />
+            <path d="M12 48 L12 16 L30 34 L37.5 26.5" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" />
+            <circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+            <circle cx="30" cy="34" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+            <path d="M40.29 18.13 L48 46 L55.71 18.13 A8 8 0 1 0 40.29 18.13 Z" fill="var(--brand-green)" />
+            <circle cx="48" cy="16" r="2.7" fill="var(--surface)" />
+          </svg>
+        </div>
+        <div class="cmp__mini">
+          <figure><svg viewBox="0 0 64 64" width="40" height="40" aria-label="短钉 40"><path d="M12 48 L12 16 L30 34 L37.5 26.5" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><circle cx="30" cy="34" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><path d="M40.29 18.13 L48 46 L55.71 18.13 A8 8 0 1 0 40.29 18.13 Z" fill="var(--brand-green)"/><circle cx="48" cy="16" r="2.7" fill="var(--surface)"/></svg><figcaption>40</figcaption></figure>
+          <figure><svg viewBox="0 0 64 64" width="24" height="24" aria-label="短钉 24"><path d="M12 48 L12 16 L30 34 L37.5 26.5" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><circle cx="30" cy="34" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><path d="M40.29 18.13 L48 46 L55.71 18.13 A8 8 0 1 0 40.29 18.13 Z" fill="var(--brand-green)"/><circle cx="48" cy="16" r="2.7" fill="var(--surface)"/></svg><figcaption>24</figcaption></figure>
+          <figure><svg viewBox="0 0 64 64" width="16" height="16" aria-label="短钉 16"><path d="M12 48 L12 16 L30 34 L37.5 26.5" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><circle cx="30" cy="34" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><path d="M40.29 18.13 L48 46 L55.71 18.13 A8 8 0 1 0 40.29 18.13 Z" fill="var(--brand-green)"/><circle cx="48" cy="16" r="2.7" fill="var(--surface)"/></svg><figcaption>16</figcaption></figure>
+        </div>
+        <p class="cmp__kv">钉尖 y=46 · 高于左脚底 <b>7.7</b> 单位</p>
+        <p class="cmp__note">钉尖<b>停在左脚之上</b> → 钉像「悬在字里」，与左脚同高、更像 M 的一条普通竖笔，<b>「钉住」的动作感被削弱</b>；底部留白变多，标志显头重。</p>
+      </article>
+    </div>
+    <div class="cmp__lgd" style="margin-top:12px">
+      <span class="lgd-foot"><i></i>红色虚线 = <b>M 左脚底</b>（含起点站环，y≈53.7）</span>
+      <span class="lgd-tip"><i></i>绿色虚线 = 该版<b>钉尖</b>位置</span>
+    </div>
+
+    <!-- ================= 对比 2 · 站点数 ================= -->
+    <h2 style="margin-top:34px">对比 2 · M 左侧「两站」vs「三站」（请二选一）</h2>
+    <p class="note">两版<b>只差左侧站点数量</b>；去箭头 / 留缝 / 长钉全部一致。</p>
+    <div class="cmp">
+      <article class="cmp__col cmp__col--pick">
+        <div class="cmp__hd"><span class="cmp__tag">2-A</span><span class="cmp__t">两站</span><span class="cmp__pick">推荐</span></div>
+        <div class="cmp__stage">
+          <svg viewBox="0 0 64 64" width="176" height="176" role="img" aria-label="两站版">
+            <path d="M12 48 L12 16 L30 34 L37.5 26.5" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" />
+            <circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+            <circle cx="30" cy="34" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+            <path d="M40.15 17.52 L48 58 L55.85 17.52 A8 8 0 1 0 40.15 17.52 Z" fill="var(--brand-green)" />
+            <circle cx="48" cy="16" r="2.7" fill="var(--surface)" />
+          </svg>
+        </div>
+        <div class="cmp__mini">
+          <figure><svg viewBox="0 0 64 64" width="40" height="40" aria-label="两站 40"><path d="M12 48 L12 16 L30 34 L37.5 26.5" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><circle cx="30" cy="34" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><path d="M40.15 17.52 L48 58 L55.85 17.52 A8 8 0 1 0 40.15 17.52 Z" fill="var(--brand-green)"/><circle cx="48" cy="16" r="2.7" fill="var(--surface)"/></svg><figcaption>40</figcaption></figure>
+          <figure><svg viewBox="0 0 64 64" width="24" height="24" aria-label="两站 24"><path d="M12 48 L12 16 L30 34 L37.5 26.5" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><circle cx="30" cy="34" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><path d="M40.15 17.52 L48 58 L55.85 17.52 A8 8 0 1 0 40.15 17.52 Z" fill="var(--brand-green)"/><circle cx="48" cy="16" r="2.7" fill="var(--surface)"/></svg><figcaption>24</figcaption></figure>
+          <figure><svg viewBox="0 0 64 64" width="16" height="16" aria-label="两站 16"><path d="M12 48 L12 16 L30 34 L37.5 26.5" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><circle cx="30" cy="34" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><path d="M40.15 17.52 L48 58 L55.85 17.52 A8 8 0 1 0 40.15 17.52 Z" fill="var(--brand-green)"/><circle cx="48" cy="16" r="2.7" fill="var(--surface)"/></svg><figcaption>16</figcaption></figure>
+        </div>
+        <p class="cmp__kv">起点 (12,48) + 换乘 (30,34)</p>
+        <p class="cmp__note">语义正好对上「<b>起点 → 换乘 → 终点（钉）</b>」三段；站点少、留白足，16px 下两环仍分得开，<b>小尺寸更稳</b>。</p>
+      </article>
+
+      <article class="cmp__col">
+        <div class="cmp__hd"><span class="cmp__tag">2-B</span><span class="cmp__t">三站</span></div>
+        <div class="cmp__stage">
+          <svg viewBox="0 0 64 64" width="176" height="176" role="img" aria-label="三站版">
+            <path d="M12 48 L12 16 L30 34 L37.5 26.5" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" />
+            <circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+            <circle cx="12" cy="32" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+            <circle cx="30" cy="34" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+            <path d="M40.15 17.52 L48 58 L55.85 17.52 A8 8 0 1 0 40.15 17.52 Z" fill="var(--brand-green)" />
+            <circle cx="48" cy="16" r="2.7" fill="var(--surface)" />
+          </svg>
+        </div>
+        <div class="cmp__mini">
+          <figure><svg viewBox="0 0 64 64" width="40" height="40" aria-label="三站 40"><path d="M12 48 L12 16 L30 34 L37.5 26.5" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><circle cx="12" cy="32" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><circle cx="30" cy="34" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><path d="M40.15 17.52 L48 58 L55.85 17.52 A8 8 0 1 0 40.15 17.52 Z" fill="var(--brand-green)"/><circle cx="48" cy="16" r="2.7" fill="var(--surface)"/></svg><figcaption>40</figcaption></figure>
+          <figure><svg viewBox="0 0 64 64" width="24" height="24" aria-label="三站 24"><path d="M12 48 L12 16 L30 34 L37.5 26.5" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><circle cx="12" cy="32" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><circle cx="30" cy="34" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><path d="M40.15 17.52 L48 58 L55.85 17.52 A8 8 0 1 0 40.15 17.52 Z" fill="var(--brand-green)"/><circle cx="48" cy="16" r="2.7" fill="var(--surface)"/></svg><figcaption>24</figcaption></figure>
+          <figure><svg viewBox="0 0 64 64" width="16" height="16" aria-label="三站 16"><path d="M12 48 L12 16 L30 34 L37.5 26.5" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><circle cx="12" cy="32" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><circle cx="30" cy="34" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2"/><path d="M40.15 17.52 L48 58 L55.85 17.52 A8 8 0 1 0 40.15 17.52 Z" fill="var(--brand-green)"/><circle cx="48" cy="16" r="2.7" fill="var(--surface)"/></svg><figcaption>16</figcaption></figure>
+        </div>
+        <p class="cmp__kv">起点 (12,48) + 中途 (12,32) + 换乘 (30,34)</p>
+        <p class="cmp__note">「<b>路线感更强</b>」（有中途站），但左竖上两环相距仅 16 单位、会显拥挤；16px 下三个环容易糊成一串，<b>小尺寸清晰度下降</b>。</p>
+      </article>
+    </div>
+
+    <!-- ================= 推荐组合 & 落地 ================= -->
+    <h2 style="margin-top:34px">推荐组合 &amp; 横向落地</h2>
+    <p class="note">设计建议：<b>长钉（1-A）+ 两站（2-A）+ 去箭头 + 留缝</b>。下面是该组合的横排组合与 App 位。</p>
+    <div class="concepts">
+      <article class="card card--pick">
+        <div class="card__top"><span class="card__name" style="font-size:14px">A-长 · 留缝 · 两站</span><span class="card__badge">建议定稿</span></div>
+        <div class="lockup-plate">
+          <svg viewBox="0 0 300 96" role="img" aria-label="推荐组合横排">
+            <g transform="translate(6 18)">
+              <path d="M12 48 L12 16 L30 34 L37.5 26.5" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" />
+              <circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+              <circle cx="30" cy="34" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+              <path d="M40.15 17.52 L48 58 L55.85 17.52 A8 8 0 1 0 40.15 17.52 Z" fill="var(--brand-green)" />
+              <circle cx="48" cy="16" r="2.7" fill="var(--surface)" />
+            </g>
+            <text x="84" y="56" font-family="var(--font-display)" font-size="38" font-weight="700" letter-spacing="-0.015em" fill="var(--fg)">M Map</text>
+            <text x="86" y="79" font-family="var(--font-display)" font-size="13" fill="var(--muted)">澳门公交 · 实时导航</text>
+          </svg>
+        </div>
+        <p class="diag">横排里钉尖仍略低于字标基线，钉的「扎下」感在组合中保留；字标从 x=84 起，与留缝后的标志右侧不打架。</p>
+      </article>
+      <article class="card">
+        <div class="card__top"><span class="card__name" style="font-size:14px">App 图标 / 深色</span></div>
+        <div class="plate" style="gap:26px; display:flex; align-items:center; justify-content:center">
+          <svg viewBox="0 0 64 64" width="84" height="84" role="img" aria-label="App 图标">
+            <rect width="64" height="64" rx="15" fill="var(--accent)" />
+            <g transform="translate(0 1)">
+              <path d="M14 46 L14 18 L30 34 L36.6 27.4" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" />
+              <path d="M39.13 19.32 L46 55 L52.87 19.32 A7 7 0 1 0 39.13 19.32 Z" fill="var(--brand-green-dk)" />
+              <circle cx="46" cy="18" r="2.1" fill="var(--accent)" />
+            </g>
+          </svg>
+          <svg viewBox="0 0 64 64" width="84" height="84" role="img" aria-label="深色底">
+            <path d="M12 48 L12 16 L30 34 L37.5 26.5" fill="none" stroke="var(--accent-dk)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" />
+            <circle cx="12" cy="48" r="4.6" fill="var(--plate-dark)" stroke="var(--accent-dk)" stroke-width="2.2" />
+            <circle cx="30" cy="34" r="4.6" fill="var(--plate-dark)" stroke="var(--accent-dk)" stroke-width="2.2" />
+            <path d="M40.15 17.52 L48 58 L55.85 17.52 A8 8 0 1 0 40.15 17.52 Z" fill="var(--brand-green-dk)" />
+            <circle cx="48" cy="16" r="2.7" fill="var(--plate-dark)" />
+          </svg>
+        </div>
+        <p class="diag">左：App 图标（16px 简化，站点环退场）；右：深色底（亮蓝 #a8c7fa + 亮绿 #6dd58c）。</p>
+      </article>
+    </div>
+  </section>
 
   <!-- ==================== 反馈 & 本轮思路 ==================== -->
   <section>

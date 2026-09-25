@@ -43,6 +43,7 @@ const eslintConfig = [
       "backups/**",
       ".verify/**",
       ".workbuddy/**",
+      "docs/**", // 文档目录：设计过程资产与生成器脚本（非产品代码），与 .verify 同性质、不计入产品门禁
       "data/**",
       "next-env.d.ts",
     ],
