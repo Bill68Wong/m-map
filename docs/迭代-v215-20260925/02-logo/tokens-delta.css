@@ -41,6 +41,8 @@
      height: var(--destpin-h);
      background: url("/pin-destination.svg") center / contain no-repeat;
      filter: drop-shadow(var(--destpin-shadow));
-     transform: translate(-50%, -100%);  // 钉尖对准坐标
    }
+   NOTE 不要再加 transform: translate(-50%,-100%)：高德 marker 的 offset 已是
+      「自左上角偏移」锚点，钉尖对准坐标点由 offset(-10,-26) 单独完成；
+      再叠 CSS transform 会双重偏移。本行依据已于前端落地后更正。
    ────────────────────────────────────────────────────────────────────────── */
