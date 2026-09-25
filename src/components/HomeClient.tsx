@@ -36,8 +36,9 @@ export default function HomeClient({
   if (dbError) {
     return (
       <main className="page">
+        {/* ★ v3.0.0 品牌更名：产品名「MUST登校」→ 英文「M Map」（中文品牌名「澳搭車」，见 public/brand/lockup.svg） */}
         <h1 className="h-headline" style={{ marginBottom: 8 }}>
-          MUST登校
+          M Map
         </h1>
         <p className="t-error t-body" style={{ marginBottom: 12 }}>
           数据库未就绪
@@ -100,7 +101,8 @@ export default function HomeClient({
   return (
     <main className="page">
       <header style={{ marginBottom: 16, padding: "4px 2px" }}>
-        <h1 className="h-headline">MUST登校</h1>
+        {/* 品牌名「M Map」；中文品牌名「澳搭車」（横排标志见 public/brand/lockup.svg） */}
+        <h1 className="h-headline">M Map</h1>
         <p className="t-label t-muted" style={{ marginTop: 2 }}>
           选方向 → 立刻看到最快路线
         </p>

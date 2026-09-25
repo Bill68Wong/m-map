@@ -58,10 +58,30 @@ const PUBLIC_PREFIXES = [
   "/_AMapService", // ★ 高德 JS API 安全代理（浏览器直连；密钥不下发前端，见 §2.D）
   "/api/amap-service", // ↑ 同一处理器的真实路由（`/_AMapService` 经 rewrite 指向它）
   "/_next", // 构建产物
+  // ★ v2.15.0 品牌资产目录（标志 / 横排字标 / 深色版）。纯静态图形，无任何敏感信息；
+  //   用**前缀**而非逐个列文件 —— 该目录以后新增资产（分享卡 / 关于页）不必再改本文件。
+  "/brand",
 ];
 
-/** ③ 完全公开的**精确路径**（静态文件） */
-const PUBLIC_FILES = new Set(["/favicon.ico", "/manifest.webmanifest", "/icon.svg"]);
+/** ③ 完全公开的**精确路径**（静态文件）
+ *  ⚠️⚠️ fail-closed：根级静态资源必须**逐个登记**，漏登 = 线上被 307 到 /login
+ *     （表现为「图标 / 地图钉不显示」，且**只在配了 ACCESS_PASSWORD 的生产环境复现**）。
+ *     本轮教训：`/pin-destination.svg` 由 v2.15「终点钉 SVQ 化」引入时漏登 —— 一并补齐。 */
+const PUBLIC_FILES = new Set([
+  "/favicon.ico",
+  "/manifest.webmanifest",
+  // ── 品牌 favicon / PWA 图标（v2.15.0 定稿六件套）──
+  "/icon.svg",
+  "/icon-16.png",
+  "/icon-32.png",
+  "/icon-192.png",
+  "/icon-512.png",
+  "/icon-maskable-512.png",
+  "/apple-touch-icon.png",
+  // ── 地图静态图形（CSS url() 引用）──
+  "/pin-destination.svg",
+  "/pin-destination-mono.svg",
+]);
 
 /** ④ 由自身 Bearer 鉴权、不受口令门约束（Vercel Cron 重算派生数据） */
 const SELF_AUTHED = new Set(["/api/cron/rebuild"]);

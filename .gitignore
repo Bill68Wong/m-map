@@ -4,7 +4,8 @@
 # next.js
 /.next/
 /out/
-/.next-v213/
+# ★ 本机构建目录绕开方案（见 next.config.ts distDir 注释）：NEXT_DIST_DIR 可指向任意 .next-*
+/.next-*/
 
 # production
 /build

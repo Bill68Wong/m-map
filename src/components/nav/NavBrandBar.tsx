@@ -7,6 +7,7 @@
  * 纯展示：数据与回调由 `NavShell` 下发。
  */
 import Link from "next/link";
+import BrandMark from "@/components/brand/BrandMark";
 import Icon from "@/components/ui/Icon";
 import RefreshButton from "./RefreshButton";
 
@@ -87,8 +88,11 @@ export default function NavBrandBar({
         >
           <Icon name="locate" size={20} />
         </button>
+        {/* 品牌位（★ v2.15.0）：标志 + 字标。标志走内联 SVG ⇒ var(--brand-route/pin)
+            随 prefers-color-scheme 自动换亮蓝/亮绿（详见 BrandMark.tsx 头注）。 */}
         <Link href="/help" className="nav-brand" aria-label="M Map · 帮助与合规说明">
-          M Map
+          <BrandMark className="nav-brand__mark" size={20} />
+          {"M Map"}
         </Link>
       </div>
     </div>

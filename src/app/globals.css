@@ -6498,3 +6498,56 @@ body[data-nav="riding"] .bottom-nav { display: none; }
     --destpin-shadow: 0 2px 3px rgba(0, 0, 0, 0.5);
   }
 }
+
+/* ============================================================================
+   M Map · 品牌标志专用 Token（第五轮）——「只增不改」，不动任何既有 Token
+   来源：docs/迭代-v215-20260925/02-logo/final/tokens-brand.css（原样追加）
+   用途：让 public/brand/*.svg 内的 var() 有真值；未登记时 SVG 内兜底值仍可独立渲染。
+   ────────────────────────────────────────────────────────────────────────── */
+:root {
+  /* 随主题（默认＝浅色值） */
+  --brand-route: #1b4d8f; /* 青花蓝 · 路线 */
+  --brand-pin: #0b6e4f; /* 澳门绿 · 终点钉 */
+  --brand-fg: #0f1720; /* 横排字标主色 */
+  --brand-muted: #5a6472; /* 横排中文名副色 */
+
+  /* 固定深底（永远亮色，**不**随主题切换）—— 供 mark-dark.svg / lockup-dark.svg 使用 */
+  --brand-route-on-dark: #a8c7fa;
+  --brand-pin-on-dark: #6dd58c;
+  --brand-fg-on-dark: #e2e2e9;
+  --brand-muted-on-dark: #c4c6d0;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --brand-route: #a8c7fa;
+    --brand-pin: #6dd58c;
+    --brand-fg: #e2e2e9;
+    --brand-muted: #c4c6d0;
+  }
+}
+
+/* ── 品牌位标志（NavBrandBar 内联 SVG）──
+   ★ v2.15.0：标志 + 字标站牌。`.nav-brand` 已是 inline-flex + align-items:center，
+   仅需补 gap 与标志盒模型；既有 `.nav-brand` 规则一行不改（此处为新规则）。 */
+.nav-brand {
+  gap: 6px;
+}
+.nav-brand__mark {
+  display: block;
+  width: 20px;
+  height: 20px;
+  flex: none;
+}
+
+/* 内联标志的取色（★ 为什么用 CSS class 而非 `stroke="var(...)"` 表现属性）：
+   多处权威资料（含 w3c/svgwg#1031，2025-11）指出 SVG **表现属性**里的 `var()`
+   各引擎支持不一致（Chromium 对长度类属性不支持；颜色类各版本行为不一），
+   而 CSS 声明里的 `var()` 在全部现代浏览器均可用 ⇒ 颜色一律走 CSS class 绑定。
+   配套：`src/components/brand/BrandMark.tsx`（内联 SVG，故能吃到本文件的 :root Token）。 */
+.brand-mark__route {
+  stroke: var(--brand-route);
+}
+.brand-mark__pin {
+  fill: var(--brand-pin);
+}

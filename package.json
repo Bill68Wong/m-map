@@ -1,8 +1,8 @@
 {
   "name": "must-dengxiao",
-  "version": "2.15.0",
+  "version": "3.0.0",
   "private": true,
-  "description": "MUST登校 · 擎天汇↔澳门科技大学↔横琴 通勤计时与数据采集系统",
+  "description": "M Map · 澳门巴士 / 轻轨全澳导航：全屏地图、路线收藏与实时报站（数据来源：澳门交通事务局 DSAT）",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
