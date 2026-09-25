@@ -11,7 +11,7 @@
 
 | # | 问题 | 拍板 | 理由 |
 |---|---|---|---|
-| **1** | 出图方式 **a 静态 PNG** vs **b `opengraph-image.tsx` 动图** | **选 a** | ① 品牌已冻结（v2.15 定稿 + 17 项像素自检），**没有**「随页面内容漂移」的需求；② ImageResponse **无 CSS var**、且默认字体**无 CJK** ⇒ 要自己喂字体二进制，复杂度高、易掉字形；③ 静态图零 edge 运行时开销。**"不会漂移"由生成器保证**：改 `og.html` 一处 → 重跑 → 图更新（与 `make-brand.mjs` 同一套模式）。 |
+| **1** | 出图方式 **a 静态 PNG** vs **b `opengraph-image.tsx` 动图** | **选 a** | ① 品牌已冻结（v2.15 定稿 + 25 项像素自检），**没有**「随页面内容漂移」的需求；② ImageResponse **无 CSS var**、且默认字体**无 CJK** ⇒ 要自己喂字体二进制，复杂度高、易掉字形；③ 静态图零 edge 运行时开销。**"不会漂移"由生成器保证**：改 `og.html` 一处 → 重跑 → 图更新（与 `make-brand.mjs` 同一套模式）。 |
 | **2** | 路径 **`/brand/`** vs **根级** | **`/brand/og.png`**（**非根级**） | `/brand` **已是** `PUBLIC_PREFIXES` 公开前缀 ⇒ **middleware 零改动**。符合 `INTEGRATE.md §7.3` 自定规矩「能放 `/brand/` 就放 `/brand/`」。 |
 
 > 前端落地只需两件事：① 把本目录已生成好的 `public/brand/og.png` 纳入提交；② `layout.tsx` 补 `metadataBase` + `openGraph` + `twitter`（§5）。**不用改 middleware。**

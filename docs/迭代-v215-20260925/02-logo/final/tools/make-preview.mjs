@@ -1,7 +1,11 @@
 /**
- * make-preview.mjs —— 生成第五轮「品牌定稿总览页」final/preview.html
+ * make-preview.mjs —— 生成「品牌定稿总览页」final/preview.html
  *  - 把各 SVG 资产**内联**进页面（这样 SVG 里的 var(--token) 能解析到站点 Token）
- *  - 同时承载 B（App 图标四底色候选）与 C（中文名提案）对比区
+ *  - 页定位＝**品牌定稿总览（随生成器同步至现行资产）**：
+ *      A 节（标志 / lockup / 六件套）引用**现行白底资产** app-icon-white/ +
+ *      现役 lockup*.svg，随 make-brand.mjs 重跑同步；
+ *      B（四底色候选，指 app-icon/color-candidates/）/ C（中文名提案）
+ *      两节为**第五轮提案原貌**，属历史探索，非上线资产。定案见 INTEGRATE.md §8。
  * 运行：node docs/迭代-v215-20260925/02-logo/final/tools/make-preview.mjs
  */
 import fs from "node:fs";
@@ -10,8 +14,6 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
-const ICON = path.join(ROOT, "app-icon");
-const CANDS = path.join(ICON, "color-candidates");
 
 const svg = (p) => fs.readFileSync(p, "utf8").replace(/<\?xml[^>]*\?>\s*/g, "");
 /** 内联时把 id 前缀改写，避免多份 SVG 的 mask id 冲突 */
@@ -205,14 +207,14 @@ const iconList = [
 const iconCards = iconList
   .map(
     ([png, size, note, svgFile]) => `<figure class="iconCard">
-      <div class="iconCard__img"><img src="./app-icon/${png}" alt="M Map 图标 ${size}px" width="${Math.min(
+      <div class="iconCard__img"><img src="./app-icon-white/${png}" alt="M Map 图标 ${size}px" width="${Math.min(
         Number(size),
         192
       )}"></div>
       <figcaption>
         <b class="mono">${size}px</b>
         <span>${note}</span>
-        <code class="mono">app-icon/${svgFile}</code>
+        <code class="mono">app-icon-white/${svgFile}</code>
       </figcaption>
     </figure>`
   )
@@ -257,7 +259,7 @@ const html = `<!doctype html>
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>M Map · 品牌定稿（第五轮：短钉·两站·无缝 → 定稿资产 + 图标配色 + 中文名提案）— v2.15</title>
+<title>M Map · 品牌定稿总览（第五轮几何 → 第六轮白底定稿）— v3.0.0</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
@@ -298,6 +300,12 @@ const html = `<!doctype html>
     font-family:var(--font-mono); font-size:11px; letter-spacing:var(--tracking-label);
     text-transform:uppercase; color:var(--meta); margin:0 0 10px
   }
+  .sync{
+    font-size:12.5px; line-height:1.55; color:var(--fg-2); background:var(--accent-soft);
+    border:1px solid var(--border); border-radius:var(--radius-chip);
+    padding:8px 12px; margin:0 0 14px; max-width:78ch
+  }
+  .sync b{color:var(--accent-deep)}
   h1{font-family:var(--font-display); font-size:34px; line-height:1.1; letter-spacing:var(--tracking-display); margin:0 0 10px; font-weight:700}
   h1 small{display:block; font-size:15px; font-weight:500; letter-spacing:0; color:var(--muted); margin-top:8px}
   h2{font-family:var(--font-display); font-size:22px; letter-spacing:var(--tracking-title); margin:0 0 6px; font-weight:700}
@@ -383,9 +391,10 @@ const html = `<!doctype html>
 <body>
 <div class="wrap">
   <header class="page">
-    <p class="kicker">M Map · v2.15 · 第五轮 · 品牌定稿</p>
-    <h1>短钉 · 两站 · 无缝 —— 定稿
-      <small>用户第四轮拍板：站点数＝两站（起笔点 + 中折点）／接合＝无缝 ⇒ 组合 4-2 定稿，进入资产化与落地。</small>
+    <p class="kicker">M Map · v3.0.0 · 定稿总览 · 资产随生成器同步至现行（第六轮白底）</p>
+    <p class="sync"><b>同步说明：</b>本页 A 节（标志 / lockup / 六件套）随 <code>make-brand.mjs</code> 同步至 <b>现行白底版本</b>（第六轮：白底「站牌」六件套 + lockup「澳搭車」）；<b>B 节（四底色候选）/ C 节（中文名提案）为第五轮提案原貌</b>，属历史探索、非上线资产。定案见 <code>INTEGRATE.md §8</code>。</p>
+    <h1>品牌定稿总览
+      <small>几何定稿于第五轮「短钉 · 两站 · 无缝」（用户第四轮拍板组合 4-2）；现行资产为第六轮白底版——六件套与 lockup 均以本页所列为准。</small>
     </h1>
     <ul class="checks">
       <li>DESIGN_VARIANCE 6</li><li>MOTION_INTENSITY 2</li><li>VISUAL_DENSITY 4</li>
@@ -421,7 +430,7 @@ const html = `<!doctype html>
   <section id="r5-lockup">
     <p class="secNo">A-2</p>
     <h2>横排 lockup</h2>
-    <p class="lead">左标志 + 右双行字标：上行 <b>M Map</b>（Barlow 700 / 30 / -0.015em，<code>textLength=80</code> 锁宽，缺字体也不撑破视框），下行中文名（Noto Sans SC 500 / 15 / 0.02em）。中文名未定，先沿用现名「MUST登校」占位 —— 定名后改 <code>make-brand.mjs</code> 的 <code>cn</code> 一处重跑即可。视框 156×64，右侧留 10 单位余量。浅/深两版同样走品牌 Token（深版用固定深底色，不随主题漂移）。</p>
+    <p class="lead">左标志 + 右双行字标：上行 <b>M Map</b>（Barlow 700 / 30 / -0.015em，<code>textLength=80</code> 锁宽，缺字体也不撑破视框），下行中文名（Noto Sans SC 500 / 15 / 0.02em）。中文名已定「澳搭車」（2026-09-25 定稿），本页两格随现役 <code>lockup.svg</code> 同步。视框 156×64，右侧留 10 单位余量。浅/深两版同样走品牌 Token（深版用固定深底色，不随主题漂移）。</p>
     <div class="grid2">
       <div class="plate plate--frame">${lock}</div>
       <div class="plate plate--dark">${lockDark}</div>
@@ -431,18 +440,18 @@ const html = `<!doctype html>
   <section id="r5-icons">
     <p class="secNo">A-3</p>
     <h2>App 图标 / favicon 全套</h2>
-    <p class="lead">六件套一次出齐。圆角与安全区按平台规矩分开：<b>favicon 与 PWA-any 预圆角</b>（浏览器/安装面板不给遮罩），<b>apple-touch 与 maskable 满幅方角</b>（由系统自己切形状）；maskable 内容压在中央 80% 安全圆内（最大对角半径 181px / 可用 205px）。</p>
+    <p class="lead">六件套一次出齐。圆角与安全区按平台规矩分开：<b>favicon 与 PWA-any 预圆角</b>（浏览器/安装面板不给遮罩），<b>apple-touch 与 maskable 满幅方角</b>（由系统自己切形状）；maskable 内容压在中央 80% 安全圆内（最大对角半径 179.8–179.9px（断言/探针两口径）/ 可用 204.8px）。</p>
     <div class="grid3">${iconCards}</div>
     <div style="margin-top:16px" class="grid2">
       <div class="realSize">
         <span class="mono" style="font-size:11px;color:var(--meta);align-self:center">真实尺寸</span>
-        <img src="./app-icon/icon-16.png" width="16" height="16" alt="16px">
-        <img src="./app-icon/icon-32.png" width="32" height="32" alt="32px">
-        <img src="./app-icon/icon-192.png" width="48" height="48" alt="缩小到 48px 看">
+        <img src="./app-icon-white/icon-16.png" width="16" height="16" alt="16px">
+        <img src="./app-icon-white/icon-32.png" width="32" height="32" alt="32px">
+        <img src="./app-icon-white/icon-192.png" width="48" height="48" alt="缩小到 48px 看">
       </div>
       <div class="realSize">
         <span class="mono" style="font-size:11px;color:var(--meta);align-self:center">maskable 安全区</span>
-        <span class="maskWrap"><img src="./app-icon/maskable-512.png" width="140" height="140" alt="maskable 512"></span>
+        <span class="maskWrap"><img src="./app-icon-white/maskable-512.png" width="140" height="140" alt="maskable 512"></span>
         <span style="font-size:12px;color:var(--muted);align-self:center">虚线＝80% 安全圆：任何系统切形都不会切到 M 与钉</span>
       </div>
     </div>
@@ -473,7 +482,7 @@ const html = `<!doctype html>
       <tbody>${nameRows}</tbody>
     </table>
 
-    <h2 style="margin-top:36px">现名「MUST登校」评估</h2>
+    <h2 style="margin-top:36px">旧名「MUST登校」评估（第五轮）</h2>
     <p class="lead">结论先说：<b>不删除，降级为「场景名」</b>。</p>
     <div class="verdictGrid">
       <div class="vList vList--good">
@@ -488,12 +497,12 @@ const html = `<!doctype html>
     <div class="rec" style="background:var(--accent-deep)">
       <h3>最终建议</h3>
       <p>${CURRENT.verdict.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")}</p>
-      <p style="margin-bottom:0"><b>主名首选「顺路」</b>（温润、通用、与「路线」同源，中英组合「顺路 · M Map」稳）；<b>次选「到站」</b>（公交原生、最直白）或 <b>「M 到」</b>（与 M Map 同源、最年轻）。锁名后重跑 <code>make-brand.mjs</code> 换掉 lockup 下行占位即可。</p>
+      <p style="margin-bottom:0"><b>主名首选「顺路」</b>（温润、通用、与「路线」同源，中英组合「顺路 · M Map」稳）；<b>次选「到站」</b>（公交原生、最直白）或 <b>「M 到」</b>（与 M Map 同源、最年轻）。锁名已于第六轮落地为「澳搭車」—— <code>final/lockup.svg</code> / <code>lockup-dark.svg</code> 同路径覆盖。</p>
     </div>
   </section>
 
   <footer>
-    <p>产出目录：<code>docs/迭代-v215-20260925/02-logo/final/</code>　·　资产生成器：<code>final/tools/make-brand.mjs</code>　·　像素自检：<code>.verify/check-brand-r5.mjs</code></p>
+    <p>产出目录：<code>docs/迭代-v215-20260925/02-logo/final/</code>　·　资产生成器：<code>final/tools/make-brand.mjs</code>　·　像素自检：<code>.verify/check-public-icons.mjs</code></p>
     <p>本页为评审样本，颜色与 src/app/globals.css 同源；「四底色候选」为探索性配色（若选定需登记为 Token）。</p>
   </footer>
 </div>

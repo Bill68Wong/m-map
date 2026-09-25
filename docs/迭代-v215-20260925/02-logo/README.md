@@ -20,7 +20,7 @@
 | ③ | 「变体 → 目标路径 → 用途 → 是否根级」清单 + 机读版 | `final/INTEGRATE.md §8.4`、`final/assets-r6.json` | — |
 
 **两处「按平台差异」的牌框处理（关键，勿改回贴边）**：
-- `maskable-512` **牌框内缩到 56% 画布** —— 安卓自适应遮罩会裁画布外缘，贴边牌框实测**碎成 4 段**（证据 `.verify/_cmp-maskable.mjs` V3）；内缩后最外对角半径 **179.8 < 可用 204.8**（与第五轮 181/205 同口径）。
+- `maskable-512` **牌框内缩**（名义边长 56% 画布；**含描边外沿实测 59.4%**，即 304/512，左右各留 104px 白圈）—— 安卓自适应遮罩会裁画布外缘，贴边牌框实测**碎成 4 段**（证据 `.verify/_cmp-maskable.mjs` V3）；内缩后最外对角半径 **179.8（断言口径）/ 179.9（探针口径）**（差异源于非白阈值 `>236` vs `>245`），**均 ≤ 可用 204.8**（与第五轮 181/205 同口径；复测 `.verify/_probe-maskable-frame.mjs`）。
 - `apple-touch-icon-180` **牌框圆角对齐 iOS 22.37%** —— 否则四角被 iOS 二次裁掉。
 
 **未动**（md5 复核一字未变）：`final/app-icon/**`（蓝底存档）、`final/mark*.svg`、`final/tokens-brand.css`、`final/og/**`、`public/brand/og.png`。
@@ -39,21 +39,21 @@
 | # | 产出 | 文件 |
 |---|---|---|
 | 1 | 主 mark（透明底 · 浅底 / 深底 / 单色） | `final/mark.svg`、`final/mark-dark.svg`、`final/mark-mono.svg` |
-| 2 | 横排 lockup（标志 + `M Map` + 中文名占位「MUST登校」） | `final/lockup.svg`、`final/lockup-dark.svg` |
+| 2 | 横排 lockup（标志 + `M Map` + 中文名「澳搭車」） | `final/lockup.svg`、`final/lockup-dark.svg` |
 | 3 | App 图标 / favicon 六件套 | `final/app-icon/icon-16`、`icon-32`、`apple-touch-icon-180`、`icon-192`、`icon-512`、`maskable-512`（各 `.svg` + `.png`）＋ 额外 `icon-square-512`（OG/分享卡） |
 | 4 | 落地说明（`public/` 清单 + `layout.tsx` / `manifest` 引用点 + 自检表） | `final/INTEGRATE.md` |
 | — | 品牌 Token（只增不改，追加到 `globals.css` 末尾） | `final/tokens-brand.css` |
 | — | 生成器（改一处色板/中文名 → 全量重出） | `final/tools/make-brand.mjs`、`final/tools/make-preview.mjs` |
-| — | 像素自检（17 项，全绿才放行） | `.verify/check-brand-r5.mjs` |
+| — | 像素自检（25 项，全绿才放行） | `.verify/check-public-icons.mjs` |
 
 **标志的颜色为什么不用 `--accent`**：内联实测踩到过坑 —— `mark-dark.svg` 若写 `var(--accent, #a8c7fa)`，在浅色主题页面里 `--accent` 解析成 `#1b4d8f`，**深底版被染成浅色、整份资产失效**。故拆成两组品牌专用 Token：`--brand-route/--brand-pin/--brand-fg/--brand-muted`（**随主题**切换，见 `tokens-brand.css`）与 `--brand-*-on-dark`（**固定深底**，永远亮色）。效果：`mark.svg` 内联进深色主题会**自动变亮蓝/亮绿**（同一个文件不改图），`mark-dark.svg` 放在任何主题里都保持亮色（用于固定深色底）。
 
 **平台的形状规矩**（这版按规矩分开了，别搞混）：
 - **预圆角 20%**：favicon 16/32、PWA `any` 192/512 —— 浏览器与安装面板**不会**再切形。
 - **满幅方角**：apple-touch 180、maskable 512 —— 由系统自己切形状。apple-touch 预圆角会被 iOS 二次切角（边缘露白圈）；maskable 预圆角会在安卓遮罩下露出圆角外的透明底。
-- **maskable 安全区**：内容压在中央 **80% 安全圆**内（最大对角半径 181px / 可用 205px），任何系统切形都切不到 M 与钉。
+- **maskable 安全区**：内容压在中央 **80% 安全圆**内（最大对角半径 179.8–179.9px（断言/探针两口径）/ 可用 204.8px），任何系统切形都切不到 M 与钉。
 
-**横排 lockup 的字**：上行 `M Map`（`--font-display` Barlow 700 / 30px / `-0.015em`，`textLength="80"` 锁宽 —— 缺字体也不撑破视框）；下行中文名（Noto Sans SC 500 / 15px / `0.02em`）。视框 156×64，右留 10 单位余量。**中文名定名后改 `make-brand.mjs` 的 `cn` 一处重跑即可。**
+**横排 lockup 的字**：上行 `M Map`（`--font-display` Barlow 700 / 30px / `-0.015em`，`textLength="80"` 锁宽 —— 缺字体也不撑破视框）；下行中文名（Noto Sans SC 500 / 15px / `0.02em`）。视框 156×64，右留 10 单位余量。**现役中文名「澳搭車」（第六轮定稿）；如需更名，改 `make-brand.mjs` 的 `cn` 一处重跑即可。**
 
 ### B. App 图标底色怎么定？—— 四个候选（用户问题）
 
@@ -69,7 +69,7 @@
 **推荐落地策略**：站点只登记 **②**（manifest / apple-touch / favicon 全部指向它）；**①** 用作 App 内品牌位与分享卡（与站牌同源）；**④** 保留为深色模式 PWA 备选，暂不上线。
 一句话：**② 是「品牌识别」与「可辨识度」的最优交集，③ 是唯一会因为自身逻辑而死掉的候选**（绿吃绿）。
 
-### C. 中文名提案（7 选 1 + 现名评估）
+### C. 中文名提案（7 选 1 + 旧名评估）
 
 **约束**：① 面向「澳门通勤 + 全澳导航」，不能把品牌锁死在单一学校/单一人群；② 核心用户是澳科大（MUST）学生 —— **大部分是内地生**，纯粤语词虽有在地感，要计入理解成本；③ 要与「路线 M → 终点钉」的标志、与英文名 M Map 有呼应；④ 2 字优先（好叫、好排、icon 下不挤）。
 
@@ -83,7 +83,7 @@
 | M 到 | 双语口令 · 与 M Map 同源 | 把首字母当名字：M 到了；也可读作极简代号「em 到」 | 单音节字母 + 去声，极短；年轻、利落、有科技感 | M 收笔即到达，钉一落＝「到」，名字即标志的动作；与 M Map 共享 M，母子关系最紧 | 过于极简，语义要靠品牌自己教；中文母语者第一眼可能读不懂 |
 | 澳图 | 写实 · 地图原生 | 澳门 + 图（Map）：延续「XX 地图」的品类认知 | `ào tú` 去+阳平，稳，像产品名；正式、可靠、工具感 | 钉在地图上的钉，名字说的就是标志在做的事；「澳图 M Map」中英对读最好记 | 与「奥图」同音易误听误搜；品类词做品牌，差异化不足 |
 
-#### 现名「MUST登校」评估 → **不删除，降级为「场景名」**
+#### 旧名「MUST登校」评估 → **不删除，降级为「场景名」**
 
 **值得保留**：① 精准打中核心用户自我认同（澳科大学生一看就懂）；②「登校」有画面感，比「通勤」有温度；③ M 与 M Map 首字母共用，母子品牌天然成立。
 

@@ -10,7 +10,7 @@
  *   CI / 换机就会掉字形（豆腐块）。headless Chromium + Google Fonts 才能保证
  *   与线上页面**同字形、同字距**。这与 .verify/_probe-brandmark.cjs 的既有做法一致。
  * 为什么不是 next/og ImageResponse（动图）：
- *   ① 本站品牌已冻结（v2.15 定稿 + 17 项像素自检），无「随内容漂移」的需求；
+ *   ① 本站品牌已冻结（v2.15 定稿 + 25 项像素自检），无「随内容漂移」的需求；
  *   ② ImageResponse 无 CSS var，且默认字体无 CJK ⇒ 必须自行喂字体二进制，属额外复杂度；
  *   ③ 静态图无 edge 运行时开销。
  *   本生成器 = 「单一真源」：改 og.html 一处 → 重跑 → 图更新，等价于「不会漂移」。

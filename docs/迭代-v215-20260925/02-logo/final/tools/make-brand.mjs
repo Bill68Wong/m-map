@@ -360,9 +360,12 @@ const ICON_SET = [
   { file: "apple-touch-icon-180", S: 180, ratio: 0.66, rounded: false, frameRadiusRatio: 0.24 },
   { file: "icon-192", S: 192, ratio: 0.64, rounded: true },
   { file: "icon-512", S: 512, ratio: 0.64, rounded: true },
-  // maskable：满幅方角 + 内容压 80% 安全圆。牌框内缩到 56% 画布、圆角 30% 牌框宽，
-  //   使「牌框描边最外对角半径」= 179.8px < 可用 204.8px（余量 25px，与第五轮蓝底
-  //   maskable 的 181/205 同口径）；若贴边则对角达 204.4 仅余 0.4px，安卓遮罩必裁角。
+  // maskable：满幅方角 + 内容压 80% 安全圆。牌框内缩到名义 56% 画布、圆角 30% 牌框宽，
+  //   使「牌框描边最外对角半径」= 179.8px（断言口径 >236）/ 179.9px（探针口径 >245），
+  //   差异源于非白阈值，均 ≤ 可用 204.8px（余量 25px，与第五轮蓝底 maskable 的 181/205 同口径）。
+  //   两种「不内缩」前提都不够稳（前提不同、各有一数）：
+  //     ① 牌框外沿贴画布边（满幅锐角）：角点半径 = 256√2 ≈ 362 > 安全圆 204.8 ⇒ 必被遮罩切段；
+  //     ② 名义 56% 但保留锐角：角点半径 ≈ 204.4，贴住安全圆 204.8（仅余 0.4px）。
   {
     file: "maskable-512",
     S: 512,
@@ -401,7 +404,7 @@ await buildSet(PALETTES.blue, ICON_DIR);
 
 /* ── 第六轮：白底「站牌」六件套（app-icon-white/，文件名不带色板前缀）─────────
    用途：替换线上 public/ 根级 6 件套。白牌面 + 青花蓝牌框 + 青花蓝路线/站点环 + 澳门绿钉。
-   几何与蓝底完全同源（同 ICON_SET，只换色板 + 牌框按遮罩安全区处理），故 17 项像素自检
+   几何与蓝底完全同源（同 ICON_SET，只换色板 + 牌框按遮罩安全区处理），故 25 项像素自检
    的坐标换算 M() 一字不改即可复用到白底（见 .verify/check-brand-r6.mjs）。
    ⚠️ 蓝底 app-icon/ 输出**不受影响**（PALETTES.blue.frame === null，牌框分支整段跳过）。 */
 await buildSet(PALETTES.white, WHITE_DIR, (f) => f, WHITE_ICON_SET);

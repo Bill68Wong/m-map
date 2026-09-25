@@ -20,7 +20,7 @@
     { "src": "app-icon-white/apple-touch-icon-180.png", "target": "public/apple-touch-icon.png", "root": true, "purpose": "ios-home", "channels": 3, "expect": { "(1,1)": "#FFFFFF" } },
     { "src": "app-icon-white/icon-192.png", "target": "public/icon-192.png", "root": true, "purpose": "pwa-any", "channels": 4 },
     { "src": "app-icon-white/icon-512.png", "target": "public/icon-512.png", "root": true, "purpose": "pwa-any", "channels": 4 },
-    { "src": "app-icon-white/maskable-512.png", "target": "public/icon-maskable-512.png", "root": true, "purpose": "pwa-maskable", "channels": 3, "safeCircleMaxRadius": 179.8 },
+    { "src": "app-icon-white/maskable-512.png", "target": "public/icon-maskable-512.png", "root": true, "purpose": "pwa-maskable", "channels": 3, "safeCircleMaxRadius": 179.9 },
     { "src": "lockup.svg", "target": "public/brand/lockup.svg", "root": false, "purpose": "brand-lockup-light", "cn": "澳搭車" },
     { "src": "lockup-dark.svg", "target": "public/brand/lockup-dark.svg", "root": false, "purpose": "brand-lockup-dark", "cn": "澳搭車" }
   ],
