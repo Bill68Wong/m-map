@@ -279,6 +279,7 @@ export default function NavDetailBody({
           lrt={lrt}
           traveling={track.traveling}
           anomaly={track.anomaly}
+          note={track.note}
           freshSec={freshSec}
           onStart={track.onStart}
           onBoard={track.onBoard}

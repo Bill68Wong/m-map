@@ -37,6 +37,8 @@ export interface NavTrackBarProps {
   traveling: boolean;
   /** 安全网检出 */
   anomaly: "none" | "not_boarded" | "alighted";
+  /** 状态提示（无车 / 丢信号 / 获取失败等；boarding/riding 可见） */
+  note: string;
   /** 新鲜度（秒）；null = 不显示 */
   freshSec: number | null;
   onStart: () => void;
@@ -70,6 +72,7 @@ export default function NavTrackBar(props: NavTrackBarProps) {
     lrt,
     traveling,
     anomaly,
+    note,
     freshSec,
     onStart,
     onBoard,
@@ -199,6 +202,13 @@ export default function NavTrackBar(props: NavTrackBarProps) {
           </button>
         )}
       </div>
+
+      {/* 状态提示（无车 / 丢信号 / 获取失败等；boarding/riding 可见，防「静默失败」） */}
+      {(phase === "boarding" || phase === "riding") && note && (
+        <p className="nav-track__note t-label" role="status">
+          {note}
+        </p>
+      )}
     </div>
   );
 }
