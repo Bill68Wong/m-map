@@ -17,8 +17,17 @@
  * ── 关键参数（锁定）────────────────────────────────────────────────────
  *   换档阈值 = `0.28 × 相邻档距`；flick = `|v| > 0.5px/ms`；关闭 = peek 下拖 > 96px
  *   或 `v > 0.5 && 位移 > 32px`；速度投影 120ms（允许一次跨两档）。
+ *
+ * ── ★ 2026-09-25：拖动位移**改走命令式**（不每帧 `setState`）────────────────
+ *   根因（用户实测：「拖动弹窗后面的地图会抖动」）：原实现 `onPointerMove` 每帧 `setDragPx`
+ *   ⇒ `RouteSheet` 整棵子树（推荐列表 + 详情主体：站条 / 折叠区 / 操作条）**逐帧 reconcile**，
+ *   主线程被占满 ⇒ 高德画布/瓦片的渲染循环被饿死 ⇒ 视觉「地图抖」。此法与项目自身「拖拽期
+ *   零 JS、零 React 更新」（`VehicleLayer` 注释）冲突。
+ *   ⇒ 拖动中**只写 `--sheet-y-anim`**（`sheetRef` 直改 DOM，与既有注释口径一致：「位移走
+ *   transform」）；React 状态仅在**起拖 / 释放**各变一次（`dragging`）。落定/开合由 effect +
+ *   React style 双写同值（幂等），保证回弹也能被 260ms 过渡接住。
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import { DETENTS, type Detent } from "./sheet-detents";
 
 /** 起拖区高度（px）：grip + 头部（命中区 ≥44×24） */
@@ -51,11 +60,16 @@ export interface UseSnapSheetOpts {
    *   推荐 pane 传 `false` ⇒ 拉到底**硬停/回弹**（不再整体拖没）；详情 pane 传 `true`（下拉 = 回推荐）。
    */
   dismissible?: boolean;
+  /**
+   * ★ 2026-09-25：`.route-sheet` 根元素 ref —— 拖动中**直接命令式**写 `--sheet-y-anim`
+   *   （不触发 React 重渲染 ⇒ 主线程不阻塞地图渲染循环）。
+   */
+  sheetRef?: RefObject<HTMLElement | null>;
 }
 
 export interface UseSnapSheet {
   dragging: boolean;
-  /** 面板当前 translateY（px）—— 每帧更新，只喂 transform */
+  /** 面板**落定** translateY（px）—— 只喂初始/落定 transform；拖动跟手值走命令式 `--sheet-y-anim` */
   translateY: number;
   /** 滚动容器需补的 padding（px）—— 仅档位落定变化 */
   layoutY: number;
@@ -67,8 +81,7 @@ export interface UseSnapSheet {
 }
 
 export function useSnapSheet(opts: UseSnapSheetOpts): UseSnapSheet {
-  const { open, detent, topsPx, onDetentChange, onDismiss, dismissible = true } = opts;
-  const [dragPx, setDragPx] = useState(0);
+  const { open, detent, topsPx, onDetentChange, onDismiss, dismissible = true, sheetRef } = opts;
   const [dragging, setDragging] = useState(false);
   const moved = useRef(false);
   const drag = useRef({
@@ -85,6 +98,22 @@ export function useSnapSheet(opts: UseSnapSheetOpts): UseSnapSheet {
   const index = Math.min(last, Math.max(0, DETENTS.indexOf(detent)));
   const cur = topsPx[index] ?? 0;
   const winH = topsPx.length ? topsPx[topsPx.length - 1] / 0.8 : 844;
+
+  /** 命令式写面板位移（GPU 合成；拖动中每帧调用，不触发 React 渲染） */
+  const paint = (y: number) => {
+    sheetRef?.current?.style.setProperty("--sheet-y-anim", `${Math.round(y)}px`);
+  };
+
+  /**
+   * 落定 / 开合时把位移刷回目标值：
+   *   · 拖动中（`dragging`）不刷 ⇒ 不覆盖命令式的跟手值；
+   *   · 释放后刷 ⇒ 未换档的「回弹」也能被 260ms 过渡接住（React style 不写「无变化」的 var）。
+   */
+  useEffect(() => {
+    if (dragging) return;
+    paint(open ? cur : winH);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dragging, open, cur, winH]);
 
   function onPointerDown(e: React.PointerEvent<HTMLDivElement>) {
     /**
@@ -133,8 +162,8 @@ export function useSnapSheet(opts: UseSnapSheetOpts): UseSnapSheet {
       if (Math.abs(dyRaw) < 6) return;
       if (Math.abs(dx) > Math.abs(dyRaw)) {
         d.on = false; // 横向为主 → 放弃接管
+        paint(cur);
         setDragging(false);
-        setDragPx(0);
         return;
       }
       d.decided = true;
@@ -148,7 +177,8 @@ export function useSnapSheet(opts: UseSnapSheetOpts): UseSnapSheet {
     if (v > maxDy) v = maxDy + (v - maxDy) * RUBBER;
     d.rawDy = dyRaw;
     d.dispDy = v;
-    setDragPx(v);
+    // ★ 命令式跟手（不 setState ⇒ 拖动期零 React 更新；不动画 top/height）
+    paint(cur + v);
   }
 
   function onPointerUp(e: React.PointerEvent<HTMLDivElement>) {
@@ -160,8 +190,7 @@ export function useSnapSheet(opts: UseSnapSheetOpts): UseSnapSheet {
     } catch {
       /* ignore */
     }
-    setDragging(false);
-    setDragPx(0);
+    setDragging(false); // 落定目标由下方 effect 命令式刷回（含未换档「回弹」）
 
     const rawDy = d.rawDy;
     const dt = Math.max(1, performance.now() - d.t0);
@@ -221,7 +250,11 @@ export function useSnapSheet(opts: UseSnapSheetOpts): UseSnapSheet {
 
   return {
     dragging,
-    translateY: open ? cur + dragPx : winH, // 关闭 → 100dvh（推出视口）
+    /**
+     * 落定位移（拖动中不参与渲染 —— 拖动值由 `paint()` 命令式写 `--sheet-y-anim`）。
+     * React 仅在**值变化**时写该 var ⇒ 拖动期不会覆盖命令式跟手值；落定/回弹由 effect 兜底。
+     */
+    translateY: open ? cur : winH, // 关闭 → 100dvh（推出视口）
     layoutY: cur,
     tapOk: () => !moved.current,
     onPointerDown,

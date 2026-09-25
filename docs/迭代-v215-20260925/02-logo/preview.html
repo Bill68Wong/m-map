@@ -1,0 +1,756 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>M Map · 品牌标志（第二轮：M×钉 深度融合）· 终点钉 · 慢速色 — v2.15</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  /* ── 品牌 Token（与 src/app/globals.css 同源，此处仅作预览样本） ── */
+  :root {
+    --bg: #f2f4f0;
+    --surface: #ffffff;
+    --surface-2: #eaece7;
+    --fg: #0f1720;
+    --fg-2: #3a424e;
+    --muted: #5a6472;
+    --meta: #6e7684;
+    --border: #dcdcdf;
+    --border-2: #c7cbd1;
+    --border-strong: #1b4d8f;
+    --accent: #1b4d8f;
+    --accent-deep: #16406f;
+    --accent-soft: #e6ecf6;
+    --accent-dk: #a8c7fa;
+    --brand-green: #0b6e4f;
+    --brand-green-deep: #08543c;
+    --brand-green-soft: #dcebe2;
+    --brand-green-dk: #6dd58c;
+    --plate-dark: #14161c;
+    --warn: #a85e00;
+    --danger: #b4342a;
+    --slow-ink: #8a6400;
+    --slow-soft: #fbf1d6;
+    --font-display: "Barlow", "Noto Sans SC", system-ui, -apple-system, "PingFang SC", sans-serif;
+    --font-mono: "JetBrains Mono", "Barlow", ui-monospace, monospace;
+    --radius-chip: 6px;
+    --radius-btn: 8px;
+    --radius-card: 10px;
+    --space-2: 8px; --space-3: 12px; --space-4: 16px; --space-5: 20px;
+    --space-6: 24px; --space-7: 32px; --space-9: 48px;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font-family: var(--font-display); font-size: 15px; line-height: 1.55;
+    -webkit-font-smoothing: antialiased; padding: 40px 24px 96px;
+  }
+  .wrap { max-width: 1120px; margin: 0 auto; }
+
+  /* ── 页头 ── */
+  .masthead { display: flex; align-items: center; gap: 16px; padding-bottom: 20px; border-bottom: 1px solid var(--border); }
+  .masthead svg { flex: none; }
+  .masthead__t { font-size: 22px; font-weight: 700; letter-spacing: -0.01em; }
+  .masthead__s { font-size: 13px; color: var(--muted); margin-top: 2px; }
+  .masthead__tag {
+    margin-left: auto; font-family: var(--font-mono); font-size: 11px; letter-spacing: .04em;
+    color: var(--accent); background: var(--accent-soft); border: 1px solid var(--border-strong);
+    border-radius: 999px; padding: 4px 10px; white-space: nowrap;
+  }
+
+  /* ── 区块 ── */
+  section { margin-top: var(--space-9); }
+  h2 {
+    font-size: 13px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase;
+    color: var(--muted); margin: 0 0 var(--space-4); display: flex; align-items: center; gap: 10px;
+  }
+  h2::after { content: ""; height: 1px; flex: 1; background: var(--border); }
+  .note { font-size: 13px; color: var(--muted); margin: -8px 0 var(--space-4); }
+  .note code, .card__pts code, .diag code, footer code { font-family: var(--font-mono); color: var(--fg-2); background: var(--surface-2); border-radius: 4px; padding: 0 4px; }
+
+  /* ── 方案卡 ── */
+  .concepts { display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--space-4); }
+  .concepts--3 { grid-template-columns: repeat(3, 1fr); }
+  @media (max-width: 880px) { .concepts, .concepts--3 { grid-template-columns: 1fr; } }
+  .card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-card);
+    padding: var(--space-5); display: flex; flex-direction: column; gap: var(--space-4);
+  }
+  .card--pick { border-color: var(--border-strong); }
+  .card__top { display: flex; align-items: baseline; gap: 8px; }
+  .card__no { font-family: var(--font-mono); font-size: 12px; color: var(--accent); }
+  .card__name { font-size: 17px; font-weight: 700; letter-spacing: -0.01em; }
+  .card__badge {
+    margin-left: auto; font-size: 11px; font-weight: 700; letter-spacing: .04em;
+    color: var(--surface); background: var(--brand-green); border-radius: 999px; padding: 3px 9px;
+  }
+  .card__badge--alt { background: var(--muted); }
+  .card__idea { font-size: 13.5px; color: var(--fg-2); margin: 0; }
+  .plate {
+    background: var(--surface-2); border-radius: var(--radius-btn);
+    display: grid; place-items: center; min-height: 150px; padding: var(--space-4);
+  }
+  .plate--dark { background: var(--plate-dark); }
+  .plate svg { display: block; }
+  .lockup-plate { background: var(--surface-2); border-radius: var(--radius-btn); display: grid; place-items: center; padding: 12px 8px; }
+  .lockup-plate svg { width: 100%; max-width: 268px; height: auto; }
+  .card__pts { font-size: 12.5px; color: var(--muted); margin: 0; padding-left: 16px; }
+  .card__pts li { margin: 3px 0; }
+  .chg { font-size: 12.5px; color: var(--fg-2); margin: 0; padding-left: 16px; }
+  .chg li { margin: 3px 0; }
+  .chg b { color: var(--accent); font-weight: 600; }
+  .subttl { font-size: 11px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--meta); margin: 0 0 6px; }
+
+  /* ── 小尺寸压力测试 ── */
+  .sizes { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-3); }
+  @media (max-width: 720px) { .sizes { grid-template-columns: repeat(3, 1fr); } }
+  .size { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-btn); padding: 14px 8px; text-align: center; }
+  .size__box { height: 84px; display: grid; place-items: center; }
+  .size__l { font-family: var(--font-mono); font-size: 11px; color: var(--meta); margin-top: 8px; }
+
+  /* ── 应用位 ── */
+  .slots { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: var(--space-4); }
+  .slot { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-card); overflow: hidden; }
+  .slot__stage { height: 108px; display: grid; place-items: center; background: var(--surface-2); }
+  .slot__cap { font-size: 12px; color: var(--muted); padding: 8px 12px; border-top: 1px solid var(--border); }
+  .tabbar { display: flex; align-items: flex-end; gap: 4px; background: #cfd4cc; padding: 10px 12px 0; width: 100%; height: 108px; }
+  .tab { background: var(--surface); border-radius: 8px 8px 0 0; padding: 9px 14px 12px; display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--fg-2); box-shadow: 0 -1px 0 rgba(0,0,0,.04); }
+  .tab--idle { background: #e3e7e0; color: var(--meta); }
+  .tab svg { width: 16px; height: 16px; flex: none; }
+  .round-av { width: 72px; height: 72px; border-radius: 999px; overflow: hidden; display: grid; place-items: center; }
+  .favbox { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: var(--surface); border: 1px solid var(--border-2); border-radius: 999px; }
+  .favbox svg { width: 20px; height: 20px; }
+  .favbox span { font-size: 13px; color: var(--fg-2); }
+
+  /* ── 首轮存档 ── */
+  .archive { opacity: .9; }
+  .archive .concepts { grid-template-columns: repeat(3, 1fr); }
+  @media (max-width: 880px) { .archive .concepts { grid-template-columns: 1fr; } }
+  .archive .plate { min-height: 128px; }
+  .archive .card { background: var(--surface-2); }
+  .archive-tag { font-family: var(--font-mono); font-size: 11px; color: var(--meta); }
+
+  /* ── 地图钉对比 ── */
+  .pins { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); }
+  @media (max-width: 720px) { .pins { grid-template-columns: 1fr; } }
+  .pin-stage { background: #dfe4da; border-radius: var(--radius-btn); height: 160px; display: grid; place-items: center; position: relative; }
+  .old-pin {
+    position: relative; width: 20px; height: 26px;
+    border-radius: 50% 50% 50% 0; transform: rotate(-45deg);
+    background: var(--danger); border: 1.5px solid #fff;
+    box-shadow: 0 2px 5px rgba(15, 23, 32, 0.35);
+  }
+  .old-pin::after {
+    content: ""; position: absolute; left: 50%; top: 34%;
+    width: 8px; height: 8px; margin: -4px 0 0 -4px;
+    border-radius: 50%; background: #fff;
+  }
+  .new-pin { width: 28px; height: 36.75px; filter: drop-shadow(0 2px 3px rgba(15,23,32,.35)); }
+  .anchor-hint { position: absolute; bottom: 22px; left: 50%; width: 1px; height: 22px; background: repeating-linear-gradient(180deg, rgba(27,77,143,.5) 0 3px, transparent 3px 6px); }
+  .diag { font-size: 12.5px; color: var(--muted); }
+  .diag b { color: var(--fg-2); }
+
+  /* ── 慢速色 ── */
+  .swatches { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--space-4); }
+  .sw { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-card); padding: var(--space-4); }
+  .sw__chip { height: 56px; border-radius: var(--radius-btn); display: grid; place-items: center; font-weight: 700; font-size: 15px; margin-bottom: 12px; }
+  .sw__hex { font-family: var(--font-mono); font-size: 12px; color: var(--fg-2); }
+  .sw__t { font-size: 14px; font-weight: 700; margin-bottom: 2px; }
+  .sw__d { font-size: 12.5px; color: var(--muted); margin-top: 8px; }
+  .sw--pick { border-color: var(--border-strong); }
+  .cr { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-top: 10px; }
+  .cr th, .cr td { text-align: right; padding: 4px 6px; border-top: 1px solid var(--border); font-family: var(--font-mono); }
+  .cr th:first-child, .cr td:first-child { text-align: left; font-family: var(--font-display); }
+  .cr td.ok { color: var(--brand-green); font-weight: 700; }
+  .cr td.no { color: var(--danger); font-weight: 700; }
+  .cr td.ok::after, .cr td.no::after {
+    content: ""; display: inline-block; width: 11px; height: 11px;
+    margin-left: 6px; vertical-align: -1px; background: currentColor;
+    -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+    -webkit-mask-position: center; mask-position: center;
+    -webkit-mask-size: contain; mask-size: contain;
+  }
+  .cr td.ok::after {
+    -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M2.5 8.5 L6.5 12.5 L13.5 4' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+    mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M2.5 8.5 L6.5 12.5 L13.5 4' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+  }
+  .cr td.no::after {
+    -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M4 4 L12 12 M12 4 L4 12' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round'/></svg>");
+    mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M4 4 L12 12 M12 4 L4 12' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round'/></svg>");
+  }
+  .folddemo { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-card); padding: var(--space-4); }
+  .folddemo__row { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-top: 1px solid var(--border); }
+  .folddemo__row:first-of-type { border-top: 0; }
+  .folddemo__line {
+    font-family: var(--font-mono); font-size: 12px; font-weight: 600; color: var(--surface);
+    background: var(--accent); border-radius: var(--radius-chip); padding: 2px 7px;
+  }
+  .folddemo__min { font-size: 13px; color: var(--fg-2); }
+  .folddemo__min b { font-size: 15px; }
+  .folddemo__d { font-size: 13px; font-weight: 700; }
+  .d-fast { color: var(--brand-green); }
+  .d-slow { color: var(--slow-ink); }
+  .d-warn { color: var(--warn); }
+  .folddemo__go {
+    margin-left: auto; font-size: 12.5px; color: var(--accent); border: 1px solid var(--border-strong);
+    border-radius: var(--radius-btn); padding: 5px 10px; background: var(--surface);
+  }
+
+  /* ── Token 速查 ── */
+  .toks { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+  .tok { display: flex; align-items: center; gap: 10px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-btn); padding: 10px 12px; }
+  .tok__sw { width: 26px; height: 26px; border-radius: 7px; border: 1px solid rgba(0,0,0,.08); flex: none; }
+  .tok__k { font-family: var(--font-mono); font-size: 12px; }
+  .tok__v { font-family: var(--font-mono); font-size: 11px; color: var(--meta); }
+
+  footer { margin-top: var(--space-9); padding-top: 20px; border-top: 1px solid var(--border); font-size: 12.5px; color: var(--meta); }
+
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="masthead">
+    <svg viewBox="0 0 64 64" width="52" height="52" aria-label="M Map" role="img">
+      <path d="M12 48 L12 16 L30 34 L48 16" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" />
+      <circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+      <circle cx="30" cy="34" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+      <path d="M15.06 23.87 L21 25 L19.87 19.06" fill="none" stroke="var(--surface)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
+      <path d="M40.2 17.78 L48 52 L55.8 17.78 A8 8 0 1 0 40.2 17.78 Z" fill="var(--brand-green)" />
+      <circle cx="48" cy="16" r="2.7" fill="var(--surface)" />
+    </svg>
+    <div>
+      <div class="masthead__t">品牌标志（第二轮）· 终点钉 · 慢速色</div>
+      <div class="masthead__s">M Map（MUST登校）· v2.15 · 按反馈重做：M 与终点钉深度融合</div>
+    </div>
+    <span class="masthead__tag">2026-09-25 · 设计师 颜好看</span>
+  </header>
+
+  <!-- ==================== 反馈 & 本轮思路 ==================== -->
+  <section>
+    <h2>本轮要解决的两个问题</h2>
+    <div class="concepts">
+      <div class="card">
+        <p class="subttl">用户反馈 ①</p>
+        <p class="card__idea" style="font-size:14px"><b>「M 没看出来和路线轨迹有关。」</b></p>
+        <p class="diag" style="margin:0">首轮 M 只是一条折线，缺少「路线」的三件套：<b>方向、站点、转角</b>。<br>本轮给左侧笔画补齐路线语言 —— 沿线方向箭头 + 站点环（节点＝站点）+ 圆角转折。</p>
+      </div>
+      <div class="card">
+        <p class="subttl">用户反馈 ②</p>
+        <p class="card__idea" style="font-size:14px"><b>「M 收的那一笔和钉没融合，像两个东西放一起。」</b></p>
+        <p class="diag" style="margin:0">首轮钉是「停靠」在 M 右下脚的一个独立水滴。<br>本轮让钉从右竖<b>收笔处自然生长 / 转化</b>：右竖本身就是钉（A），或用路线语汇（站点环＋箭头）直接拼出钉（B）—— 观感上是<b>一个笔画</b>，不是两件东西。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================== 1. 第二轮 · 两种深度融合 ==================== -->
+  <section>
+    <h2>第二轮 · 两种「深度融合」方向（请二选一）</h2>
+    <p class="note">共同内核：<b>字母 M ＝ 一条导航路线</b>；<b>右竖收笔＝终点</b>，且钉就<b>长在这一竖上</b>。双品牌色：青花蓝 <code>#1b4d8f</code> 画路，澳门绿 <code>#0b6e4f</code> 立钉。</p>
+
+    <div class="concepts">
+      <!-- 方向 A -->
+      <article class="card card--pick">
+        <div class="card__top">
+          <span class="card__no">A</span>
+          <span class="card__name">收笔即钉</span>
+          <span class="card__badge">主推</span>
+        </div>
+        <p class="card__idea"><b>一句话：</b>M 的右竖<b>不再单独画一笔</b>，这一竖本身就是一整枚终点钉 —— 路线走到右上折点后，笔画直接"变成"钉（同一个笔画的两种身份）。</p>
+        <div class="plate">
+          <svg viewBox="0 0 64 64" width="104" height="104" role="img" aria-label="方向 A 收笔即钉">
+            <path d="M12 48 L12 16 L30 34 L48 16" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" />
+            <circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+            <circle cx="30" cy="34" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+            <path d="M15.06 23.87 L21 25 L19.87 19.06" fill="none" stroke="var(--surface)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
+            <path d="M40.2 17.78 L48 52 L55.8 17.78 A8 8 0 1 0 40.2 17.78 Z" fill="var(--brand-green)" />
+            <circle cx="48" cy="16" r="2.7" fill="var(--surface)" />
+          </svg>
+        </div>
+        <div class="lockup-plate">
+          <svg viewBox="0 0 300 96" role="img" aria-label="方向 A 横排组合">
+            <g transform="translate(6 18)">
+              <path d="M12 48 L12 16 L30 34 L48 16" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" />
+              <circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+              <circle cx="30" cy="34" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+              <path d="M15.06 23.87 L21 25 L19.87 19.06" fill="none" stroke="var(--surface)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
+              <path d="M40.2 17.78 L48 52 L55.8 17.78 A8 8 0 1 0 40.2 17.78 Z" fill="var(--brand-green)" />
+              <circle cx="48" cy="16" r="2.7" fill="var(--surface)" />
+            </g>
+            <text x="84" y="56" font-family="var(--font-display)" font-size="38" font-weight="700" letter-spacing="-0.015em" fill="var(--fg)">M Map</text>
+            <text x="86" y="79" font-family="var(--font-display)" font-size="13" fill="var(--muted)">澳门公交 · 实时导航</text>
+          </svg>
+        </div>
+        <p class="subttl" style="margin-bottom:0">相比首轮改了什么</p>
+        <ul class="chg">
+          <li>钉<b>不再是附加图形</b>：钉帽＝M 右上折点、钉身＝右竖、钉尖＝右竖末端下探穿出基线 —— 三者都长在原有笔画上。</li>
+          <li>M <b>补上路线语言</b>：左竖与中折上放 2 个站点环（起点 / 换乘），中折上放 1 枚白色方向箭头（沿线指向终点）。</li>
+          <li>钉尖下探至 <code>y=52</code>（基线 48 之下）＝"扎进地图"，读作<b>把 M 钉住</b>。</li>
+        </ul>
+        <ul class="card__pts">
+          <li>优点：<b>融合最彻底</b>，字形仍完整可读；实心钉身在小尺寸最稳。</li>
+          <li>注意：钉帽与中折的交角处需保持圆润，避免看起来像"贴了一个圆"。</li>
+        </ul>
+      </article>
+
+      <!-- 方向 B -->
+      <article class="card">
+        <div class="card__top">
+          <span class="card__no">B</span>
+          <span class="card__name">站环成钉</span>
+        </div>
+        <p class="card__idea"><b>一句话：</b>钉<b>不是外来形状</b>，而是用路线自己的词汇拼出来的 —— <b>站点环当钉帽、方向箭头当钉身与钉尖</b>，两样一叠恰好就是一整枚地图钉。</p>
+        <div class="plate">
+          <svg viewBox="0 0 64 64" width="104" height="104" role="img" aria-label="方向 B 站环成钉">
+            <path d="M12 48 L12 16 L30 34 L48 16" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" />
+            <circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+            <circle cx="30" cy="34" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+            <path d="M15.06 23.87 L21 25 L19.87 19.06" fill="none" stroke="var(--surface)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
+            <path d="M44.75 16 L44.75 44 L41.4 44 L48 52 L54.6 44 L51.25 44 L51.25 16 Z" fill="var(--brand-green)" />
+            <circle cx="48" cy="16" r="6.5" fill="var(--surface)" stroke="var(--brand-green)" stroke-width="2.6" />
+          </svg>
+        </div>
+        <div class="lockup-plate">
+          <svg viewBox="0 0 300 96" role="img" aria-label="方向 B 横排组合">
+            <g transform="translate(6 18)">
+              <path d="M12 48 L12 16 L30 34 L48 16" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" />
+              <circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+              <circle cx="30" cy="34" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+              <path d="M15.06 23.87 L21 25 L19.87 19.06" fill="none" stroke="var(--surface)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
+              <path d="M44.75 16 L44.75 44 L41.4 44 L48 52 L54.6 44 L51.25 44 L51.25 16 Z" fill="var(--brand-green)" />
+              <circle cx="48" cy="16" r="6.5" fill="var(--surface)" stroke="var(--brand-green)" stroke-width="2.6" />
+            </g>
+            <text x="84" y="56" font-family="var(--font-display)" font-size="38" font-weight="700" letter-spacing="-0.015em" fill="var(--fg)">M Map</text>
+            <text x="86" y="79" font-family="var(--font-display)" font-size="13" fill="var(--muted)">澳门公交 · 实时导航</text>
+          </svg>
+        </div>
+        <p class="subttl" style="margin-bottom:0">相比首轮改了什么</p>
+        <ul class="chg">
+          <li>钉帽改成与左侧<b>同款的站点环</b>（只是更大）→ "终点站"与"途经站"一眼同族，钉帽不再突兀。</li>
+          <li>钉身改成与路线<b>同宽</b>的绿色向下箭头 → 中折上的白色方向箭头在这里"接棒"成了钉尖，箭头＝钉尖。</li>
+          <li>全图只剩<b>一种视觉语汇</b>（路线 / 站点 / 箭头），钉是它们的自然结果，不是贴上去的。</li>
+        </ul>
+        <ul class="card__pts">
+          <li>优点：<b>设计最自洽</b>，路线感最强，站环/箭头可无缝复用到地图与站牌 UI。</li>
+          <li>注意：空心环＋细箭头在 16px 会比 A 略轻（见下方压力测试）。</li>
+        </ul>
+      </article>
+    </div>
+  </section>
+
+  <!-- ==================== 2. 备选 C ==================== -->
+  <section>
+    <h2>备选 C（设计师另提 · 讨论向）</h2>
+    <p class="note">用户说"有别的想法也可以提出讨论"。以下是第三种融合机制 —— 如果你更想要<b>"钉住"的动作感</b>而非"路线感"，C 值得一看。</p>
+    <div class="concepts">
+      <article class="card">
+        <div class="card__top">
+          <span class="card__no">C</span>
+          <span class="card__name">钉穿 M</span>
+          <span class="card__badge card__badge--alt">备选</span>
+        </div>
+        <p class="card__idea"><b>一句话：</b>换个读法 —— 不是"笔画变成钉"，而是<b>"一枚钉把 M 钉住了"</b>：一枚细长的绿钉自上而下穿过 M 右端，钉帽悬在折点之上，钉尖扎到基线之下。</p>
+        <div class="plate">
+          <svg viewBox="0 0 64 64" width="104" height="104" role="img" aria-label="备选 C 钉穿 M">
+            <path d="M12 48 L12 16 L30 34 L48 16" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" />
+            <circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+            <circle cx="30" cy="34" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+            <path d="M15.06 23.87 L21 25 L19.87 19.06" fill="none" stroke="var(--surface)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
+            <path d="M45.6 13 L45.6 50 L48 56 L50.4 50 L50.4 13 Z" fill="var(--brand-green)" />
+            <circle cx="48" cy="12" r="5.6" fill="var(--surface)" stroke="var(--brand-green)" stroke-width="2.6" />
+            <circle cx="48" cy="12" r="1.9" fill="var(--brand-green)" />
+          </svg>
+        </div>
+        <ul class="chg">
+          <li>融合机制＝<b>贯穿</b>：钉比笔画更细更长、明显"穿过去"，是"钉住"最字面的表达。</li>
+          <li>代价：右竖不再是路线（丢了 B 的"一根线到底"），更像图钉/大头针而非地图钉。</li>
+          <li>适合方向：若品牌想强调"钉 / 固定 / 锚定"的动作感，选 C；若想强调"路线 / 导航"，选 A 或 B。</li>
+        </ul>
+      </article>
+      <article class="card" style="justify-content:center">
+        <p class="subttl">三种融合机制对照</p>
+        <ul class="chg">
+          <li><b>A · 替换</b>：右竖 <b>＝</b> 钉（同一个笔画换身份）。最稳、最实。</li>
+          <li><b>B · 组装</b>：站环 <b>＋</b> 箭头 <b>＝</b> 钉（用路线语汇拼出钉）。最自洽、最"路线"。</li>
+          <li><b>C · 贯穿</b>：钉 <b>↕</b> 穿过笔画（把 M 钉住）。动作感最强，钉感最重。</li>
+        </ul>
+        <p class="diag">A / B 都保留了「M 的右竖＝路线的终点」这一叙事；C 用一点点叙事换取更强的"钉住"动作。请按品牌想讲的故事选。</p>
+      </article>
+    </div>
+  </section>
+
+  <!-- ==================== 3. 小尺寸压力测试 ==================== -->
+  <section>
+    <h2>小尺寸压力测试（A / B / C）</h2>
+    <p class="note">真要到 16px 还得认得出才算 Logo。站点环与方向箭头在小尺寸会自动"退场"，只留 M 骨架 + 钉。</p>
+    <div class="sizes">
+      <div class="size"><div class="size__box">
+        <svg viewBox="0 0 64 64" width="16" height="16" aria-label="A 16px">
+          <path d="M12 48 L12 16 L30 34 L48 16" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" />
+          <circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+          <circle cx="30" cy="34" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+          <path d="M40.2 17.78 L48 52 L55.8 17.78 A8 8 0 1 0 40.2 17.78 Z" fill="var(--brand-green)" />
+          <circle cx="48" cy="16" r="2.7" fill="var(--surface)" />
+        </svg></div><div class="size__l">16 · A</div></div>
+      <div class="size"><div class="size__box">
+        <svg viewBox="0 0 64 64" width="16" height="16" aria-label="B 16px">
+          <path d="M12 48 L12 16 L30 34 L48 16" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" />
+          <circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+          <circle cx="30" cy="34" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+          <path d="M44.75 16 L44.75 44 L41.4 44 L48 52 L54.6 44 L51.25 44 L51.25 16 Z" fill="var(--brand-green)" />
+          <circle cx="48" cy="16" r="6.5" fill="var(--surface)" stroke="var(--brand-green)" stroke-width="2.6" />
+        </svg></div><div class="size__l">16 · B</div></div>
+      <div class="size"><div class="size__box">
+        <svg viewBox="0 0 64 64" width="16" height="16" aria-label="C 16px">
+          <path d="M12 48 L12 16 L30 34 L48 16" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" />
+          <circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+          <circle cx="30" cy="34" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+          <path d="M45.6 13 L45.6 50 L48 56 L50.4 50 L50.4 13 Z" fill="var(--brand-green)" />
+          <circle cx="48" cy="12" r="5.6" fill="var(--surface)" stroke="var(--brand-green)" stroke-width="2.6" />
+          <circle cx="48" cy="12" r="1.9" fill="var(--brand-green)" />
+        </svg></div><div class="size__l">16 · C</div></div>
+
+      <div class="size"><div class="size__box">
+        <svg viewBox="0 0 64 64" width="24" height="24" aria-label="A 24px">
+          <path d="M12 48 L12 16 L30 34 L48 16" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" />
+          <circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+          <circle cx="30" cy="34" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+          <path d="M15.06 23.87 L21 25 L19.87 19.06" fill="none" stroke="var(--surface)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
+          <path d="M40.2 17.78 L48 52 L55.8 17.78 A8 8 0 1 0 40.2 17.78 Z" fill="var(--brand-green)" />
+          <circle cx="48" cy="16" r="2.7" fill="var(--surface)" />
+        </svg></div><div class="size__l">24 · A</div></div>
+      <div class="size"><div class="size__box">
+        <svg viewBox="0 0 64 64" width="24" height="24" aria-label="B 24px">
+          <path d="M12 48 L12 16 L30 34 L48 16" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" />
+          <circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+          <circle cx="30" cy="34" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+          <path d="M15.06 23.87 L21 25 L19.87 19.06" fill="none" stroke="var(--surface)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
+          <path d="M44.75 16 L44.75 44 L41.4 44 L48 52 L54.6 44 L51.25 44 L51.25 16 Z" fill="var(--brand-green)" />
+          <circle cx="48" cy="16" r="6.5" fill="var(--surface)" stroke="var(--brand-green)" stroke-width="2.6" />
+        </svg></div><div class="size__l">24 · B</div></div>
+      <div class="size"><div class="size__box">
+        <svg viewBox="0 0 64 64" width="24" height="24" aria-label="C 24px">
+          <path d="M12 48 L12 16 L30 34 L48 16" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" />
+          <circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+          <circle cx="30" cy="34" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+          <path d="M15.06 23.87 L21 25 L19.87 19.06" fill="none" stroke="var(--surface)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
+          <path d="M45.6 13 L45.6 50 L48 56 L50.4 50 L50.4 13 Z" fill="var(--brand-green)" />
+          <circle cx="48" cy="12" r="5.6" fill="var(--surface)" stroke="var(--brand-green)" stroke-width="2.6" />
+          <circle cx="48" cy="12" r="1.9" fill="var(--brand-green)" />
+        </svg></div><div class="size__l">24 · C</div></div>
+
+      <div class="size"><div class="size__box">
+        <svg viewBox="0 0 64 64" width="40" height="40" aria-label="A 40px">
+          <path d="M12 48 L12 16 L30 34 L48 16" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" />
+          <circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+          <circle cx="30" cy="34" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+          <path d="M15.06 23.87 L21 25 L19.87 19.06" fill="none" stroke="var(--surface)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
+          <path d="M40.2 17.78 L48 52 L55.8 17.78 A8 8 0 1 0 40.2 17.78 Z" fill="var(--brand-green)" />
+          <circle cx="48" cy="16" r="2.7" fill="var(--surface)" />
+        </svg></div><div class="size__l">40 · A</div></div>
+      <div class="size"><div class="size__box">
+        <svg viewBox="0 0 64 64" width="40" height="40" aria-label="B 40px">
+          <path d="M12 48 L12 16 L30 34 L48 16" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" />
+          <circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+          <circle cx="30" cy="34" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+          <path d="M15.06 23.87 L21 25 L19.87 19.06" fill="none" stroke="var(--surface)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
+          <path d="M44.75 16 L44.75 44 L41.4 44 L48 52 L54.6 44 L51.25 44 L51.25 16 Z" fill="var(--brand-green)" />
+          <circle cx="48" cy="16" r="6.5" fill="var(--surface)" stroke="var(--brand-green)" stroke-width="2.6" />
+        </svg></div><div class="size__l">40 · B</div></div>
+      <div class="size"><div class="size__box">
+        <svg viewBox="0 0 64 64" width="40" height="40" aria-label="C 40px">
+          <path d="M12 48 L12 16 L30 34 L48 16" fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" />
+          <circle cx="12" cy="48" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+          <circle cx="30" cy="34" r="4.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.2" />
+          <path d="M15.06 23.87 L21 25 L19.87 19.06" fill="none" stroke="var(--surface)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
+          <path d="M45.6 13 L45.6 50 L48 56 L50.4 50 L50.4 13 Z" fill="var(--brand-green)" />
+          <circle cx="48" cy="12" r="5.6" fill="var(--surface)" stroke="var(--brand-green)" stroke-width="2.6" />
+          <circle cx="48" cy="12" r="1.9" fill="var(--brand-green)" />
+        </svg></div><div class="size__l">40 · C</div></div>
+    </div>
+
+    <div class="concepts" style="margin-top:16px">
+      <div class="card">
+        <div class="card__top"><span class="card__name" style="font-size:14px">深色底</span></div>
+        <div class="plate plate--dark" style="min-height:120px">
+          <div style="display:flex; gap:34px; align-items:center">
+            <svg viewBox="0 0 64 64" width="72" height="72" role="img" aria-label="A 深色底">
+              <path d="M12 48 L12 16 L30 34 L48 16" fill="none" stroke="var(--accent-dk)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" />
+              <circle cx="12" cy="48" r="4.6" fill="var(--plate-dark)" stroke="var(--accent-dk)" stroke-width="2.2" />
+              <circle cx="30" cy="34" r="4.6" fill="var(--plate-dark)" stroke="var(--accent-dk)" stroke-width="2.2" />
+              <path d="M15.06 23.87 L21 25 L19.87 19.06" fill="none" stroke="var(--plate-dark)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
+              <path d="M40.2 17.78 L48 52 L55.8 17.78 A8 8 0 1 0 40.2 17.78 Z" fill="var(--brand-green-dk)" />
+              <circle cx="48" cy="16" r="2.7" fill="var(--plate-dark)" />
+            </svg>
+            <svg viewBox="0 0 64 64" width="72" height="72" role="img" aria-label="B 深色底">
+              <path d="M12 48 L12 16 L30 34 L48 16" fill="none" stroke="var(--accent-dk)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" />
+              <circle cx="12" cy="48" r="4.6" fill="var(--plate-dark)" stroke="var(--accent-dk)" stroke-width="2.2" />
+              <circle cx="30" cy="34" r="4.6" fill="var(--plate-dark)" stroke="var(--accent-dk)" stroke-width="2.2" />
+              <path d="M15.06 23.87 L21 25 L19.87 19.06" fill="none" stroke="var(--plate-dark)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
+              <path d="M44.75 16 L44.75 44 L41.4 44 L48 52 L54.6 44 L51.25 44 L51.25 16 Z" fill="var(--brand-green-dk)" />
+              <circle cx="48" cy="16" r="6.5" fill="var(--plate-dark)" stroke="var(--brand-green-dk)" stroke-width="2.6" />
+            </svg>
+          </div>
+        </div>
+        <p class="diag">深色用亮蓝 <b>#a8c7fa</b> + 亮绿 <b>#6dd58c</b>（跟随深色 Token）；站点环与负形随底色反转。</p>
+      </div>
+      <div class="card">
+        <div class="card__top"><span class="card__name" style="font-size:14px">单色版（盖章 / 印刷）</span></div>
+        <div class="plate" style="min-height:120px; background:var(--surface-2)">
+          <div style="display:flex; gap:34px; align-items:center; color:var(--fg)">
+            <svg viewBox="0 0 64 64" width="72" height="72" role="img" aria-label="A 单色">
+              <path d="M12 48 L12 16 L30 34 L48 16" fill="none" stroke="currentColor" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" />
+              <circle cx="12" cy="48" r="4.6" fill="var(--surface-2)" stroke="currentColor" stroke-width="2.2" />
+              <circle cx="30" cy="34" r="4.6" fill="var(--surface-2)" stroke="currentColor" stroke-width="2.2" />
+              <path d="M15.06 23.87 L21 25 L19.87 19.06" fill="none" stroke="var(--surface-2)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
+              <path d="M40.2 17.78 L48 52 L55.8 17.78 A8 8 0 1 0 40.2 17.78 Z" fill="currentColor" />
+              <circle cx="48" cy="16" r="2.7" fill="var(--surface-2)" />
+            </svg>
+            <svg viewBox="0 0 64 64" width="72" height="72" role="img" aria-label="B 单色">
+              <path d="M12 48 L12 16 L30 34 L48 16" fill="none" stroke="currentColor" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" />
+              <circle cx="12" cy="48" r="4.6" fill="var(--surface-2)" stroke="currentColor" stroke-width="2.2" />
+              <circle cx="30" cy="34" r="4.6" fill="var(--surface-2)" stroke="currentColor" stroke-width="2.2" />
+              <path d="M15.06 23.87 L21 25 L19.87 19.06" fill="none" stroke="var(--surface-2)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
+              <path d="M44.75 16 L44.75 44 L41.4 44 L48 52 L54.6 44 L51.25 44 L51.25 16 Z" fill="currentColor" />
+              <circle cx="48" cy="16" r="6.5" fill="var(--surface-2)" stroke="currentColor" stroke-width="2.6" />
+            </svg>
+          </div>
+        </div>
+        <p class="diag"><code>currentColor</code> 打底：放到任何文字色环境里自动跟随，站点环 / 负形取页面底色。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================== 4. 应用位 ==================== -->
+  <section>
+    <h2>去哪用（以 A 为例；B 同构）</h2>
+    <div class="slots">
+      <div class="slot">
+        <div class="slot__stage" style="padding:0">
+          <div class="tabbar">
+            <div class="tab tab--idle"><svg viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#9aa79b"/><path d="M20 48 L20 20 L32 32 L44 20 L44 48" fill="none" stroke="#e3e7e0" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/></svg>其它标签</div>
+            <div class="tab" style="background:var(--surface)">
+              <svg viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="var(--accent)"/><g fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"><path d="M16 46 L16 18 L30 32 L44 18"/></g><path d="M40.38 25.03 L44.83 43.5 L49.62 34.97 A6 6 0 1 0 40.38 25.03 Z" fill="var(--brand-green-dk)"/></svg>
+              M Map · 导航
+            </div>
+          </div>
+        </div>
+        <div class="slot__cap">浏览器标签 · favicon（A，16px 简化）</div>
+      </div>
+
+      <div class="slot">
+        <div class="slot__stage">
+          <svg viewBox="0 0 64 64" width="76" height="76" role="img" aria-label="App 图标">
+            <rect width="64" height="64" rx="15" fill="var(--accent)" />
+            <g transform="translate(0 1)">
+              <path d="M14 46 L14 18 L30 34 L46 18" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" />
+              <path d="M41.2 24.8 L46 46 L50.8 24.8 A6 6 0 1 0 41.2 24.8 Z" fill="var(--brand-green-dk)" />
+              <circle cx="46" cy="24.8" r="2" fill="var(--accent)" />
+            </g>
+          </svg>
+        </div>
+        <div class="slot__cap">App 图标 / PWA（A 深色底）</div>
+      </div>
+
+      <div class="slot">
+        <div class="slot__stage">
+          <div class="round-av" style="background:var(--accent)">
+            <svg viewBox="0 0 64 64" width="54" height="54" role="img" aria-label="圆形头像">
+              <path d="M15 46 L15 18 L30 33 L45 18" fill="none" stroke="#fff" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" />
+              <path d="M40.3 24.6 L45 45 L49.7 24.6 A6.5 6.5 0 1 0 40.3 24.6 Z" fill="var(--brand-green-dk)" />
+              <circle cx="45" cy="24.6" r="2.1" fill="var(--accent)" />
+            </svg>
+          </div>
+        </div>
+        <div class="slot__cap">圆形头像 / 分享卡</div>
+      </div>
+
+      <div class="slot">
+        <div class="slot__stage">
+          <div class="favbox">
+            <svg viewBox="0 0 64 64" role="img" aria-label="收藏夹">
+              <rect width="64" height="64" rx="14" fill="var(--accent)" />
+              <path d="M16 46 L16 18 L30 32 L44 18" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" />
+              <path d="M40.38 25.03 L44.83 43.5 L49.62 34.97 A6 6 0 1 0 40.38 25.03 Z" fill="var(--brand-green-dk)" />
+              <circle cx="44.83" cy="25.03" r="1.9" fill="var(--accent)" />
+            </svg>
+            <span>M Map</span>
+          </div>
+        </div>
+        <div class="slot__cap">收藏夹 / 书签（含字标）</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================== 5. 首轮存档 ==================== -->
+  <section class="archive">
+    <h2>首轮存档（三案，用户已否 · 仅留档）</h2>
+    <p class="note">用户反馈：三案均「M 看不出是路线、钉与 M 是两件东西」。此处仅存档，便于与第二轮对照。文件见 <code>logo-1/2/3-*.svg</code>。</p>
+    <div class="concepts">
+      <article class="card">
+        <div class="card__top"><span class="card__no">1</span><span class="card__name" style="font-size:14px">路线钉</span><span class="archive-tag">存档</span></div>
+        <div class="plate">
+          <svg viewBox="0 0 64 64" width="88" height="88" aria-label="首轮方案 1">
+            <g fill="none" stroke="var(--accent)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="12,49 12,17 30,35 48,17 48,28" /></g>
+            <path d="M40.83 34.55 L48 49 L55.17 34.55 A8 8 0 1 0 40.83 34.55 Z" fill="var(--brand-green)" />
+          </svg>
+        </div>
+        <p class="diag">M 是折线、钉是"停靠"在右下脚的水滴 —— 正是用户说的"两个东西"。</p>
+      </article>
+      <article class="card">
+        <div class="card__top"><span class="card__no">2</span><span class="card__name" style="font-size:14px">钉中 M</span><span class="archive-tag">存档</span></div>
+        <div class="plate">
+          <svg viewBox="0 0 64 64" width="88" height="88" aria-label="首轮方案 2">
+            <path d="M20.07 38.67 L32 52 L43.93 38.67 A16 16 0 1 0 20.07 38.67 Z" fill="var(--brand-green)" />
+            <polyline points="23,35 23,21 32,29 41,21 41,35" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </div>
+        <p class="diag">剪影最硬，但 M 与钉同样没有"生长"关系。</p>
+      </article>
+      <article class="card">
+        <div class="card__top"><span class="card__no">3</span><span class="card__name" style="font-size:14px">站牌徽章</span><span class="archive-tag">存档</span></div>
+        <div class="plate">
+          <svg viewBox="0 0 64 64" width="88" height="88" aria-label="首轮方案 3">
+            <rect width="64" height="64" rx="15" fill="var(--accent)" />
+            <g fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15,46 15,19 30,34 45,19 45,28" /></g>
+            <path d="M38.81 34.27 L45 46 L51.19 34.27 A7 7 0 1 0 38.81 34.27 Z" fill="none" stroke="#fff" stroke-width="2.6" />
+            <path d="M38.81 34.27 L45 46 L51.19 34.27 A7 7 0 1 0 38.81 34.27 Z" fill="var(--brand-green)" />
+          </svg>
+        </div>
+        <p class="diag">载荷同上，只是装了块牌；第二轮若选中 A/B，可包牌复用。</p>
+      </article>
+    </div>
+  </section>
+
+  <!-- ==================== 6. 终点地图钉 ==================== -->
+  <section>
+    <h2>终点地图钉 · 重做</h2>
+    <p class="note">左边是线上现状（用户反馈"长歪了"），右边是重做版：不旋转、白点在圆心、投影朝正下方。</p>
+    <div class="pins">
+      <div class="card">
+        <div class="card__top"><span class="card__name" style="font-size:14px">现状 · CSS 水滴</span></div>
+        <div class="pin-stage">
+          <div class="old-pin"></div>
+          <div class="anchor-hint" style="opacity:.0"></div>
+        </div>
+        <ul class="card__pts">
+          <li>用"圆角方块 + <code>rotate(-45deg)</code>"拼水滴</li>
+          <li>整块容器连 <code>box-shadow</code> 一起转了 45° → <b>投影斜着走</b></li>
+          <li>白点靠 <code>top:34%</code> + 负边距硬凑 → 仍偏</li>
+        </ul>
+      </div>
+      <div class="card card--pick">
+        <div class="card__top"><span class="card__name" style="font-size:14px">重做 · SVG 路径</span><span class="card__badge">建议</span></div>
+        <div class="pin-stage">
+          <svg class="new-pin" viewBox="0 0 32 42" role="img" aria-label="重做后的终点钉">
+            <path d="M7.53 23.3 L16 40 L24.47 23.3 A9.5 9.5 0 1 0 7.53 23.3 Z" fill="none" stroke="#fff" stroke-width="2" stroke-linejoin="round" />
+            <path d="M7.53 23.3 L16 40 L24.47 23.3 A9.5 9.5 0 1 0 7.53 23.3 Z" fill="var(--danger)" />
+            <circle cx="16" cy="19" r="3.8" fill="#fff" />
+          </svg>
+          <div class="anchor-hint"></div>
+        </div>
+        <ul class="card__pts">
+          <li>一条对称钉形路径：圆头 + 两条切线收到尖</li>
+          <li>零旋转 ⇒ 白点圆心对准钉头圆心，投影正朝下</li>
+          <li>钉尖永远在 <code>viewBox</code> 正中底边 ⇒ 锚点 = 坐标点</li>
+        </ul>
+      </div>
+    </div>
+    <p class="diag" style="margin-top:12px">虚线 = 坐标锚点。重做版钉尖落在虚线上；旧版因旋转，钉尖与坐标点对不齐。</p>
+  </section>
+
+  <!-- ==================== 7. 慢速色 ==================== -->
+  <section>
+    <h2>慢速色（更慢）候选</h2>
+    <p class="note">
+      折叠区里「更快」是绿，「更慢」现在用 <code>--warn #a85e00</code>。用户要更"黄"一档。
+      <b style="color:var(--warn)">注意</b>：顺带发现 <b>#a85e00 在次表面 <code>--surface-2</code> 上只有 4.14:1，未达 AA</b>（既有缺陷）。
+    </p>
+    <div class="swatches">
+      <div class="sw">
+        <div class="sw__chip" style="color:var(--warn); background:var(--surface-2)">↓ 慢 5 分</div>
+        <div class="sw__t">现状 · 赭黄</div>
+        <div class="sw__hex">--warn&nbsp;&nbsp;#a85e00</div>
+        <table class="cr">
+          <tr><th>表面</th><th>对比度</th></tr>
+          <tr><td>--surface</td><td class="ok">4.92</td></tr>
+          <tr><td>--surface-2</td><td class="no">4.14</td></tr>
+        </table>
+        <div class="sw__d">偏橙、不够"黄"；且在次表面不达标。</div>
+      </div>
+
+      <div class="sw sw--pick">
+        <div class="sw__chip" style="color:var(--slow-ink); background:var(--surface-2)">↓ 慢 5 分</div>
+        <div class="sw__t">候选 1 · 深琥珀金 <span style="font-size:11px;color:var(--brand-green)">推荐</span></div>
+        <div class="sw__hex">--slow-ink&nbsp;&nbsp;#8a6400</div>
+        <table class="cr">
+          <tr><th>表面</th><th>对比度</th></tr>
+          <tr><td>--surface</td><td class="ok">5.38</td></tr>
+          <tr><td>--surface-2</td><td class="ok">4.52</td></tr>
+          <tr><td>--bg</td><td class="ok">4.86</td></tr>
+        </table>
+        <div class="sw__d">比现状更"黄"、更暗；视觉重量与绿 <code>#0b6e4f</code>（6.25）相当，快慢并列不跳。</div>
+      </div>
+
+      <div class="sw">
+        <div class="sw__chip" style="color:var(--fg); background:#f0b429; border:1px solid #8a6400">↓ 慢 5 分</div>
+        <div class="sw__t">候选 2 · 明黄（仅徽标底）</div>
+        <div class="sw__hex">--slow-solid&nbsp;&nbsp;#f0b429</div>
+        <table class="cr">
+          <tr><th>用法</th><th>对比度</th></tr>
+          <tr><td>底 + --fg 字</td><td class="ok">10.1</td></tr>
+          <tr><td>色块 vs 白底</td><td class="no">1.86</td></tr>
+        </table>
+        <div class="sw__d">最"黄"最醒目，但<b>只能当底色</b>配深字（且色块自身 vs 白底不足 3:1，须加描边）。裸用作文字 / 圆点不行。</div>
+      </div>
+    </div>
+
+    <h2 style="margin-top:28px">在折叠区里长这样</h2>
+    <div class="folddemo">
+      <div class="folddemo__row">
+        <span class="folddemo__line">11</span>
+        <span class="folddemo__min"><b>44</b> 分</span>
+        <span class="folddemo__d d-fast">↑ 快 3 分</span>
+        <span class="folddemo__go">切换路线</span>
+      </div>
+      <div class="folddemo__row">
+        <span class="folddemo__line">22</span>
+        <span class="folddemo__min"><b>52</b> 分</span>
+        <span class="folddemo__d d-slow">↓ 慢 5 分 <span style="font-size:11px;color:var(--meta)">← 候选 1</span></span>
+        <span class="folddemo__go">切换路线</span>
+      </div>
+      <div class="folddemo__row">
+        <span class="folddemo__line">25</span>
+        <span class="folddemo__min"><b>52</b> 分</span>
+        <span class="folddemo__d d-warn">↓ 慢 5 分 <span style="font-size:11px;color:var(--meta)">← 现状</span></span>
+        <span class="folddemo__go">切换路线</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================== 8. Token 速查 ==================== -->
+  <section>
+    <h2>用到的品牌色（全部走 Token）</h2>
+    <div class="toks">
+      <div class="tok"><span class="tok__sw" style="background:var(--accent)"></span><span><span class="tok__k">--accent</span><br><span class="tok__v">#1b4d8f · 青花蓝 · 路</span></span></div>
+      <div class="tok"><span class="tok__sw" style="background:var(--accent-deep)"></span><span><span class="tok__k">--accent-deep</span><br><span class="tok__v">#16406f · 深青花蓝</span></span></div>
+      <div class="tok"><span class="tok__sw" style="background:var(--brand-green)"></span><span><span class="tok__k">--brand-green</span><br><span class="tok__v">#0b6e4f · 澳门绿 · 钉</span></span></div>
+      <div class="tok"><span class="tok__sw" style="background:var(--danger)"></span><span><span class="tok__k">--danger</span><br><span class="tok__v">#b4342a · 终点钉（现行）</span></span></div>
+      <div class="tok"><span class="tok__sw" style="background:var(--slow-ink)"></span><span><span class="tok__k">--slow-ink</span><br><span class="tok__v">#8a6400 · 新 · 慢速色</span></span></div>
+      <div class="tok"><span class="tok__sw" style="background:var(--slow-soft)"></span><span><span class="tok__k">--slow-soft</span><br><span class="tok__v">#fbf1d6 · 新 · 慢速底</span></span></div>
+    </div>
+  </section>
+
+  <footer>
+    产出目录 <code>docs/迭代-v215-20260925/02-logo/</code> ·
+    第二轮资产 <code>logo-r2-{a,b,c}-*.svg</code> ·
+    对比度核算 <code>node tools/contrast-check.mjs</code> ·
+    2026-09-25 · 设计师 颜好看
+  </footer>
+</div>
+</body>
+</html>

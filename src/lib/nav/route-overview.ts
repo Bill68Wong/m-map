@@ -61,9 +61,19 @@ export interface ColoredLeg {
   dir: string | null;
   /** 所选方向整条线（灰底线，zIndex 68） */
   gray: LL[];
-  /** board→alight 乘车区间（彩段，zIndex 72） */
+  /**
+   * board→alight 乘车区间（彩段，zIndex 72）。
+   *
+   * ⚠️ **整线着色不变式（跨模块契约，勿改依赖方式）**：
+   *   `colored === gray`（**引用相等**）⇔ 「整线着色」——两种来源：
+   *     · 降级（①②③⑤：无 shapes / 缺坐标 / 双向超容差 / 切割失败）⇒ `degraded=true`；
+   *     · 起终点同站（④，board≈alight）⇒ **`degraded=false`** 且 `colored===gray`。
+   *   渲染层据此判定「是否再画灰底线」时**必须用本引用相等**（`nav-map-overview.ts` 的 `grayIsWhole`）；
+   *   不可改判 `!degraded`——④ 会因 `degraded=false` 误判为非整线，多画一条灰虚线（回归）。
+   *   对拍证据：`scripts/test-route-overview.ts` ⑧（整线着色 ∧ degraded===false）。
+   */
   colored: LL[];
-  /** true = 未切割成功 ⇒ colored === gray（整线着色） */
+  /** true = 未切割成功 ⇒ colored === gray（整线着色）；**注意 ④ 同站整线着色为 false 但 colored===gray** */
   degraded: boolean;
 }
 
@@ -184,8 +194,9 @@ export function chooseShape(
 }
 
 /**
- * 切彩段：
- *   · 非环线：`slice(iBoard, iAlight+1)`；`iBoard > iAlight` ⇒ 方向不符 → `null`（降级）；
+ * 切彩段（保证 `colored[0]=board`、`colored[-1]=alight`）：
+ *   · 非环线：`iBoard <= iAlight` 取正向 `slice(ib, ia+1)`；
+ *     `iBoard > iAlight`（存储几何与行驶方向相反）取 `slice(ia, ib+1).reverse()`；
  *   · 环线：`iAlight >= iBoard` 取正向切片；`iAlight < iBoard` **环绕**
  *     `slice(iBoard).concat(slice(0, iAlight+1))`。
  */
@@ -195,8 +206,8 @@ export function cutColored(pts: LL[], iBoard: number, iAlight: number, loop: boo
   const ib = Math.max(0, Math.min(n - 1, iBoard));
   const ia = Math.max(0, Math.min(n - 1, iAlight));
   if (!loop) {
-    if (ib > ia) return null;
-    return pts.slice(ib, ia + 1);
+    if (ib <= ia) return pts.slice(ib, ia + 1);
+    return pts.slice(ia, ib + 1).reverse();
   }
   if (ia >= ib) return pts.slice(ib, ia + 1);
   return pts.slice(ib).concat(pts.slice(0, ia + 1));

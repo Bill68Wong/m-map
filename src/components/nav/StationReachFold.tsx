@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * 详情页折叠栏 · 「本站台其他线路」（src/components/nav/StationReachFold.tsx，v2.14）
+ * 详情页折叠栏 · 「上车站其他线路」（src/components/nav/StationReachFold.tsx，v2.14）
  *
  * ── 结构（线路为父、方案为子；2026-09-25 二轮修订 · 07 §4.6）────────────
  *   父行 = 首程线路标签（`plan.route`，单独一行、`--surface-2` 微底）；
@@ -109,7 +109,7 @@ export default function StationReachFold({
   return (
     <div className="rc-fold">
       <button className="rc-fold__head" type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
-        本站台其他线路 · <b>{items.length}</b> 条
+        上车站其他线路 · <b>{items.length}</b> 条
         <span className="rc-strip__caret">
           <Icon name={open ? "caretUp" : "caretDown"} size={16} />
         </span>
@@ -168,7 +168,7 @@ export default function StationReachFold({
                               onClick={() => onOpenCard(c)}
                               aria-label={`切换到 ${c.rides.map((r) => r.route).join(" 换乘 ")} 方案`}
                             >
-                              切换路线
+                              切换
                               <Icon name="forward" size={16} />
                             </button>
                           )}

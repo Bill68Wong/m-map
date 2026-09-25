@@ -500,7 +500,9 @@ export default function NavMap({
         destMarkerRef.current = new AMap.Marker({
           position: pos,
           content: '<div class="nav-map__destpin" aria-hidden="true"></div>',
-          offset: new AMap.Pixel(-10, -20),
+          // ★ v2.15：新终点钉 20×26，钉尖在底边中点 ⇒ offset y 取 -26（全高），
+          //   令钉尖精确锚定坐标点（旧址 -20 是歪水滴的凑数值，会让尖浮在点上方）。
+          offset: new AMap.Pixel(-10, -26),
           title: dest.label,
           zIndex: 120,
         });

@@ -77,10 +77,14 @@ function test3_cutForward() {
   ok(!!c && near(c[0], pts[1]) && near(c[2], pts[3]), "两端点 = pts[1]/pts[3]");
 }
 
-function test4_cutReverseNull() {
-  console.log("④ cutColored 非环线 ib>ia");
+function test4_cutReverse() {
+  console.log("④ cutColored 非环线 ib>ia（存储几何与行驶方向相反 → 反向切片）");
   const pts = line(113.5, 22.1, 0.01, 5);
-  ok(cutColored(pts, 3, 1, false) === null, "方向不符 → null");
+  const c = cutColored(pts, 3, 1, false);
+  ok(
+    !!c && c.length === 3 && near(c[0], pts[3]) && near(c[2], pts[1]),
+    "反向切片 [pts3,pts2,pts1]：colored[0]=board、colored.at(-1)=alight",
+  );
 }
 
 function test5_loopWrap() {
@@ -258,7 +262,7 @@ async function main() {
   test1_parsePolyline();
   test2_nearestOnPath();
   test3_cutForward();
-  test4_cutReverseNull();
+  test4_cutReverse();
   test5_loopWrap();
   test6_chooseShape();
   test7_degradeMissingRoute();

@@ -2119,33 +2119,20 @@ button[aria-disabled="true"] {
   background: var(--primary);
   box-shadow: 0 0 0 4px rgba(11, 87, 208, 0.25);
 }
-/* 目的地标记：水滴形 + 中心白点
-   ★ 2026-09-22 二次修正（用户反馈「还是奇怪、像长歪了」）：
-     · 白点原先放在**几何中心**（`top:50%`）—— 但水滴形的**视觉中心**在圆心处（偏上），
-       几何中心落在「腰」偏下的位置 ⇒ 看起来像整体歪了 ✗
-       ⇒ 改到 `top:34%`（对准圆心）。
-     · 容器由 22×28 收为 **20×26**：原比例偏瘦长，旋转后更显倾斜。 */
+/* 目的地标记：终点地图钉（对称 SVG 背景 · 零旋转）
+   ★ 2026-09-25 重做（用户反馈「长歪了」）：旧版用「圆角方块 + rotate(-45deg)」拼水滴，
+     整块容器连同 box-shadow 一起转了 45° ⇒ 投影斜着走、白点也偏 ⇒ 视觉上「歪」。
+     现改为自绘对称钉形 SVG（圆头 + 两条切线收到尖）：
+       · 钉尖固定在 SVG 底边中点 ⇒ 由 marker 的 offset(-10,-26)（= -w/2, -h）令钉尖锚定坐标点
+         —— 本文件所有 marker 均沿用「offset 自左上角偏移」的高德默认锚点约定，故此钉
+         只靠 offset 定位，**不再叠加 CSS transform**（否则双重偏移）。
+       · 投影改由 drop-shadow 施加，永远朝正下方、不再随容器旋转。
+     几何 Token（--destpin-w/-h/-shadow）见文件末尾 v2.15 追加段。 */
 .nav-map__destpin {
-  position: relative;
-  width: 20px;
-  height: 26px;
-  border-radius: 50% 50% 50% 0;
-  transform: rotate(-45deg);
-  background: var(--error);
-  border: 1.5px solid #fff;
-  box-shadow: 0 2px 5px rgba(15, 23, 32, 0.35);
-}
-.nav-map__destpin::after {
-  content: "";
-  position: absolute;
-  left: 50%;
-  /* 对准水滴**圆心**（而非几何中心）——这是「看起来正」的关键 */
-  top: 34%;
-  width: 8px;
-  height: 8px;
-  margin: -4px 0 0 -4px;
-  border-radius: 50%;
-  background: #fff;
+  width: var(--destpin-w);
+  height: var(--destpin-h);
+  background: url("/pin-destination.svg") center / contain no-repeat;
+  filter: drop-shadow(var(--destpin-shadow));
 }
 
 /* ── ★ v2.1.0：巴士站点图层 + 站点信息卡 ── */
@@ -6067,7 +6054,7 @@ body[data-sheet="open"] .nav-searchbar {
   color: var(--brand-green);
 }
 .fold-plan__delta.is-slow {
-  color: var(--warn);
+  color: var(--slow-ink);
 }
 .fold-plan__go {
   flex: none;
@@ -6198,10 +6185,17 @@ body[data-sheet="open"] .nav-searchbar {
   }
 }
 
-/* ── 吸底操作条（NavTrackBar；贴在面板「可见底边」——抵消 sheet 的 translateY）── */
+/* ── 吸底操作条（NavTrackBar；贴在面板「可见底边」——抵消 sheet 的 translateY）──
+   ★ 2026-09-25 修复「准备出发/开始导航 跳动跑位」：
+   `bottom` 走 `--sheet-y-layout`（档位落定瞬变），而面板位移 `--sheet-y-anim` 走 260ms
+   过渡 ⇒ 换档（full↔half↔peek）时两者**时基不一致**：bar 先瞬跳到新偏移、面板随后才滑到
+   ⇒ 操作条在动画中途「跑位」再归位。给 `bottom` 同款过渡 ⇒ 与面板 transform 同步。
+   （拖动中 `--sheet-y-layout` 不变 ⇒ 不触发过渡，不影响跟手；`prefers-reduced-motion` 下
+   `--sheet-dur-settle: 0ms` ⇒ 瞬切。） */
 .nav-actions {
   position: sticky;
   bottom: calc(var(--sheet-y-layout, 0px));
+  transition: bottom var(--sheet-dur-settle) var(--sheet-ease);
   z-index: 20;
   margin-top: var(--space-3);
   padding: 10px var(--space-4) max(10px, var(--safe-bottom));
@@ -6399,7 +6393,7 @@ body[data-sheet="open"] .nav-searchbar {
   white-space: nowrap;
 }
 .nav-plan-sub__delta.is-fast { color: var(--track-alight); }
-.nav-plan-sub__delta.is-slow { color: var(--warn); }
+.nav-plan-sub__delta.is-slow { color: var(--slow-ink); }
 .nav-plan-sub__go {
   flex: none;
   display: inline-flex;
@@ -6471,5 +6465,36 @@ body[data-nav="riding"] .bottom-nav { display: none; }
   }
   .nav-toast {
     animation: none;
+  }
+}
+
+/* ============================================================
+   ★ v2.15 追加 Token（2026-09-25 · 「只增不改」——不动任何既有 Token）
+   权威：docs/迭代-v215-20260925/02-logo/tokens-delta.css
+   ── 两组：
+      ① 慢速（更慢）专用 · --slow-*  —— 与「警告」语义解耦，--warn 保持原义
+      ② 终点地图钉几何 · --destpin-* —— 供组件统一引用（钉尺寸 / 投影）
+   ============================================================ */
+:root {
+  /* ── ① 慢速色 · 只服务「路线对比」语义：绿=更快 / 琥珀=更慢 ──
+     原 `.fold-plan__delta.is-slow` / `.nav-plan-sub__delta.is-slow` 复用 var(--warn)，
+     而 --warn 同时被 8+ 处「警告横幅 / 徽标」占用 ⇒ 不擅改 --warn，另开慢速专色。
+     顺带修一个既有可访问性缺陷：--warn #a85e00 在 --surface-2 上仅 4.14:1（不达 AA）。 */
+  --slow-ink: #8a6400; /* 文字/圆点：--surface 5.38:1 · --surface-2 4.52:1 · --bg 4.86:1（全 AA） */
+  --slow-soft: #fbf1d6; /* 徽标底（备选形态：黄底 + --slow-ink 字） */
+
+  /* ── ② 终点地图钉几何（登记型 Token；值＝SVG 的 CSS 像素尺寸）──
+     比例 32:42 ⇒ 20 × 26 为默认显示尺寸（与旧 CSS 水滴 20×26 同量级）。 */
+  --destpin-w: 20px;
+  --destpin-h: 26px;
+  --destpin-shadow: 0 2px 3px rgba(15, 23, 32, 0.35); /* 钉的柔和投影（朝正下方） */
+}
+
+/* 深色模式：慢速色抬亮一档（深底上仍 ≥4.5:1） */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --slow-ink: #e3b341; /* 深底 --surface 8.56:1 · --surface-2 7.08:1 · --bg 9.55:1 */
+    --slow-soft: #2c2413;
+    --destpin-shadow: 0 2px 3px rgba(0, 0, 0, 0.5);
   }
 }

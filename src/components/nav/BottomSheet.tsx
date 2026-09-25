@@ -23,11 +23,16 @@
  *
  * ⚠️ 必须挂在 `.nav-map-wrap` **之外**（wrap 是层叠上下文，挂进去会被底部 chrome 压住）。
  */
-import type { CSSProperties, PointerEvent, ReactNode } from "react";
+import type { CSSProperties, PointerEvent, ReactNode, RefObject } from "react";
 import Icon from "@/components/ui/Icon";
 import type { Detent } from "./sheet-detents";
 
 export interface BottomSheetProps {
+  /**
+   * ★ 2026-09-25：`.route-sheet` 根元素 ref（透传给 `useSnapSheet` 做**命令式**位移写入，
+   *   拖动期不触发 React 重渲染）。不传则退回 React style 驱动的落定位移。
+   */
+  sectionRef?: RefObject<HTMLElement | null>;
   open: boolean;
   pane: "recommend" | "detail";
   detent: Detent;
@@ -62,6 +67,7 @@ export interface BottomSheetProps {
 }
 
 export default function BottomSheet({
+  sectionRef,
   open,
   pane,
   detent,
@@ -83,6 +89,7 @@ export default function BottomSheet({
 }: BottomSheetProps) {
   return (
     <section
+      ref={sectionRef}
       className="route-sheet"
       /* ★ 观测钩子（契约唯一名称，已冻结）：data-sheet-state / data-detent /
          data-phase / data-live / data-dragging / data-open（旧别名已全部移除） */

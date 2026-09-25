@@ -248,7 +248,7 @@ export default function NavDetailBody({
         />
       </div>
 
-      {/* 本站台其他线路（线路为父、方案为子） */}
+      {/* 上车站其他线路（线路为父、方案为子） */}
       {stationLabel && (
         <StationReachFold
           stationLabel={stationLabel}

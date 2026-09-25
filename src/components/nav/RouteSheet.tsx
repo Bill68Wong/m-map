@@ -24,6 +24,7 @@
  *
  * ⚠️ 挂载位置：必须挂在 `.nav-map-wrap` **之外**（层叠上下文，Spec AC-13 教训）。
  */
+import { useRef } from "react";
 import Icon from "@/components/ui/Icon";
 import ComplianceBar from "@/components/nav/ComplianceBar";
 import FavoriteButton from "@/components/favorites/FavoriteButton";
@@ -94,10 +95,17 @@ export default function RouteSheet({
   // 推荐列表数据（列表 pane 常驻；同一 query 只自动拉一次）
   const rec = useRecommend(query, open && pane === "recommend");
 
+  /**
+   * ★ 2026-09-25：`.route-sheet` 根 ref —— 供 `useSnapSheet` 拖动期**命令式**写 `--sheet-y-anim`
+   *   （不逐帧 `setState` ⇒ 不再占满主线程 ⇒ 地图渲染循环不被饿死，「拖动时地图抖动」落定）。
+   */
+  const sheetRef = useRef<HTMLElement | null>(null);
+
   const snap = useSnapSheet({
     open,
     detent,
     topsPx,
+    sheetRef,
     onDetentChange,
     onDismiss: onContextClose,
     /**
@@ -154,6 +162,7 @@ export default function RouteSheet({
 
   return (
     <BottomSheet
+      sectionRef={sheetRef}
       open={open}
       pane={pane}
       detent={detent}
