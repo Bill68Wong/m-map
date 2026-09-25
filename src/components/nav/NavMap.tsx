@@ -30,40 +30,29 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { isInsideRings, loadMacauDistrict, maskOuterRing, type MacauDistrict } from "@/lib/amap/district";
-import { DECIMATE_STEP_M, decimate, type ColoredLeg, type LL } from "@/lib/nav/route-overview";
+import { type ColoredLeg, type LL } from "@/lib/nav/route-overview";
 import { loadAMap } from "./amap-loader";
+import {
+  fitGapPx,
+  maskFill,
+  MASK_OPACITY,
+  MAX_ZOOM,
+  MIN_ZOOM,
+  panelTopPx,
+  zoomForAcross,
+} from "./nav-map-fit";
+import { drawOverview } from "./nav-map-overview";
 import { lrtTransferVariantOf } from "./lrt-transfer";
 import TrackLayer from "./TrackLayer";
+import UserDotLayer from "./UserDotLayer";
 import VehicleLayer from "./VehicleLayer";
 import type { VehicleLite } from "./VehicleMarker";
+import type { UserFix } from "./useUserFix";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const MACAU_CENTER = { lng: 113.558, lat: 22.155 }; // 全澳门视角中心（§D.1）
 /** 初始 zoom（地图创建占位用；district 就绪后由 setBounds 接管） */
 const INIT_ZOOM = 12;
-/**
- * 手机屏幕上**横向显示 5km** 的默认视野（定位成功后使用，沿用既有口径）。
- *
- * 依据（标准 Web Mercator / 高德 256px 瓦片）：
- *   `米/像素(z, φ) = 156543.03392 · cos(φ) / 2^z`
- *   要在一屏宽 `W` 像素里横向放下 `D` 米 ⇒ `米/像素 = D / W`
- *   ⇒ 解出 `z = log2( 156543.03392 · cos(φ) · W / D )`
- *
- * 【实测代入】澳门纬度 φ≈22.15°（cos=0.9261）、手机宽 W=390px：
- *   z = log2(156543.03392 · 0.9261 · 390 / D)
- *   · D=5000（旧）  → z ≈ 13.46
- *   · D=2500（现行）→ z ≈ 14.46
- *
- * ★ 2026-09-22：**5000 → 2500**（用户反馈「点定位居中后比例尺太小」）。
- *   取 2500 而非更小的理由：一屏 2.5km ≈ 澳门半岛南北向的一半，
- *   既能看清所处街区、又能看到周边地标（用于「我在哪 / 往哪走」）；
- *   再缩到 1500 左右就只剩几条街，反而失去方位感。
- */
-const TARGET_METERS_ACROSS = 2500;
-
-/** ★ S1：缩放收敛区间（minZoom=11：一屏≈27.6km，远小于遮罩外圈 ±1.6°≈178km ⇒ 永不露边） */
-const MIN_ZOOM = 11;
-const MAX_ZOOM = 18;
 
 /**
  * 站点图层显示阈值：`zoom < STATION_MIN_ZOOM` 时不显示任何站点（拉远即清空）。
@@ -83,38 +72,6 @@ const STATION_MIN_ZOOM = 14;
 const STATION_MIN_ZOOM_ROUTE = 12;
 /** 视图事件节流（毫秒）：`zoomend`/`moveend` 高频触发，节流后再裁剪/渲染 */
 const STATION_REFRESH_THROTTLE_MS = 150;
-
-/**
- * 遮罩填充色 —— ★ 从设计 Token **运行时读取**（`--fg`），代码里不硬编码色值。
- * AMap Polygon 的 `fillColor` 由画布绘制、拿不到 CSS 变量，故此处显式读一次 Token；
- * 读不到（极端环境）→ 返回 null，调用方**跳过遮罩**（走「仅范围限制」降级，不阻塞地图）。
- */
-function maskFill(): string | null {
-  try {
-    const v = getComputedStyle(document.documentElement).getPropertyValue("--fg").trim();
-    return v || null;
-  } catch {
-    return null;
-  }
-}
-const MASK_OPACITY = 0.42;
-
-/**
- * ★ 2026-09-23：运行时读一个 CSS Token 的 **resolved 具体值**。
- * 为什么需要：AMap `Polyline.strokeColor` / `Polygon.fillColor` 由**画布**绘制，
- *   **拿不到 `var()`** ⇒ 必须在 JS 侧读一次真色值（与 `maskFill()` 同一做法）。
- * 防呆：值里若仍含 `(`（= `color-mix(...)` / `var(...)` 未被解析）⇒ 视为读不到 ⇒ 返回 null，
- *   调用方回落下一个 Token（避免把非法字符串喂给画布导致静默不绘制）。
- */
-function readToken(name: string): string | null {
-  try {
-    const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-    if (!v || v.includes("(")) return null;
-    return v;
-  } catch {
-    return null;
-  }
-}
 
 /** 空车辆数组的**稳定引用** —— 用作 prop 默认值，避免每次渲染产生新引用触发 effect 抖动 */
 const NO_VEHICLES: VehicleLite[] = [];
@@ -139,42 +96,6 @@ export interface StationPointLite {
   lines?: string[];
   /** ★ v2.10.0：与 `lines` 一一对应的线路色（`/api/stations` 旁路数据，当前前端未消费） */
   colors?: string[];
-}
-
-/** 让「一屏宽」横向放下 `TARGET_METERS_ACROSS` 米的 zoom（按纬度与容器像素宽实时算） */
-function zoomForAcross(lat: number, widthPx: number): number {
-  const w = widthPx > 0 ? widthPx : 390;
-  const mpp = TARGET_METERS_ACROSS / w;
-  const z = Math.log2((156543.03392 * Math.cos((lat * Math.PI) / 180)) / mpp);
-  // 高德 zoom 支持小数；夹到合法区间防止极端容器宽度算出离谱值
-  return Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.round(z * 100) / 100));
-}
-
-/**
- * ★ 2026-09-24：读「半屏可出发」面板（`.rpanel`）的**真实顶边像素**（取景用）。
- * 为什么：`dest-center-top` / `fit-two` 此前把「下半屏被面板遮住」**写死成 50%**——
- *   而 RoutePanel 的高度随内容变化（且桌面端是右栏、非底部面板）⇒ 取景与实际遮挡不吻合。
- * 读不到 / 数值异常（桌面右栏 / 元素隐藏 / SSR）⇒ 返回 null，调用方回落旧口径。
- */
-function panelTopPx(fallbackH: number): number | null {
-  try {
-    const el = document.querySelector<HTMLElement>(".rpanel");
-    if (!el) return null;
-    const r = el.getBoundingClientRect();
-    if (!r || r.height <= 0) return null;
-    const top = Math.round(r.top);
-    if (top < 80 || top > fallbackH - 40) return null; // 异常值 ⇒ 回落
-    return top;
-  } catch {
-    return null;
-  }
-}
-
-/** ★ 2026-09-24：读设计 Token `--map-fit-gap`（px）——取景呼吸边距（此前悬空未接线）；回落 20 */
-function fitGapPx(): number {
-  const v = readToken("--map-fit-gap");
-  const n = v ? Number.parseFloat(v) : Number.NaN;
-  return Number.isFinite(n) && n > 0 && n < 200 ? n : 20;
 }
 
 export interface NavMapProps {
@@ -250,13 +171,13 @@ export interface NavMapProps {
    */
   overview?: ColoredLeg[] | null;
   /**
-   * ★ 2026-09-24：**导航追踪 · 「您」标记**（锁定车辆的实时位置）。
-   *   非空 ⇒ 画一个「您」圆点（原生 marker z140 > 车辆 130）；`null` ⇒ 移除（退出追踪）。
+   * ★ 2026-09-25：**导航追踪 · 用户定位蓝点（人）**。
+   *   非空 ⇒ 画蓝点（原生 marker z128 < 车辆 130）；`null` ⇒ 移除（拒权/无信号/上车重合）。
    */
-  navYou?: { lng: number; lat: number; label?: string } | null;
+  userFix?: UserFix | null;
   /**
-   * ★ 2026-09-24：**导航追踪 · 已驶过路段**（绿色覆层 polyline，z74 —— 压在乘车彩段 72 之上）。
-   *   路径 = 乘车段 polyline 由车辆实时投影切割所得（`useRideTracking`）；`null` ⇒ 不画。
+   * ★ 2026-09-24：**导航追踪 · 已驶过路段**（灰实线 polyline，z74 —— 压在乘车彩段 72 之上）。
+   *   路径 = 乘车段 polyline 由车辆/GPS 实时投影切割所得（`useRideTracking`）；`null` ⇒ 不画。
    */
   traveled?: LL[] | null;
   /**
@@ -285,7 +206,7 @@ export default function NavMap({
   vehicles = NO_VEHICLES,
   onVehicleClick,
   overview = null,
-  navYou = null,
+  userFix = null,
   traveled = null,
 }: NavMapProps) {
   const canvasRef = useRef<HTMLDivElement | null>(null);
@@ -1091,14 +1012,8 @@ export default function NavMap({
 
   /**
    * ★ 2026-09-23：**路线总览绘制**（详情 pane）。
-   *
-   * 双层 polyline（同宽 6px，只靠颜色区分，避免上下车站处粗细台阶）：
-   *   · 灰底线 = 所选方向整条线（区间外），`--map-line-dim`（读 Token 真色值），zIndex 68；
-   *   · 彩段   = board→alight 乘车区间，线路色（`routes.color`）/ 缺省 `--accent`，zIndex 72；
-   * `degraded`（整线着色）时 `colored === gray` ⇒ **只画彩段**（不画灰，PM 边界 #4）。
-   *
-   * 生命周期：进入 detail → 一次画完；退出 detail（`overview=null`）→ 逐个 `map.remove()` 清理
-   *   （复用 routeLine 的清理模式，防泄漏）。灰底线长线先 `decimate` 抽稀（保彩段端点）。
+   * 绘制主体已抽到 `nav-map-overview.ts#drawOverview`（§5.3 拆分）；本 effect 只管生命周期
+   * （进入 detail 画一次；退出 detail / 非 ready → 逐个 `map.remove()` 清理 + 观测钩子归零）。
    */
   useEffect(() => {
     const map = mapRef.current;
@@ -1124,53 +1039,8 @@ export default function NavMap({
     }
 
     clearOverview();
-    const dim = readToken("--map-line-dim") ?? readToken("--border-2") ?? readToken("--muted");
-    const accent = readToken("--accent");
-
-    /** 实际绘制的**彩段折线**数（语义 = 真正上屏的乘车段，非 leg 数） */
-    let drawn = 0;
-    for (const leg of overview) {
-      try {
-        // 灰底线：整线着色（colored===gray）时跳过（只留彩段）
-        const grayIsWhole = leg.colored === leg.gray;
-        if (dim && !grayIsWhole && leg.gray.length >= 2) {
-          const grayPath = decimate(leg.gray, DECIMATE_STEP_M);
-          const gpl = new AMap.Polyline({
-            path: grayPath,
-            strokeColor: dim,
-            strokeWeight: 6,
-            strokeOpacity: 0.85,
-            lineJoin: "round",
-            lineCap: "round",
-            showDir: true,
-            zIndex: 68,
-          });
-          map.add(gpl);
-          overviewPolylinesRef.current.push(gpl);
-        }
-        // 彩段：乘车区间（整线着色时即为整条）；色源优先线路色（数据）→ --accent Token
-        if (leg.colored.length >= 2) {
-          const stroke = leg.color ?? accent;
-          if (stroke) {
-            const cpl = new AMap.Polyline({
-              path: leg.colored,
-              strokeColor: stroke,
-              strokeWeight: 6,
-              strokeOpacity: 0.92,
-              lineJoin: "round",
-              lineCap: "round",
-              showDir: true,
-              zIndex: 72,
-            });
-            map.add(cpl);
-            overviewPolylinesRef.current.push(cpl);
-            drawn++; // ★ 仅「实际添加彩段折线」时自增（colored<2 / 无色源不计数）
-          }
-        }
-      } catch {
-        /* 单段绘制失败不影响其余段 */
-      }
-    }
+    const { polylines, drawn } = drawOverview(map, AMap, overview);
+    overviewPolylinesRef.current = polylines;
     canvasRef.current?.setAttribute("data-overview-legs", String(drawn));
     return () => clearOverview();
   }, [overview, phase]);
@@ -1198,13 +1068,19 @@ export default function NavMap({
         vehicles={vehicles}
         onVehicleClick={onVehicleClick}
       />
-      {/* ★ 2026-09-24：导航追踪（「您」标记 z140 + 已驶过路段绿色覆层 z74） */}
+      {/* ★ 2026-09-24：导航追踪（已驶过路段灰实线 z74）；★ 2026-09-25：「您」拆为蓝点 */}
       <TrackLayer
         map={phase === "ready" ? mapRef.current : null}
         amap={phase === "ready" ? amapRef.current : null}
         enabled={phase === "ready"}
-        you={navYou}
         traveled={traveled}
+      />
+      {/* ★ 2026-09-25：用户定位蓝点（人，z128 < 车辆 130） */}
+      <UserDotLayer
+        map={phase === "ready" ? mapRef.current : null}
+        amap={phase === "ready" ? amapRef.current : null}
+        enabled={phase === "ready"}
+        fix={userFix}
       />
       {phase === "loading" && (
         <div className="nav-map__cover">

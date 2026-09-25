@@ -164,6 +164,33 @@
    */
   --map-line-dim: #9fa5ae;
 
+  /* ---------- ★ 2026-09-25：导航界面重修 v2.14（只增不改） ----------
+     站条四态 / 「您在这里」/ 地图线（灰体系）/ 折叠区；全部 var()/color-mix() 派生。
+     ⚠️ `--map-line-passed` 与 `--map-line-dim` 一样需为**具体色值**（AMap 画布经
+        getComputedStyle 读 resolved 值；color-mix() 在自定义属性里读不到 ⇒ 必须落具体色）。
+        `--map-line-passed` 浅色 ≈ #8C93A0（比 dim 深一档，用于「已驶过」灰实线）。 */
+  --map-line-passed: #8c93a0;
+  --map-dash-array: 2 14; /* 非乘车区间虚线节奏（点线；cap=round ⇒ 圆点） */
+
+  /* 站条四态（青花蓝=当前/下一站；灰=已过；品牌绿=下车站；砖红=到站脉动） */
+  --track-passed: var(--meta);
+  --track-current: var(--accent);
+  --track-alight: var(--brand-green);
+  --track-alight-now: var(--danger);
+  /* 「您」（人）：骑线节点 + 地图蓝点 */
+  --track-you: var(--accent);
+  --track-you-ring: color-mix(in srgb, var(--accent) 40%, transparent);
+  --track-you-dot-w: 12px;
+  /* 几何（登记既有站条尺寸；供新版站条统一引用） */
+  --track-rail-w: 3px;
+  --track-dot-w: 9px;
+  --track-end-dot-w: 11px;
+  --track-line-w: 6px;
+  --track-passed-opacity: 0.9;
+  /* 动效（唯一脉动 1.6s；toast 停留 3s） */
+  --track-pulse-dur: 1.6s;
+  --toast-dur: 3s;
+
   /* ---------- ② 兼容别名（旧 M3 名 → 新 Token；既有组件零改动） ---------- */
   --primary: var(--accent);
   --on-primary: var(--accent-on);
@@ -291,6 +318,9 @@
 
     /* ★ 2026-09-23：三档面板深色取值（仅需补这几个；其余 derive 自现有深色 Token） */
     --map-line-dim: #7e8390;
+    /* ★ 2026-09-25：导航重修 v2.14 深色取值（站条四态 / 地图已驶过灰实线） */
+    --map-line-passed: #9aa0ac;
+    --track-you-ring: color-mix(in srgb, var(--accent) 45%, transparent);
     --grab-color: var(--border-2);
     --grab-color-active: var(--fg-2);
   }
@@ -6055,10 +6085,391 @@ body[data-sheet="open"] .nav-searchbar {
   box-shadow: var(--focus-ring);
 }
 
+/* ══════════════════════════════════════════════════════════════════════
+   ★ 2026-09-25：v2.14 导航界面重修 —— 站条四态 / 吸底操作条 / 提醒横幅 /
+     toast / 折叠区「线路为父·方案为子」/ 蓝点 / 中性提示
+   · 色值一律 Token；单行 nowrap、禁 ellipsis；动效支持 prefers-reduced-motion
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* ── 进度纵条（NavStrip · 四态 + 「您在这里」骑线节点）── */
+.navstrip { position: relative; display: flex; flex-direction: column; padding: 2px 0; }
+.navstrip__row {
+  position: relative;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-height: 32px;
+  padding: 6px 0 6px 30px;
+  font-size: var(--text-md);
+  line-height: var(--leading-body);
+}
+.navstrip__row.is-end { min-height: 44px; padding-top: 10px; padding-bottom: 10px; }
+.navstrip__row.is-you { min-height: 26px; padding-top: 3px; padding-bottom: 3px; }
+.navstrip__seg {
+  position: absolute;
+  left: 9px;
+  top: 0;
+  bottom: 0;
+  width: var(--track-rail-w);
+  border-radius: 2px;
+  background: var(--strip-color, var(--accent));
+}
+.navstrip__row:first-child .navstrip__seg { top: 16px; }
+.navstrip__row:last-child .navstrip__seg { bottom: 16px; }
+.navstrip__seg.is-passed { background: var(--map-line-passed); }
+.navstrip__dot {
+  position: absolute;
+  left: 6px;
+  top: 11px;
+  width: var(--track-dot-w);
+  height: var(--track-dot-w);
+  border-radius: var(--radius-full);
+  background: var(--surface);
+  border: 2px solid var(--strip-color, var(--accent));
+}
+.navstrip__row.is-end .navstrip__dot {
+  width: var(--track-end-dot-w);
+  height: var(--track-end-dot-w);
+  left: 5px;
+  top: 12px;
+}
+.navstrip__label {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+.navstrip__hop { font-size: var(--text-xs); color: var(--meta); white-space: nowrap; }
+.navstrip__sub { font-size: var(--text-xs); color: var(--muted); white-space: nowrap; }
+.navstrip__check { margin-left: auto; flex: none; color: var(--track-passed); display: inline-flex; }
+.navstrip__badge {
+  display: inline-flex;
+  align-items: center;
+  height: 17px;
+  padding: 0 6px;
+  border-radius: var(--radius-chip);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: var(--text-2xs);
+  font-weight: var(--fw-announce);
+  white-space: nowrap;
+}
+.navstrip__row.is-passed .navstrip__label { color: var(--track-passed); }
+.navstrip__row.is-passed .navstrip__dot { background: var(--map-line-passed); border-color: var(--map-line-passed); }
+.navstrip__row.is-next .navstrip__label,
+.navstrip__row.is-at .navstrip__label { color: var(--track-current); font-weight: var(--fw-emphasize); }
+.navstrip__row.is-at .navstrip__dot { box-shadow: 0 0 0 3px var(--accent-soft); }
+.navstrip__row.is-alight .navstrip__label { color: var(--track-alight); font-weight: var(--fw-emphasize); }
+.navstrip__row.is-alight-now .navstrip__label { color: var(--track-alight-now); font-weight: var(--fw-announce); }
+.navstrip__row.is-alight-now .navstrip__dot {
+  background: var(--track-alight-now);
+  border-color: var(--track-alight-now);
+  animation: navAlarmPulseFast 1.6s ease-in-out infinite;
+}
+/* 「您在这里」骑线节点（纵条不断线；大一号蓝点 + 光环） */
+.navstrip__row.is-you .navstrip__seg { background: var(--map-line-passed); }
+.navstrip__row.is-you .navstrip__dot {
+  left: 4.5px;
+  top: 8px;
+  width: var(--track-you-dot-w);
+  height: var(--track-you-dot-w);
+  background: var(--track-you);
+  border: none;
+  box-shadow: 0 0 0 4px var(--track-you-ring);
+  animation: navYouPulse 1.6s ease-in-out infinite;
+}
+.navstrip__row.is-you .navstrip__label {
+  color: var(--track-you);
+  font-size: var(--text-2xs);
+  font-weight: var(--fw-announce);
+  letter-spacing: 0.06em;
+}
+.navstrip__pause { color: var(--muted); font-weight: 400; letter-spacing: 0; font-size: var(--text-2xs); }
+@keyframes navAlarmPulseFast {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--danger) 0%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 6px var(--danger-soft);
+  }
+}
+
+/* ── 吸底操作条（NavTrackBar；贴在面板「可见底边」——抵消 sheet 的 translateY）── */
+.nav-actions {
+  position: sticky;
+  bottom: calc(var(--sheet-y-layout, 0px));
+  z-index: 20;
+  margin-top: var(--space-3);
+  padding: 10px var(--space-4) max(10px, var(--safe-bottom));
+  background: var(--surface);
+  border-top: var(--frame-w) solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.nav-actions__staterow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-xs);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.nav-actions__staterow b { color: var(--fg); font-weight: var(--fw-emphasize); }
+.nav-actions__dot { width: 7px; height: 7px; border-radius: var(--radius-full); background: var(--accent); flex: none; }
+.nav-actions__src {
+  flex: none;
+  font-size: var(--text-2xs);
+  color: var(--meta);
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-chip);
+  letter-spacing: 0.04em;
+}
+.nav-actions__spacer { margin-left: auto; flex: none; }
+.nav-actions__sub { color: var(--muted); font-weight: 400; }
+.nav-actions .btn.is-emph { color: var(--accent); font-weight: var(--fw-announce); }
+.nav-actions__btnrow { display: flex; align-items: center; gap: 10px; }
+.nav-actions__iconbtn {
+  width: 40px;
+  height: 40px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: var(--frame-w) solid var(--border-2);
+  border-radius: var(--radius-btn);
+  background: var(--surface);
+  color: var(--fg-2);
+  cursor: pointer;
+}
+.nav-actions__iconbtn:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.nav-actions__iconbtn[disabled] { opacity: 0.5; }
+.nav-actions__hint { text-align: center; color: var(--muted); font-size: var(--text-2xs); }
+
+/* ── 提醒横幅（AlightBanner：soon=警告色 / now=危险色 + 脉动；绿只标记站名）── */
+.nav-alarm {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: var(--space-3);
+  border-radius: var(--radius-card);
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-weight: var(--fw-emphasize);
+  font-size: var(--text-sm);
+  white-space: nowrap;
+}
+.nav-alarm__dest { color: var(--track-alight); font-weight: var(--fw-announce); }
+.nav-alarm__icon { flex: none; display: inline-flex; }
+.nav-alarm__hint {
+  margin-left: auto;
+  flex: none;
+  font-weight: 400;
+  font-size: var(--text-2xs);
+  color: var(--muted);
+  opacity: 0.9;
+}
+.nav-alarm.is-now {
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-weight: var(--fw-announce);
+  animation: navAlarmPulse 1.2s ease-in-out infinite;
+}
+
+/* ── 自动上车瞬态反馈（toast）── */
+.nav-toast {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px var(--space-3);
+  border: var(--frame-w) solid var(--border-strong);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  box-shadow: var(--hairline);
+  animation: navToastIn var(--dur-base) var(--ease-standard);
+}
+.nav-toast__icon { flex: none; color: var(--accent); display: inline-flex; }
+.nav-toast__text { flex: 1; min-width: 0; font-size: var(--text-xs); color: var(--fg-2); line-height: var(--leading-body); }
+.nav-toast__text b { color: var(--fg); font-weight: var(--fw-emphasize); }
+.nav-toast__fix {
+  flex: none;
+  font-size: var(--text-xs);
+  font-weight: var(--fw-emphasize);
+  color: var(--accent);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: var(--radius-chip);
+}
+.nav-toast__fix:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.nav-toast__close { flex: none; color: var(--muted); display: inline-flex; background: transparent; border: none; cursor: pointer; }
+@keyframes navToastIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ── 中性提示（冻结不跳 / 信号弱；无警告色、无技术词）── */
+.nav-note-neutral {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-xs);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.nav-note-neutral i { flex: none; width: 7px; height: 7px; border-radius: var(--radius-full); background: var(--meta); }
+
+/* ── 折叠区：线路为父、方案为子（树形）── */
+.nav-fold-group-label {
+  display: block;
+  font-size: var(--text-2xs);
+  letter-spacing: 0.09em;
+  font-weight: var(--fw-announce);
+  color: var(--muted);
+  margin: 10px 0 6px;
+}
+.nav-fold-group-label.is-sep { border-top: 1px solid var(--border); padding-top: 10px; margin-top: 12px; }
+.nav-fold-parent {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--surface-2);
+  font-size: var(--text-sm);
+  font-weight: var(--fw-emphasize);
+  color: var(--fg);
+}
+.nav-plan-group {
+  border: var(--frame-w) solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  margin-bottom: 10px;
+  overflow: hidden;
+}
+.nav-plan-sub {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px 8px 24px;
+  border-top: 1px solid var(--border);
+}
+.nav-plan-sub::before {
+  content: "";
+  position: absolute;
+  left: 11px;
+  top: 0;
+  bottom: 0;
+  width: 1.5px;
+  background: var(--border-2);
+}
+.nav-plan-sub:last-child::before { bottom: 50%; }
+.nav-plan-sub::after {
+  content: "";
+  position: absolute;
+  left: 11px;
+  top: 50%;
+  width: 9px;
+  height: 1.5px;
+  background: var(--border-2);
+}
+.nav-plan-sub__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+.nav-plan-sub__time { font-size: var(--text-sm); color: var(--fg); white-space: nowrap; }
+.nav-plan-sub__time b { font-weight: var(--fw-announce); }
+.nav-plan-sub__delta {
+  font-size: var(--text-2xs);
+  font-weight: var(--fw-announce);
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  white-space: nowrap;
+}
+.nav-plan-sub__delta.is-fast { color: var(--track-alight); }
+.nav-plan-sub__delta.is-slow { color: var(--warn); }
+.nav-plan-sub__go {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  padding: 6px 9px;
+  border: var(--frame-w) solid var(--border-strong);
+  border-radius: var(--radius-btn);
+  background: var(--surface);
+  color: var(--accent);
+  font-size: var(--text-xs);
+  font-weight: var(--fw-emphasize);
+  cursor: pointer;
+}
+.nav-plan-sub__go:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.nav-fold-lrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 4px 0;
+  border-top: 1px solid var(--border);
+  font-size: var(--text-xs);
+  color: var(--fg-2);
+}
+.nav-fold-lrow__live { flex: 1; min-width: 0; color: var(--muted); white-space: nowrap; }
+
+/* ── 地图蓝点（UserDotLayer 原生 marker 的 DOM content）── */
+.user-dot { position: relative; width: 16px; height: 16px; }
+.user-dot__core {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: var(--track-you-dot-w);
+  height: var(--track-you-dot-w);
+  border-radius: var(--radius-full);
+  background: var(--track-you);
+  border: 2.5px solid var(--surface);
+  box-shadow: 0 0 0 5px var(--track-you-ring);
+  animation: navYouPulse 1.6s ease-in-out infinite;
+}
+.user-dot__label {
+  position: absolute;
+  left: 20px;
+  top: 50%;
+  transform: translateY(-50%);
+  white-space: nowrap;
+  padding: 1px 6px;
+  border-radius: var(--radius-chip);
+  background: var(--accent);
+  color: var(--accent-on);
+  font-size: var(--text-2xs);
+  font-weight: var(--fw-announce);
+}
+
+/* ── 全屏化：导航中隐藏底导（body[data-nav="riding"]）── */
+body[data-nav="riding"] .bottom-nav { display: none; }
+
 @media (prefers-reduced-motion: reduce) {
   .nav-track__alarm.is-now,
   .rc-strip__you-dot,
-  .nav-you__dot {
+  .nav-you__dot,
+  .navstrip__row.is-you .navstrip__dot,
+  .navstrip__row.is-alight-now .navstrip__dot,
+  .nav-alarm.is-now,
+  .user-dot__core {
+    animation: none;
+  }
+  .nav-toast {
     animation: none;
   }
 }

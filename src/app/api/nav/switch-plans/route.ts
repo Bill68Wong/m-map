@@ -12,7 +12,9 @@
  *   `searchStationPaths`（本地图枚举：k=8 / 800m / 换乘 ≤1 / 候选 ≤200）
  *   → **后置过滤**「首程上车站主码 = S 且首程线路 ≠ 当前线路」→ 按首程线路分组
  *   → `pathsToCandidates` → `candidatesToSeeds` → `fetchLive`（DSAT 实时 + 轻轨时刻表，一次性批量）
- *   → 逐候选 `modelOption`（注入 `makeCacheWalkResolver` 的本地步行）→ 每组取 `totalMin` 最小者。
+ *   → 逐候选 `modelOption`（注入 `makeCacheWalkResolver` 的本地步行）→ 每组按 `totalMin` 升序、
+ *     按 `chainRoutes@alightMain` 去重后保留 **top-K（`SIBLING_TOP_K`）**：top-1 = 主卡 `card`，
+ *     其余 = `siblings`（§3.4「一父多子」）。
  *
  *   ⚠️ 本端点**不消耗高德配额**：全程不调用 `fetchTransitPlans` / `parseAndAmap` 等；
  *      实时数据走既有 `fetchLive`（其 purpose 已按项目规矩排除熔断判定，勿改）。
@@ -45,6 +47,7 @@ import { candidatesToSeeds, pathsToCandidates } from "@/lib/nav/enumerate-nav";
 import { searchStationPaths, type StationPath } from "@/lib/nav/graph-search";
 import { loadStationGeoCached, loadWalkCacheCached } from "@/lib/nav/nav-service";
 import { makeCacheWalkResolver } from "@/lib/nav/recompute";
+import { splitPlanCards } from "@/lib/nav/switch-plans-shared";
 import type { NavCandidate, NavPoint } from "@/lib/nav/types";
 
 export const runtime = "nodejs";
@@ -73,8 +76,14 @@ export interface SwitchPlanItem {
    *   与 `totalMin` 同为「站上起算」，避免把「已走完的步行」算成新方案的优势。
    */
   deltaMin: number;
-  /** ★ 完整卡片对象（前端直接用它打开新导航界面，不重算） */
+  /** ★ 组内最优（top-1，`totalMin` 最小者）—— 语义不变，向后兼容 */
   card: RecommendCard;
+  /**
+   * ★ v2.14.0（§3.4）新增可选：组内其余方案（top-2 ~ top-K），`totalMin` 升序，≤ `SIBLING_TOP_K - 1` 条。
+   *   老客户端忽略本字段 ⇒ 只见主卡（＝v2.13 现状，**零破坏**）；新客户端子行 = `[card, ...(siblings ?? [])]`。
+   *   该组只有 1 条走法时**不返回**本字段。
+   */
+  siblings?: RecommendCard[];
   /** 首程上车站主码（应 = `station.code`） */
   boardMain: string;
   /** 末程下车站主码 */
@@ -113,6 +122,9 @@ if (!g.__switchPlansCache) g.__switchPlansCache = new Map();
 const hopsOf = (p: StationPath): number => p.rides.reduce((a, r) => a + r.hops.length, 0);
 const cmpPath = (a: StationPath, b: StationPath): number =>
   a.rides.length - b.rides.length || hopsOf(a) - hopsOf(b);
+
+// ★ v2.14.0（§3.4）：组内 top-K（`SIBLING_TOP_K` / 组内 comparator / `dedupKeyOf` / `splitPlanCards`）
+//   已抽到 `src/lib/nav/switch-plans-shared.ts`（纯函数，便于单测）—— 见该模块说明。
 
 export async function POST(req: Request) {
   // ── ① 解析 + 校验（非法 → 400）──
@@ -245,13 +257,14 @@ export async function POST(req: Request) {
       headway,
     });
 
-    // ── ⑧ 逐候选建模；每组取 totalMin 最小者（口径与 recompute 的本地分支一致）──
+    // ── ⑧ 逐候选建模；每组收集全部卡片（组内 top-K 在组装段统一处理）──
     const baseCtx = { ...contextFor(st, nowMs, null, batch.live), destLabel: destName || undefined };
     const geoOf = new Map<string, { lng: number; lat: number }>();
     for (const s of geo) geoOf.set(s.main, { lng: s.lng, lat: s.lat });
     const walkCache = await loadWalkCacheCached(pool);
 
-    const bestCard = new Map<string, RecommendCard>();
+    /** route → 该组建模成功的卡片（未排序/未去重，组装段再收敛） */
+    const bestCards = new Map<string, RecommendCard[]>();
     for (const seed of seeds) {
       const route = candRoute.get(seed.key);
       if (!route) continue;
@@ -261,22 +274,25 @@ export async function POST(req: Request) {
       };
       const m = modelOption(seed, ctx);
       if (!m) continue;
-      const prev = bestCard.get(route);
-      if (!prev || m.card.totalMin < prev.totalMin) bestCard.set(route, m.card);
+      const arr = bestCards.get(route);
+      if (arr) arr.push(m.card);
+      else bestCards.set(route, [m.card]);
     }
-    if (!bestCard.size) return degraded("no_live");
+    if (!bestCards.size) return degraded("no_live");
 
-    // ── ⑨ 组装 ──
+    // ── ⑨ 组装（组内 top-K：排序 → 去重 → 截断，纯逻辑见 `switch-plans-shared.splitPlanCards`）──
     const plans: SwitchPlanItem[] = [];
-    for (const [route, c] of bestCard) {
-      const last = c.rides[c.rides.length - 1];
+    for (const [route, cards] of bestCards) {
+      const { card: mainCard, siblings } = splitPlanCards(cards);
+      const last = mainCard.rides[mainCard.rides.length - 1];
       plans.push({
         route,
-        chainRoutes: c.rides.map((r) => r.route),
-        totalMin: c.totalMin,
-        deltaMin: Math.round((c.totalMin - currentFromStopMin) * 10) / 10,
-        card: c,
-        boardMain: mainCodeOf(c.rides[0].board),
+        chainRoutes: mainCard.rides.map((r) => r.route),
+        totalMin: mainCard.totalMin,
+        deltaMin: Math.round((mainCard.totalMin - currentFromStopMin) * 10) / 10,
+        card: mainCard,
+        ...(siblings ? { siblings } : {}),
+        boardMain: mainCodeOf(mainCard.rides[0].board),
         alightMain: last ? mainCodeOf(last.alight) : null,
         alightLabel: last ? last.alightLabel : null,
       });

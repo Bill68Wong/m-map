@@ -14,7 +14,7 @@
  *   · `onSwitchCard`—— 折叠栏「切过去」→ 打开新方案导航（宿主提供）。
  */
 import { useMemo } from "react";
-import RouteDetailBody from "./RouteDetailBody";
+import NavDetailBody from "./NavDetailBody";
 import { snapshotOfCard, routeSegsOfCard } from "@/lib/favorites/snapshot";
 import type { FavoriteEndpoint } from "@/lib/favorites/types";
 import type { RecommendCard } from "@/lib/recommend/types";
@@ -41,6 +41,8 @@ export interface RouteDetailPaneProps {
   destCoord?: { lng: number; lat: number } | null;
   /** ★ 2026-09-24：点「切过去」→ 打开新方案导航 */
   onSwitchCard?: (card: RecommendCard, degraded: boolean) => void;
+  /** ★ 2026-09-25：全屏化（导航中隐藏底导、收敛间距） */
+  immersive?: boolean;
 }
 
 export default function RouteDetailPane({
@@ -56,6 +58,7 @@ export default function RouteDetailPane({
   track = null,
   destCoord = null,
   onSwitchCard,
+  immersive = false,
 }: RouteDetailPaneProps) {
   /** 收藏数据（纯函数在客户端现算：指纹 / 快照 / 流程图结构） */
   const favData = useMemo(() => {
@@ -90,7 +93,7 @@ export default function RouteDetailPane({
         </p>
       )}
       {phase === "ready" && body && (
-        <RouteDetailBody
+        <NavDetailBody
           card={card}
           strips={body.strips}
           otherRoutes={body.otherRoutes}
@@ -103,6 +106,7 @@ export default function RouteDetailPane({
           track={track}
           destCoord={destCoord}
           onSwitchCard={onSwitchCard}
+          immersive={immersive}
         />
       )}
     </div>

@@ -1,6 +1,6 @@
 {
   "name": "must-dengxiao",
-  "version": "2.13.0",
+  "version": "2.14.0",
   "private": true,
   "description": "MUST登校 · 擎天汇↔澳门科技大学↔横琴 通勤计时与数据采集系统",
   "scripts": {
@@ -21,6 +21,7 @@
     "test:dsat": "tsx scripts/test-dsat.ts",
     "test:overview": "tsx scripts/test-route-overview.ts",
     "test:altbuses": "tsx scripts/test-altbuses.ts",
+    "test:siblings": "tsx scripts/test-siblings.ts",
     "db:migrate-v071": "tsx scripts/db-guard.ts run db/migrate-v071.ts",
     "db:migrate-v090": "tsx scripts/db-guard.ts run db/migrate-v090.ts",
     "db:migrate-v100": "tsx scripts/db-guard.ts run db/migrate-v100.ts",

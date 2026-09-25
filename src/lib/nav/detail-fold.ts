@@ -70,7 +70,7 @@ export async function foldLiveAt(
     const live = await fetchStationLive(pool, jobs, st.routeIdx, st.segIdx, { todayWeekday: weekday, nowMs });
     for (const r of Object.keys(stopCodeOf)) {
       const b = live.get(`${r}@${stopCodeOf[r]}`)?.nearest ?? null;
-      out[r] = b ? `还有 ${b.stopsAway} 站 · ${rangeText(b.loSec, b.hiSec)}` : "暂无在途车";
+      out[r] = b ? `还有 ${b.stopsAway} 站 · ${rangeText(b.loSec, b.hiSec)}` : "暂无班次信息";
     }
   } catch {
     /* 实时不可用 → 收敛为空（折叠栏仍显示线路标签） */

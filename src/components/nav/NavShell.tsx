@@ -37,10 +37,9 @@
  *   · ★ 取景**全部自算**（`fit-box`），**禁用** `setBounds`/`setFitView`（会撑到珠海）。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
-import Icon from "@/components/ui/Icon";
 import NavMap from "./NavMap";
-import RefreshButton from "./RefreshButton";
+import NavBrandBar from "./NavBrandBar";
+import NavSearchBarSlot from "./NavSearchBarSlot";
 import RouteLinesSheet from "./RouteLinesSheet";
 import RoutePanel from "./RoutePanel";
 import RouteSheet from "./RouteSheet";
@@ -50,8 +49,10 @@ import VehicleCard from "./VehicleCard";
 import { queryOf } from "./StepSheet";
 import { useRouteVehicles } from "./useRouteVehicles";
 import { useRouteOverview } from "./useRouteOverview";
-import { useRideTracking } from "./useRideTracking";
-import { DETENTS, detentTopsPx, readSafeTopPx, type Detent } from "./sheet-detents";
+import { useRideTracking, type RidePhase } from "./useRideTracking";
+import { useUserFix } from "./useUserFix";
+import { useNavFrame } from "./useNavFrame";
+import { detentIndex, detentTopsPx, readSafeTopPx, type Detent } from "./sheet-detents";
 import { unionBox } from "@/lib/nav/route-overview";
 import { useCombos } from "@/lib/favorites/useCombos";
 import { endpointOf } from "@/lib/favorites/types";
@@ -92,11 +93,6 @@ export default function NavShell({
   const [editing, setEditing] = useState<"dest" | "from">("dest");
   /** 重新定位触发计数（右上定位按钮） */
   const [locateTick, setLocateTick] = useState(0);
-  /**
-   * 取景触发计数：状态变化时 +1，使 `NavMap` 重新取景。
-   * ⚠️ 用计数而不是依赖对象本身 —— 同一模式连续触发也要生效。
-   */
-  const [viewTick, setViewTick] = useState(0);
 
   /**
    * 路线查看模式（选线路看实时车辆）；`picked` 非空 ⇒ 地图画该线 + 底部主题色标签。
@@ -109,6 +105,8 @@ export default function NavShell({
   const [rsOpen, setRsOpen] = useState(false);
   const [pane, setPane] = useState<"recommend" | "detail">("recommend");
   const [snap, setSnap] = useState<Detent>("full");
+  /** ★ 2026-09-25：导航阶段镜像（决定 GPS 节流 15s/30s 与全屏化） */
+  const [ridePhase, setRidePhase] = useState<RidePhase>("off");
   const [detailCard, setDetailCard] = useState<{ card: RecommendCard; degraded: boolean } | null>(null);
   /** 面板状态镜像（供稳定回调读取最新值，避免闭包过期） */
   const rsOpenRef = useRef(rsOpen);
@@ -163,14 +161,66 @@ export default function NavShell({
     ovExtra,
   );
 
-  /** ★ 2026-09-24：乘车追踪（开始导航 → 我已上车 → 实时进度/下车提醒；关闭详情即停） */
+  /** ★ 2026-09-25：导航态（detail pane 打开） */
+  const navActive = rsOpen && pane === "detail";
+
+  /** ★ 2026-09-25：GPS 通道（候车 15s / 乘车 30s 节流；权限由手势申请） */
+  const userFixR = useUserFix({
+    enabled: navActive,
+    intervalMs: ridePhase === "riding" ? 30_000 : 15_000,
+  });
+
+  /** ★ 2026-09-24：乘车追踪（自动上车 + 安全网 + 轻轨 GPS 推进） */
   const ride = useRideTracking({
     card: pane === "detail" ? detailCard?.card ?? null : null,
     legs: ov.legs,
     anchors: ov.body?.legs ?? null,
     strips: ov.body?.strips ?? null,
-    active: rsOpen && pane === "detail",
+    active: navActive,
+    userFix: userFixR.fix,
+    onRequestGps: userFixR.start,
   });
+
+  /** 阶段镜像（GPS 节流用；避免 userFix↔ride 循环依赖） */
+  useEffect(() => {
+    setRidePhase(ride.phase);
+  }, [ride.phase]);
+
+  /** ★ 2026-09-25：取景指令化（AC-17） */
+  const { view, frame, reframeOnSettle } = useNavFrame();
+  /** 当前档位镜像（取景指令读取用；避免 snap 进入 effect 依赖） */
+  const snapRef = useRef<Detent>(snap);
+  snapRef.current = snap;
+
+  /**
+   * 取景意图：仅在 **显式状态变化**（打开面板 / 切 pane / 换 OD / 换舞台）时下令。
+   * ⚠️ **不依赖 `snap`** ⇒ 拖面板 / 换档不重取景（AC-17）；落定后仅被遮挡时经
+   *    `reframeOnSettle` 微调一次。
+   */
+  useEffect(() => {
+    const slot = topsPx[Math.min(topsPx.length - 1, Math.max(0, detentIndex(snapRef.current)))];
+    if (rsOpen) {
+      const box =
+        pane === "detail"
+          ? ov.box ?? (ovExtra.length >= 2 ? unionBox([], ovExtra) : null)
+          : ovExtra.length >= 2
+            ? unionBox([], ovExtra)
+            : null;
+      if (box) frame({ mode: "fit-box", box, slotTopPx: slot });
+      else frame({ mode: "none" });
+      return;
+    }
+    if (stage === "panel") frame({ mode: from ? "fit-two" : to ? "dest-center-top" : "none" });
+    else frame({ mode: "none" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rsOpen, pane, ov.box, ovExtra, stage, from, to]);
+
+  /** 全屏化：导航中隐藏底导（body[data-nav="riding"]） */
+  useEffect(() => {
+    if (navActive && ride.phase === "riding") document.body.setAttribute("data-nav", "riding");
+    else document.body.removeAttribute("data-nav");
+    return () => document.body.removeAttribute("data-nav");
+  }, [navActive, ride.phase]);
 
   /* ── 舞台操作 ── */
   function openSearch(which: "dest" | "from") {
@@ -179,13 +229,11 @@ export default function NavShell({
   }
   function backFromSearch() {
     setStage(to ? "panel" : "map");
-    setViewTick((t) => t + 1);
   }
   function pickPoint(p: NavPoint, which: "dest" | "from") {
     if (which === "dest") setTo(p);
     else setFrom(p);
     setStage("panel");
-    setViewTick((t) => t + 1);
   }
 
   /** ★ 出发 → 打开推荐面板（full 档；不整页跳转） */
@@ -195,7 +243,6 @@ export default function NavShell({
     setPane("recommend");
     setSnap("full");
     setRsOpen(true);
-    setViewTick((t) => t + 1);
   }
 
   /** ★ 点卡片：**当帧**切 detail pane + 降档动画（不等待接口，先骨架） */
@@ -203,7 +250,6 @@ export default function NavShell({
     setDetailCard({ card, degraded });
     setPane("detail");
     setSnap("half");
-    setViewTick((t) => t + 1);
   }
 
   /** ★ contextual 关闭：推荐→关面板（回可出发态）；详情→回推荐列表 */
@@ -211,12 +257,16 @@ export default function NavShell({
     if (pane === "detail") {
       setPane("recommend");
       setSnap("full");
-      setViewTick((t) => t + 1);
     } else {
       setRsOpen(false);
       setStage(to ? "panel" : "map");
-      setViewTick((t) => t + 1);
     }
+  }
+
+  /** ★ 面板换档落定：更新档位；仅「被遮挡」时微调取景一次（AC-17） */
+  function onDetent(d: Detent) {
+    setSnap(d);
+    reframeOnSettle(topsPx[Math.min(topsPx.length - 1, Math.max(0, detentIndex(d)))]);
   }
 
   /** 点地图上的站/车 → 打开卡片；**打开卡片即收起面板**（同 Google Maps，z90 > z70） */
@@ -250,33 +300,6 @@ export default function NavShell({
         .map((c) => ({ id: c.id, from: c.from, to: c.to }))
     : [];
 
-  /**
-   * 视口指令（交给 `NavMap`）：
-   *   · 面板打开 + detail → `fit-box`（路线总览外包框 → 顶部槽）；
-   *   · 面板打开 + recommend → `fit-box`（OD 两点 → 顶部槽）；
-   *   · 半屏可出发 → `fit-two` / `dest-center-top`；
-   *   · 其余 → `none`。
-   * ⚠️ 拖动面板期间 NavShell **不重渲染**（拖拽 state 在 RouteSheet 内）⇒ 不触发取景（AC-03）。
-   */
-  const view = useMemo(() => {
-    if (rsOpen) {
-      const slot = topsPx[Math.min(topsPx.length - 1, Math.max(0, DETENTS.indexOf(snap)))];
-      const box =
-        pane === "detail"
-          ? ov.box ?? (ovExtra.length >= 2 ? unionBox([], ovExtra) : null)
-          : ovExtra.length >= 2
-            ? unionBox([], ovExtra)
-            : null;
-      return box
-        ? ({ mode: "fit-box", tick: viewTick, box, slotTopPx: slot } as const)
-        : ({ mode: "none", tick: viewTick } as const);
-    }
-    if (stage === "panel") {
-      return { mode: from ? "fit-two" : to ? "dest-center-top" : "none", tick: viewTick } as const;
-    }
-    return { mode: "none", tick: viewTick } as const;
-  }, [rsOpen, pane, snap, topsPx, ov.box, ovExtra, stage, from, to, viewTick]);
-
   /** detail pane 打开时，总览取代「路线查看线」与其车辆 */
   const detailActive = rsOpen && pane === "detail";
 
@@ -301,114 +324,37 @@ export default function NavShell({
           onVehicleClick={onVehicleClick}
           /* ★ 2026-09-23：路线总览（灰底线 + 彩段） */
           overview={detailActive ? ov.legs : null}
-          /* ★ 2026-09-24：导航追踪 ——「您」标记（= 已驶过路径末端点）+ 已驶过路段（绿色覆层） */
-          navYou={
-            detailActive && ride.phase === "riding" && ride.traveled && ride.traveled.length >= 2
-              ? {
-                  lng: ride.traveled[ride.traveled.length - 1][0],
-                  lat: ride.traveled[ride.traveled.length - 1][1],
-                  label: ride.plate ?? "您",
-                }
-              : null
+          /* ★ 2026-09-25：双标记 —— 车＝VehicleLayer、人＝蓝点（UserDotLayer）。
+             重合（riding 且已锁定车牌）时隐藏独立蓝点；否则显示用户 GPS 实位。 */
+          userFix={
+            !detailActive || (ride.phase === "riding" && ride.plate) ? null : userFixR.fix
           }
           traveled={detailActive && ride.phase === "riding" ? ride.traveled : null}
         />
 
         {/* 品牌栏（三栏网格）：左=空 · 中=换向键+线路标签 · 右=竖排按钮组 */}
-        <div className="nav-brandbar">
-          <span className="nav-brandbar__left" aria-hidden="true" />
+        <NavBrandBar
+          picked={rv.picked ? { label: rv.picked.label, color: rv.picked.color, kind: rv.picked.kind } : null}
+          canReverse={rv.canReverse}
+          cooldownSec={rv.cooldownSec}
+          onReverse={rv.reverse}
+          onExitLine={rv.exitLine}
+          onRefresh={rv.refresh}
+          onOpenLines={() => setLineSheet(true)}
+          onLocate={() => setLocateTick((t) => t + 1)}
+        />
 
-          <div className="nav-brandbar__mid">
-            {rv.picked && rv.canReverse && (
-              <button
-                type="button"
-                className="nav-rev"
-                aria-label="切换行驶方向"
-                title="切换行驶方向"
-                onClick={rv.reverse}
-              >
-                <Icon name="exchange" size={20} />
-              </button>
-            )}
-            {rv.picked && (
-              <span className="nav-linechip" style={{ background: rv.picked.color }}>
-                <span className="nav-linechip__text">{rv.picked.label}</span>
-                <button
-                  type="button"
-                  className="nav-linechip__x"
-                  aria-label={`退出路线查看（${rv.picked.label}）`}
-                  title="退出路线查看"
-                  onClick={rv.exitLine}
-                >
-                  <Icon name="close" size={16} />
-                </button>
-              </span>
-            )}
-          </div>
-
-          {/* 右栏：竖排按钮组（刷新 → 公共交通路线 → 定位 → M Map） */}
-          <div className="nav-brandbar__acts">
-            {rv.picked?.kind === "bus" && (
-              <RefreshButton cooling={rv.cooldownSec > 0} seconds={rv.cooldownSec} onRefresh={rv.refresh} />
-            )}
-            <button
-              type="button"
-              className="nav-locate"
-              aria-label="公共交通路线"
-              title="公共交通路线"
-              onClick={() => setLineSheet(true)}
-            >
-              <Icon name="records" size={20} />
-            </button>
-            <button
-              type="button"
-              className="nav-locate"
-              aria-label="定位到我的位置"
-              title="定位到我的位置"
-              onClick={() => setLocateTick((t) => t + 1)}
-            >
-              <Icon name="locate" size={20} />
-            </button>
-            <Link href="/help" className="nav-brand" aria-label="M Map · 帮助与合规说明">
-              M Map
-            </Link>
-          </div>
-        </div>
-
-        {/* 顶置搜索条 —— 只在「非全屏搜索」时出现；面板打开期间 200ms 淡出（body[data-sheet=open]） */}
-        {stage !== "search" && (
-          <button
-            type="button"
-            className="nav-searchbar"
-            onClick={() => openSearch("dest")}
-            aria-label={to ? `已选目的地 ${to.label}，点击修改` : "选择目的地"}
-          >
-            <Icon name="search" size={20} />
-            <span className={`nav-searchbar__text${to ? "" : " nav-searchbar__text--ph"}`}>
-              {to ? to.label : "去哪儿？"}
-            </span>
-            {stage === "panel" && to && (
-              <span className="nav-searchbar__tag t-label">
-                <Icon name="destination" size={16} />
-                已选
-              </span>
-            )}
-          </button>
-        )}
-
-        {/* 带入收藏提示条（可出发态才显示） */}
-        {initialTo && stage === "panel" && !from && (
-          <div className="nav-banner t-label" role="status">
-            已带入收藏：{initialFrom?.label ?? MY_LOCATION} → {initialTo.label}
-          </div>
-        )}
-
-        {/* 车辆位置获取失败提示（不阻塞地图与线路走向） */}
-        {rv.error && (
-          <div className="nav-banner t-label" role="status">
-            车辆位置暂时不可用
-          </div>
-        )}
+        {/* 顶置搜索条 + 提示条槽 */}
+        <NavSearchBarSlot
+          stage={stage}
+          to={to}
+          from={from}
+          initialTo={initialTo}
+          initialFrom={initialFrom}
+          error={!!rv.error}
+          myLocationLabel={MY_LOCATION}
+          onOpenSearch={() => openSearch("dest")}
+        />
       </div>
 
       {/* ★ 卡片浮层（车卡/站卡）—— 挂在 wrap **之外**，`.nav-card-overlay`（fixed z90）
@@ -424,13 +370,11 @@ export default function NavShell({
                 setFrom(stationToNavPoint(station));
                 setStation(null);
                 setStage("panel");
-                setViewTick((t) => t + 1);
               }}
               onSetTo={() => {
                 setTo(stationToNavPoint(station));
                 setStation(null);
                 setStage("panel");
-                setViewTick((t) => t + 1);
               }}
             />
           )}
@@ -464,12 +408,13 @@ export default function NavShell({
         pane={pane}
         detent={snap}
         topsPx={topsPx}
-        onDetentChange={setSnap}
+        onDetentChange={onDetent}
         onContextClose={contextClose}
         odLabel={odLabel}
         query={resultQuery}
         colors={colors}
         fav={fromPoint && to ? { from: endpointOf(fromPoint), to: endpointOf(to) } : null}
+        immersive={ride.phase === "riding"}
         detail={
           detailCard && to
             ? {
@@ -504,7 +449,6 @@ export default function NavShell({
             setFrom(f);
             setTo(t);
             setStage("panel");
-            setViewTick((n) => n + 1);
           }}
           onBack={backFromSearch}
         />

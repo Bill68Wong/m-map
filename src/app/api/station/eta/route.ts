@@ -91,6 +91,13 @@ interface StationEtaItem {
 interface StationEtaResponse {
   code: string;
   fetchedAt: string;
+  /**
+   * ★ v2.14.0（§3.1）：**本次响应生成时的服务端 `Date.now()`**（UTC 毫秒）。
+   *   客户端据此算设备时钟相对服务端的偏移 `offsetMs = serverNowMs − Date.now()`，
+   *   再用 `depMs − (Date.now() + offsetMs)` 做**不受缓存 / 网络延迟影响**的倒计时。
+   *   老客户端忽略本字段 ⇒ 无感降级为 `offsetMs = 0`（＝v2.13 现行为）。
+   */
+  serverNowMs: number;
   items: StationEtaItem[];
 }
 
@@ -312,7 +319,12 @@ export async function GET(req: NextRequest) {
   // ① 内存缓存（连点保护；仅巴士 —— 保护 DSAT）
   const cached = g.__stationEtaCache!.get(main);
   if (!isLrt && cached && nowMs - cached.ts < CACHE_TTL_MS) {
-    return NextResponse.json(cached.data, { headers: { "Cache-Control": "no-store" } });
+    // ★ v2.14.0（§3.1）：命中缓存时 `cached.data.serverNowMs` 是**写入时刻**（偏旧）
+    //   ⇒ 用当前 `nowMs` 覆盖，保证对时基准新鲜；其余字段复用缓存（不重打 DSAT）。
+    return NextResponse.json(
+      { ...cached.data, serverNowMs: nowMs },
+      { headers: { "Cache-Control": "no-store" } },
+    );
   }
 
   let items: StationEtaItem[] = [];
@@ -373,7 +385,12 @@ export async function GET(req: NextRequest) {
   // ④ 按 etaMin 升序（暂无车排在最后）；同值按线路码稳定排序
   items.sort((a, b) => (a.etaMin ?? Number.POSITIVE_INFINITY) - (b.etaMin ?? Number.POSITIVE_INFINITY) || a.route.localeCompare(b.route));
 
-  const data: StationEtaResponse = { code: main, fetchedAt: new Date(nowMs).toISOString(), items };
+  const data: StationEtaResponse = {
+    code: main,
+    fetchedAt: new Date(nowMs).toISOString(),
+    serverNowMs: nowMs,
+    items,
+  };
   // ★ 2026-09-24：轻轨不写缓存（见上方 isLrt 说明）——保证时刻滚动与 depMs 新鲜
   if (!isLrt) g.__stationEtaCache!.set(main, { ts: nowMs, data });
   return NextResponse.json(data, { headers: { "Cache-Control": "no-store" } });

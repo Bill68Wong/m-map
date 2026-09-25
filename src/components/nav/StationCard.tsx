@@ -72,6 +72,8 @@ interface EtaItem {
 interface EtaResponse {
   code: string;
   fetchedAt: string;
+  /** ★ 2026-09-25：本次响应生成时的服务端 Date.now()（设备时钟对时；老接口无 → offset=0 降级） */
+  serverNowMs?: number;
   items: EtaItem[];
 }
 
@@ -95,12 +97,12 @@ function mainCodeOf(code: string): string {
  * 降级：老接口无 `depMs` 时退回 `etaSec` 快照（宁简勿错）。
  * 不再显示「下一班 HH:MM」这种绝对时刻（用户口径：只要「还有多久」）。
  */
-function lrtEtaText(it: EtaItem, nowMs: number): string {
+function lrtEtaText(it: EtaItem, nowMs: number, offsetMs = 0): string {
   if (it.depMs == null && it.etaMin === null) return "今日已收班";
   const withSec = /石排湾|横琴/.test(it.route);
-  // ★ 首选：绝对时刻（depMs）—— 设备时钟直接倒计时
+  // ★ 首选：绝对时刻（depMs）—— 设备时钟 + 服务端对时偏移
   if (it.depMs != null) {
-    const left = Math.max(0, Math.floor((it.depMs - nowMs) / 1000));
+    const left = Math.max(0, Math.floor((it.depMs - (nowMs + offsetMs)) / 1000));
     if (left <= 0) return "即将开出";
     const m = Math.floor(left / 60);
     if (!withSec) return m <= 0 ? "即将开出" : `下一班还有 ${m} 分`;
@@ -123,10 +125,10 @@ function lrtEtaText(it: EtaItem, nowMs: number): string {
  * · **轻轨**：时刻表制，显示「下一班还有 …」（见 `lrtEtaText`）
  * ★ 站数 N 与「即将到站」由 `<EtaText>` 加粗 + 青花蓝（通勤决策的关键数字，第一眼可见）。
  */
-function etaNode(it: EtaItem, nowMs: number) {
+function etaNode(it: EtaItem, nowMs: number, offsetMs = 0) {
   if (it.kind === "lrt") {
-    // ★ 2026-09-24：倒计时直接以设备时钟对「绝对发车时刻 depMs」递减（见 lrtEtaText）
-    return <EtaText text={lrtEtaText(it, nowMs)} />;
+    // ★ 2026-09-25：倒计时以「设备时钟 + 服务端对时偏移」对「绝对发车时刻 depMs」递减
+    return <EtaText text={lrtEtaText(it, nowMs, offsetMs)} />;
   }
   if (!it.ok) return <>这条线路暂时取不到报站</>;
   if (it.stopsAway === null) return <>暂无在途车</>;
@@ -171,7 +173,11 @@ export default function StationCard({
 
   /** ★ 2026-09-24：非首屏的「静默重拉」序号（发车到点后滚动到下一班用；不闪加载态） */
   const [reloadTick, setReloadTick] = useState(0);
+  /** ★ 2026-09-25：静默重拉进行中（显示「正在获取下一班…」） */
+  const [reloading, setReloading] = useState(false);
   const lastAutoRefetchRef = useRef(0);
+  /** ★ 2026-09-25：服务端对时偏移（ms；正 = 设备慢）；存 ref，**不参与秒表依赖**（避免每秒重置） */
+  const offsetRef = useRef(0);
   /** items 实时镜像（静默重拉时判断是否需要加载态） */
   const itemsRef = useRef<EtaItem[]>([]);
   itemsRef.current = items;
@@ -179,16 +185,15 @@ export default function StationCard({
   const lastCodeRef = useRef("");
 
   /**
-   * ★ 2026-09-24：**发车到点自动重拉** —— 倒计时归零后把它滚动到「下一班」。
-   *   轻轨站服务端已跳过缓存（每次都是最新时刻表）⇒ 重拉即生效；4s 护栏防连发。
+   * ★ 2026-09-25：**发车到点自动重拉** —— 倒计时归零（对时后）即拉，滚动到「下一班」。
+   *   轻轨站服务端已跳过缓存（每次都是最新时刻表）；护栏降为 1500ms（07 §3.3）。
    */
   useEffect(() => {
     if (phase !== "ready") return;
-    const passed = items.some(
-      (it) => it.kind === "lrt" && it.depMs != null && nowMs - it.depMs > 2_000,
-    );
+    const off = offsetRef.current;
+    const passed = items.some((it) => it.kind === "lrt" && it.depMs != null && nowMs + off >= it.depMs);
     if (!passed) return;
-    if (Date.now() - lastAutoRefetchRef.current < 4_000) return;
+    if (Date.now() - lastAutoRefetchRef.current < 1_500) return;
     lastAutoRefetchRef.current = Date.now();
     setReloadTick((t) => t + 1);
   }, [items, nowMs, phase]);
@@ -206,16 +211,22 @@ export default function StationCard({
       setPhase("loading");
       setItems([]);
       setShowAllGroups(false);
+    } else {
+      setReloading(true);
     }
     fetch(`/api/station/eta?code=${encodeURIComponent(station.code)}`, { cache: "no-store" })
       .then((r) => r.json() as Promise<EtaResponse>)
       .then((j) => {
         if (!alive) return;
+        // ★ 对时：offsetMs = serverNowMs − Date.now()（旧接口无字段 → 保持 0，等价 v2.13）
+        if (Number.isFinite(j.serverNowMs ?? NaN)) offsetRef.current = (j.serverNowMs as number) - Date.now();
         setItems(Array.isArray(j.items) ? j.items : []);
         setPhase("ready");
+        setReloading(false);
       })
       .catch(() => {
         if (!alive) return;
+        setReloading(false);
         if (!silent) setPhase("failed");
       });
     return () => {
@@ -285,7 +296,11 @@ export default function StationCard({
               <div className="nav-station-card__row" key={`${it.route}-${it.dir}`}>
                 <RouteStack codes={[it.route]} colorOf={(c) => colors[c] ?? null} size="sm" />
                 <span className="nav-station-card__dir t-label t-muted">{it.dirLabel}</span>
-                <span className="nav-station-card__eta t-label">{etaNode(it, nowMs)}</span>
+                <span className="nav-station-card__eta t-label">
+                  {it.kind === "lrt" && reloading
+                    ? "正在获取下一班…"
+                    : etaNode(it, nowMs, offsetRef.current)}
+                </span>
               </div>
             ));
             // ★ 单分组（或无 platform）→ 不显示分组容器与子码行（向后兼容）

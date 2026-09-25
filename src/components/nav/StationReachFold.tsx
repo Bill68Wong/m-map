@@ -1,21 +1,16 @@
 "use client";
 
 /**
- * 详情页折叠栏 · 「本站台其他线路」（src/components/nav/StationReachFold.tsx）
+ * 详情页折叠栏 · 「本站台其他线路」（src/components/nav/StationReachFold.tsx，v2.14）
  *
- * ── v1.3.0 · T05 起源；2026-09-24 **重构（用户口径）** ────────────────────
- *   场景：用户在**第一程上车站**等车 / 没赶上本班 ⇒ 想就地看看**同一站台**还有什么
- *   线路能到目的地。于是：
- *   · 站台 = **第一程上车站**（原实现取「末程下车站」——已修正，见 `detail-fold.ts`）；
- *   · **可切换方案置顶**：「坐这条线（或再换乘一次）也能到目的地」的线路，
- *     显示 线路标签（换乘 = `色标签 → 色标签`）· 总用时 · 快/慢多少分 · 右侧「切过去」；
- *     排序 = **快在前（快得多 → 快得少），慢在后（慢得少 → 慢得多）**（= `deltaMin` 升序）；
- *   · **其余线路在下**：一行一条，按数字字母顺序（沿用全站 `sortRouteOptions` 口径）；
- *   · 数据：`POST /api/nav/switch-plans`（懒加载：**展开时才查**；失败静默降级为纯列表）。
+ * ── 结构（线路为父、方案为子；2026-09-25 二轮修订 · 07 §4.6）────────────
+ *   父行 = 首程线路标签（`plan.route`，单独一行、`--surface-2` 微底）；
+ *   子行 = 该线路的可切换方案（`[plan.card, ...(plan.siblings ?? [])]`，后端已按 `totalMin` 升序）
+ *          ，左侧树形连线缩进；子行 = 线路标签串 · 总用时 · 快慢差 · 「切换路线」。
+ *   排序：**有方案组置顶**（组间按组内最快 `totalMin` 升序）；无方案线路在分隔线下按数字-字母序一行一条。
  *
- * ★ §11.6：线路名一律 `.route-stack`（主题色标签）。
- * ★ 实时报站（巴士）由服务端算好传入（`foldLive`）；轻轨不在本表（时刻表制）。
- * ★ 站名/线路名用**繁体**，界面文案用**简体**。
+ * 数据：`POST /api/nav/switch-plans`（懒加载：展开时才查；失败静默降级为纯列表）。
+ * ⚠️ 站名/线路名用**繁体**，界面文案用**简体**。
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import RouteStack from "@/components/RouteStack";
@@ -25,7 +20,6 @@ import { fmtDelta } from "@/lib/nav/track";
 import type { RecommendCard } from "@/lib/recommend/types";
 
 export interface ReachFoldItem {
-  /** 线路码 */
   route: string;
   /** 实时报站文案（空串 = 无数据） */
   live: string;
@@ -38,6 +32,8 @@ interface SwitchPlanLite {
   totalMin: number;
   deltaMin: number;
   card: RecommendCard;
+  /** ★ 新增可选：组内其余方案（top-2~3，`totalMin` 升序） */
+  siblings?: RecommendCard[];
 }
 
 export default function StationReachFold({
@@ -47,17 +43,10 @@ export default function StationReachFold({
   switchCtx = null,
   onOpenCard,
 }: {
-  /** 站台显示名（如「C653 金峰南岸」） */
   stationLabel: string;
-  /** 该站台其他可达线路（含各自实时报站） */
   items: ReachFoldItem[];
   colors: Record<string, string>;
-  /**
-   * ★ 可切换方案查询上下文（主页详情链传入；收藏薄壳不传 ⇒ 只出纯列表）：
-   * `card` = 当前方案（取首程上车站/线路/totalMin/walkOut），`dest` = 目的地坐标（GCJ-02）。
-   */
   switchCtx?: { card: RecommendCard; dest: { lng: number; lat: number; name?: string } } | null;
-  /** 点「切过去」→ 打开该方案导航（缺失则隐藏按钮） */
   onOpenCard?: (card: RecommendCard) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -66,7 +55,6 @@ export default function StationReachFold({
   const keyRef = useRef("");
   const seqRef = useRef(0);
 
-  /** 展开时才查可切换方案（懒加载；换卡片/换目的地自动重查） */
   useEffect(() => {
     if (!open || !switchCtx) return;
     const first = switchCtx.card.rides[0];
@@ -97,14 +85,19 @@ export default function StationReachFold({
       });
   }, [open, switchCtx]);
 
-  /** 可切换方案：快在前（快得多 → 快得少），慢在后（慢得少 → 慢得多） */
-  const sortedPlans = useMemo(
-    () => [...plans].sort((a, b) => a.deltaMin - b.deltaMin || a.route.localeCompare(b.route)),
-    [plans],
-  );
+  const baseTotalMin = switchCtx?.card.totalMin ?? 0;
+
+  /** 有方案组：组间按「组内最快 totalMin」升序 */
+  const sortedPlans = useMemo(() => {
+    const fast = (p: SwitchPlanLite) => {
+      const all = [p.card, ...(p.siblings ?? [])];
+      return Math.min(...all.map((c) => c.totalMin));
+    };
+    return [...plans].sort((a, b) => fast(a) - fast(b) || a.route.localeCompare(b.route));
+  }, [plans]);
   const planRoutes = useMemo(() => new Set(sortedPlans.map((p) => p.route)), [sortedPlans]);
 
-  /** 其余线路：一行一条，按数字字母顺序（沿用全站自然序口径） */
+  /** 其余线路：一行一条，按数字-字母顺序 */
   const restItems = useMemo(() => {
     const byRoute = new Map(items.map((it) => [it.route, it]));
     const order = sortRouteOptions(items.map((it) => it.route).filter((r) => !planRoutes.has(r)));
@@ -117,7 +110,6 @@ export default function StationReachFold({
     <div className="rc-fold">
       <button className="rc-fold__head" type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
         本站台其他线路 · <b>{items.length}</b> 条
-        {sortedPlans.length > 0 && <span className="rc-fold__badge">{sortedPlans.length} 个可换乘</span>}
         <span className="rc-strip__caret">
           <Icon name={open ? "caretUp" : "caretDown"} size={16} />
         </span>
@@ -128,53 +120,79 @@ export default function StationReachFold({
             {stationLabel}
           </span>
 
-          {/* ★ 可切换方案（置顶）：线路标签（换乘双色）· 总用时 · 快/慢 · 切过去 */}
           {switchCtx && planPhase === "loading" && (
             <p className="t-label t-muted" style={{ margin: "2px 0 8px" }}>
-              正在查询可换乘方案…
+              正在看看还有哪些走法…
             </p>
           )}
+
+          {/* 有方案组（置顶）：线路为父 · 方案为子 */}
           {sortedPlans.length > 0 && (
-            <div className="rc-fold__plans">
-              {sortedPlans.map((p) => (
-                <div className="fold-plan" key={`${p.route}-${p.chainRoutes.join("+")}`}>
-                  <span className="fold-plan__main">
-                    <RouteStack
-                      segments={p.chainRoutes.map((r) => ({ codes: [r] }))}
-                      colorOf={(c) => colors[c] ?? null}
-                      size="sm"
-                    />
-                    <span className="fold-plan__time">
-                      <b>{Math.round(p.totalMin)}</b> 分
-                    </span>
-                    <span
-                      className={`fold-plan__delta${p.deltaMin < 0 ? " is-fast" : p.deltaMin > 0 ? " is-slow" : ""}`}
-                    >
-                      {fmtDelta(p.deltaMin)}
-                    </span>
-                  </span>
-                  {onOpenCard && (
-                    <button
-                      type="button"
-                      className="fold-plan__go"
-                      onClick={() => onOpenCard(p.card)}
-                      aria-label={`切换到 ${p.chainRoutes.join(" 换乘 ")} 方案并开始导航`}
-                    >
-                      切过去
-                    </button>
-                  )}
-                </div>
-              ))}
-            </div>
+            <>
+              <span className="nav-fold-group-label">可切换路线</span>
+              {sortedPlans.map((p) => {
+                const children = [p.card, ...(p.siblings ?? [])];
+                return (
+                  <div className="nav-plan-group" key={p.route}>
+                    <div className="nav-fold-parent">
+                      <RouteStack codes={[p.route]} colorOf={(c) => colors[c] ?? null} size="sm" />
+                    </div>
+                    {children.map((c, ci) => {
+                      const delta = Math.round(c.totalMin - baseTotalMin);
+                      return (
+                        <div className="nav-plan-sub" key={`${p.route}-${ci}`}>
+                          <span className="nav-plan-sub__main">
+                            <RouteStack
+                              segments={c.rides.map((r) => ({
+                                codes: [r.route, ...(r.parallelRoutes ?? [])],
+                              }))}
+                              colorOf={(code) => colors[code] ?? null}
+                              size="sm"
+                            />
+                            <span className="nav-plan-sub__time">
+                              <b>{Math.round(c.totalMin)}</b> 分
+                            </span>
+                            {delta !== 0 && (
+                              <span
+                                className={`nav-plan-sub__delta${delta < 0 ? " is-fast" : " is-slow"}`}
+                              >
+                                {delta < 0 ? "↑ " : "↓ "}
+                                {fmtDelta(delta)}
+                              </span>
+                            )}
+                          </span>
+                          {onOpenCard && (
+                            <button
+                              type="button"
+                              className="nav-plan-sub__go"
+                              onClick={() => onOpenCard(c)}
+                              aria-label={`切换到 ${c.rides.map((r) => r.route).join(" 换乘 ")} 方案`}
+                            >
+                              切换路线
+                              <Icon name="forward" size={16} />
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })}
+            </>
           )}
 
           {/* 其余线路（纯列表：线路标签 + 实时报站） */}
-          {restItems.map((it) => (
-            <div className="nav-fold-row" key={it.route}>
-              <RouteStack codes={[it.route]} colorOf={(c) => colors[c] ?? null} size="sm" />
-              <span className="nav-fold-row__live t-label">{it.live || "暂无报站"}</span>
-            </div>
-          ))}
+          {restItems.length > 0 && (
+            <>
+              <span className="nav-fold-group-label is-sep">其余线路</span>
+              {restItems.map((it) => (
+                <div className="nav-fold-lrow" key={it.route}>
+                  <RouteStack codes={[it.route]} colorOf={(c) => colors[c] ?? null} size="sm" />
+                  <span className="nav-fold-lrow__live">{it.live || "暂无到站信息"}</span>
+                </div>
+              ))}
+            </>
+          )}
         </div>
       )}
     </div>
