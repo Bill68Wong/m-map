@@ -121,7 +121,7 @@ function lrtEtaText(it: EtaItem, nowMs: number, offsetMs = 0): string {
 
 /**
  * 报站内容（简体）。
- * · 巴士：ok=false→取不到；无车→暂无在途车；0 站→即将到站；否则「还有 N 站 · 约 M 分」
+ * · 巴士：ok=false→取不到；无车→暂无班次信息；0 站→即将到站；否则「还有 N 站 · 约 M 分」
  * · **轻轨**：时刻表制，显示「下一班还有 …」（见 `lrtEtaText`）
  * ★ 站数 N 与「即将到站」由 `<EtaText>` 加粗 + 青花蓝（通勤决策的关键数字，第一眼可见）。
  */
@@ -131,7 +131,7 @@ function etaNode(it: EtaItem, nowMs: number, offsetMs = 0) {
     return <EtaText text={lrtEtaText(it, nowMs, offsetMs)} />;
   }
   if (!it.ok) return <>这条线路暂时取不到报站</>;
-  if (it.stopsAway === null) return <>暂无在途车</>;
+  if (it.stopsAway === null) return <>暂无班次信息</>;
   return (
     <EtaText text={it.stopsAway === 0 ? "即将到站" : `还有 ${it.stopsAway} 站 · 约 ${it.etaMin ?? 0} 分`} />
   );

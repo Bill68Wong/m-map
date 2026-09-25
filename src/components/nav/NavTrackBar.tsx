@@ -82,7 +82,8 @@ export default function NavTrackBar(props: NavTrackBarProps) {
   } = props;
 
   const isRiding = phase === "riding";
-  const sourceTag = isRiding || phase === "boarding" ? SOURCE_LABEL[source] : null;
+  /** AC-23：来源标注仅「乘车中」显示两态（实时定位 / 依据车辆位置）；手动纠正后含「手动」 */
+  const sourceTag = isRiding ? SOURCE_LABEL[source] : null;
 
   // 左：状态文案
   let left: ReactNode = null;

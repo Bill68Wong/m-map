@@ -55,7 +55,7 @@ export default function RecommendCards({
   // 剔除原因（分两类：没车 vs 赶不上）—— 合并成一个数组只用于文案拼接
   // ★ P1-2（T05 修复）：界面文案**一律简体**（站名/线路名才用繁体；校名「澳門科技大學」属地名）
   const reasons: string[] = [];
-  if (excluded.length > 0) reasons.push(`${excluded.length} 条线路无实时车辆`);
+  if (excluded.length > 0) reasons.push(`${excluded.length} 条线路暂无班次`);
   if (missed.length > 0) reasons.push(`${missed.length} 条路线赶不上首班车`);
 
   if (!cards.length) {
@@ -63,7 +63,7 @@ export default function RecommendCards({
       <div className="card rc-empty">
         <p className="h-title">暂时没有可用的班次</p>
         <p className="t-body t-muted" style={{ marginTop: 6, lineHeight: 1.7 }}>
-          现在这个时段，通往该方向的线路大多已收班或暂时没有在途车辆。
+          现在这个时段，能到这个方向的线路大多已收班，或暂时查不到车。
           {reasons.length > 0 && <>（{reasons.join("・")}）</>}
         </p>
         <p className="t-label t-muted" style={{ marginTop: 8, lineHeight: 1.6 }}>
