@@ -15,6 +15,7 @@
  * 所以它是**必要输入**，随方向卡一起带进 `/recommend`。
  */
 import Link from "next/link";
+import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import ZonePicker, { useZone } from "./ZonePicker";
 import { HOME_SLUG, PAIR_ORDER, PLACE_SHORT, dirLabel, type PlanRow, type ActiveSession } from "@/lib/home-plans-shared";
@@ -33,6 +34,14 @@ export default function HomeClient({
   const router = useRouter();
   const [zone, setZone] = useZone();
 
+  /**
+   * ★ v3.1.1 #5：数据加载失败的**原始错误只进控制台**（供排查），不渲染给用户
+   *   （界面只给「服务暂未就绪」这类用户语言）。
+   */
+  useEffect(() => {
+    if (dbError) console.error("[commute] 方案数据加载失败：", dbError);
+  }, [dbError]);
+
   if (dbError) {
     return (
       <main className="page">
@@ -41,12 +50,12 @@ export default function HomeClient({
           M Map
         </h1>
         <p className="t-error t-body" style={{ marginBottom: 12 }}>
-          数据库未就绪
+          服务暂未就绪
         </p>
+        {/* ★ v3.1.1 #5（文案门禁）：**不再把初始化命令/原始错误渲染给用户**
+            （旧文案含 `配置 .env → npm run db:schema → db:seed`）；原始错误改走控制台日志。 */}
         <p className="t-label t-muted" style={{ lineHeight: 1.6 }}>
-          请先完成初始化：配置 .env → npm run db:schema → npm run db:seed
-          <br />
-          详情：{dbError}
+          数据暂时无法加载，请稍后重试。
         </p>
       </main>
     );

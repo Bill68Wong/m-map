@@ -77,10 +77,9 @@ export async function GET() {
     );
     return NextResponse.json({ plans });
   } catch (err) {
-    console.error("[plans] 查询失败：", (err as Error).message);
-    return NextResponse.json(
-      { error: "方案查询失败，请确认数据库已初始化（npm run db:schema && npm run db:seed）" },
-      { status: 500 },
-    );
+    // ★ v3.1.1 #5（文案门禁）：**开发信息只进服务端日志**，不再写进给用户的错误体
+    //   （旧文案含 `npm run db:schema && db:seed` —— 开发命令泄漏到界面）。
+    console.error("[plans] 查询失败（首次部署请确认已完成数据库初始化）：", (err as Error).message);
+    return NextResponse.json({ error: "方案查询失败，请稍后重试" }, { status: 500 });
   }
 }

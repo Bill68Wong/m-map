@@ -3,18 +3,19 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>M Map · 线路标签规格书与偏差修正（v2.4.1 既有规范 · 2026-09-26）</title>
+<title>M Map · 线路标签：考古结论 + 正确版实施规格（v2.4.0 · v3.1.1）</title>
 <style>
 :root{
   --bg:#F2F4F0; --surface:#FFFFFF; --surface-2:#EAECE7;
   --fg:#0F1720; --fg-2:#3A424E; --muted:#5A6472; --meta:#6E7684;
   --border:#DCDCDF; --border-2:#C7CBD1; --frame-w:1.5px;
   --accent:#1B4D8F; --accent-on:#FFFFFF; --accent-soft:#E6ECF6;
-  --brand-green:#0B6E4F; --brand-green-soft:#DCEBE2; --danger:#B4342A; --danger-soft:#F7E3E0; --warn:#A85E00; --warn-soft:#F7EBDB;
+  --brand-green:#0B6E4F; --brand-green-soft:#DCEBE2;
+  --danger:#B4342A; --danger-soft:#F7E3E0; --warn:#A85E00; --warn-soft:#F7EBDB;
   --text-2xs:11px; --text-xs:13px; --text-sm:13px; --text-md:15px; --text-xl:20px; --text-2xl:26px;
-  --radius-chip:6px; --radius-btn:8px; --radius-card:10px; --radius-full:999px;
-  /* v2.4.1 既有规范参数（不新增） */
-  --slash-cut:7px; --slash-bite:4px;
+  --radius-chip:6px; --radius-chip-inner:3px; --radius-group-pad:7px; --radius-group:7px;
+  --radius-btn:8px; --radius-card:10px; --radius-full:999px;
+  --hairline-inset: inset 0 0 0 1px rgba(255,255,255,.22);
   --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px;
   --preview-bezel:#14171C;
   --rt-51:#C2410C; --rt-56:#0F766E; --rt-ap1:#4D7C0F; --rt-26a:#166534; --rt-3:#7C2D12; --rt-lrt:#0E7490; --rt-tcm:#B91C1C; --rt-25:#0F766E;
@@ -22,12 +23,12 @@
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{background:var(--bg);color:var(--fg)}
 body{font-family:"Barlow","Noto Sans SC",-apple-system,"PingFang SC",sans-serif;-webkit-font-smoothing:antialiased;padding:36px 28px 90px;line-height:1.5}
-.page{max-width:1160px;margin:0 auto;display:flex;flex-direction:column;gap:26px}
+.page{max-width:1180px;margin:0 auto;display:flex;flex-direction:column;gap:26px}
 .doc-head{display:flex;flex-direction:column;gap:10px;padding-bottom:18px;border-bottom:1px solid var(--border)}
 .doc-head h1{font-size:var(--text-2xl);font-weight:700;letter-spacing:-.02em}
 .meta-line{display:flex;flex-wrap:wrap;gap:8px 14px;color:var(--muted);font-size:var(--text-xs)}
 .tag{border:1px solid var(--border-2);border-radius:var(--radius-chip);padding:2px 8px;font-size:var(--text-2xs);letter-spacing:.06em;color:var(--fg-2)}
-.doc-head p{color:var(--fg-2);font-size:var(--text-sm);line-height:1.65;max-width:940px}
+.doc-head p{color:var(--fg-2);font-size:var(--text-sm);line-height:1.65;max-width:960px}
 h2{font-size:var(--text-xl);font-weight:700;letter-spacing:-.01em;margin-top:6px}
 h3{font-size:var(--text-md);font-weight:600;margin-top:2px}
 .card{background:var(--surface);border:var(--frame-w) solid var(--border);border-radius:var(--radius-card);padding:18px;display:flex;flex-direction:column;gap:14px}
@@ -41,32 +42,35 @@ h3{font-size:var(--text-md);font-weight:600;margin-top:2px}
 .note{font-size:var(--text-xs);color:var(--muted);line-height:1.65}
 .note b{color:var(--fg-2)}
 
-/* ══════════ 既有规范 v2.4.1（真实渲染值） ══════════ */
-.rstack{display:inline-flex;align-items:stretch;flex-wrap:wrap;row-gap:4px;max-width:100%}
+/* ══════════ 正确版：v2.4.0 形态（每块圆角 + 白斜杠） ══════════ */
+.rstack{display:inline-flex;align-items:center;flex-wrap:wrap;row-gap:4px;flex-shrink:0;max-width:100%;overflow:visible}
 .rgroup{display:inline-flex;align-items:center;flex-shrink:0}
-/* 单码组：圆角矩形（--radius-chip） */
 .rgroup:not(.rgroup--multi){border-radius:var(--radius-chip);overflow:hidden}
-.rgroup .rseg{display:inline-flex;align-items:center;justify-content:center;background:var(--tag-color);color:#fff;
+.rgroup--multi{background:transparent;border-radius:var(--radius-group-pad);padding:0}
+.rseg{display:inline-flex;align-items:center;justify-content:center;background:var(--tag-color);color:#fff;
   font-weight:700;letter-spacing:.2px;line-height:1.15;white-space:nowrap;
-  clip-path:none;margin-right:0;border-radius:var(--radius-chip);padding:3px 8px;font-size:12px;
-  box-shadow:inset 0 0 0 1px rgba(255,255,255,.22)}
-/* 多码组：斜切 + 等宽空白斜间隙（缝露背景色） */
-.rgroup--multi{background:transparent;border-radius:0;padding:0}
-.rgroup--multi .rseg{border-radius:0;margin-right:calc(-1 * var(--slash-bite));
-  clip-path:polygon(var(--slash-cut) 0, 100% 0, calc(100% - var(--slash-cut)) 100%, 0 100%)}
-.rgroup--multi .rseg:first-child{clip-path:polygon(0 0, 100% 0, calc(100% - var(--slash-cut)) 100%, 0 100%)}
-.rgroup--multi .rseg:last-child{margin-right:0;clip-path:polygon(var(--slash-cut) 0, 100% 0, 100% 100%, 0 100%)}
-.rarrow{color:var(--muted);font-weight:600;font-size:13px;line-height:1;padding:0 var(--space-2)}
+  clip-path:none;margin-right:0;border-radius:var(--radius-chip);
+  padding:3px 8px;font-size:12px;box-shadow:var(--hairline-inset)}
+.rslash{color:#fff;font-weight:700;font-size:12px;line-height:1;padding:0 3px;background:transparent;
+  text-shadow:0 1px 2px rgba(0,0,0,.85),-1px 0 1px rgba(0,0,0,.7),1px 0 1px rgba(0,0,0,.7),0 -1px 1px rgba(0,0,0,.7)}
 .rmore{color:var(--muted);font-weight:700;font-size:12px;line-height:1;padding:0 4px}
-.darkbox{background:#1B2027;border-radius:var(--radius-card);padding:14px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.rarrow{color:var(--muted);font-weight:600;font-size:13px;line-height:1;padding:0 var(--space-2)}
 
-/* ══════════ 修正前（偏差形态） ══════════ */
+/* ══════════ 现状：v2.4.1 形态（直角斜切，无圆角） ══════════ */
+.rgroup--multi-bad{background:transparent;border-radius:0;padding:0}
+.rseg--bad{--slash-cut:7px;--slash-bite:4px;border-radius:0;margin-right:calc(-1 * var(--slash-bite));
+  clip-path:polygon(var(--slash-cut) 0,100% 0,calc(100% - var(--slash-cut)) 100%,0 100%)}
+.rseg--bad:first-child{clip-path:polygon(0 0,100% 0,calc(100% - var(--slash-cut)) 100%,0 100%)}
+.rseg--bad:last-child{margin-right:0;clip-path:polygon(var(--slash-cut) 0,100% 0,100% 100%,0 100%)}
+
+/* ══════════ 其他对照样张 ══════════ */
 .spec-old{display:inline-flex;align-items:center;gap:4px;height:32px;padding:0 4px 0 12px;border-radius:999px;background:var(--rt-51);color:#fff;font-size:14px;font-weight:600}
 .spec-old i{width:24px;height:24px;border-radius:50%;background:rgba(255,255,255,.22);display:inline-grid;place-items:center}
-.chip-old{display:inline-flex;align-items:center;gap:6px;min-height:22px;padding:0 10px;border-radius:8px;background:var(--rt-56);color:#fff;font-size:12px;font-weight:600;letter-spacing:.3px}
-/* ══════════ 修正后 ══════════ */
-.spec-new{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 6px 0 10px;border-radius:var(--radius-chip);background:var(--rt-51);color:#fff;font-size:13px;font-weight:700;box-shadow:inset 0 0 0 1px rgba(255,255,255,.22)}
-.spec-new i{width:20px;height:20px;border-radius:50%;background:rgba(255,255,255,.22);display:inline-grid;place-items:center}
+.spec-new{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 6px 0 10px;border-radius:var(--radius-chip);background:var(--rt-51);color:#fff;font-size:13px;font-weight:700;box-shadow:var(--hairline-inset)}
+.spec-new i{width:20px;height:20px;border-radius:var(--radius-chip);background:rgba(255,255,255,.22);display:inline-grid;place-items:center}
+.chip-old{display:inline-flex;align-items:center;gap:6px;min-height:22px;padding:0 10px;border-radius:8px;background:var(--rt-56);color:#fff;font-size:12px;font-weight:600}
+.chip-new{display:inline-flex;align-items:center;gap:6px;min-height:22px;padding:0 10px;border-radius:var(--radius-chip);background:var(--rt-56);color:#fff;font-size:12px;font-weight:600}
+.darkbox{background:#1B2027;border-radius:var(--radius-card);padding:14px;display:flex;gap:16px;align-items:center;flex-wrap:wrap}
 
 table{width:100%;border-collapse:collapse;font-size:var(--text-xs)}
 th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--border);vertical-align:top}
@@ -83,275 +87,410 @@ pre{display:block;background:var(--surface-2);border:1px solid var(--border);bor
 .ba{display:grid;grid-template-columns:1fr 1fr;gap:14px 18px;align-items:stretch}
 .ba .h{font-size:var(--text-2xs);font-weight:700;letter-spacing:.08em;color:var(--muted)}
 .ba .l{border-left:1px solid var(--border);padding-left:18px}
-@media(max-width:760px){.ba{grid-template-columns:1fr}.ba .l{border-left:0;padding-left:0}}
+@media(max-width:780px){.ba{grid-template-columns:1fr}.ba .l{border-left:0;padding-left:0}}
+.mono{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:11.5px}
 </style>
 </head>
 <body>
 <div class="page">
 
 <header class="doc-head">
-  <h1>M Map · 线路标签规格书与偏差修正</h1>
+  <h1>M Map · 线路标签：考古结论 + 正确版实施规格</h1>
   <div class="meta-line">
-    <span class="tag">2026-09-26 · Phase 2 修订</span>
-    <span class="tag">对应用户需求 4 · Spec AC-38 / AC-60</span>
-    <span class="tag">规范锁定：v2.4.1 既有形态</span>
-    <span class="tag">不引入新形态</span>
+    <span class="tag">2026-09-26 · v3.1.1 真机反馈批次</span>
+    <span class="tag">用户需求 #1（真机）</span>
+    <span class="tag">正确版 = v2.4.0 · commit 7842648</span>
+    <span class="tag">不引入新方案</span>
   </div>
   <p>
-    <strong>用户拍板：不需要新方案，按之前已定方案执行。</strong>本页因此不是「新设计」，而是
-    <strong>① 既有 v2.4.1 规范的规格书化（把生效值写清）</strong>、
-    <strong>② 偏差修正清单（谁偏离了规范、怎么对齐）</strong>、
-    <strong>③ 修正前后对照 + 迁移视觉指引</strong>。
-    Phase 1 曾提出的「2px 白斜缝 + 每块圆角」新方案<strong>作废</strong>，不入本页。
+    用户真机反馈：<strong>「当前标签并没有统一到旧版本制定好的谷歌地图样式：圆角线路主题色标签 + 白色留白斜间隙 + 白色文字」</strong>。
+    经 git 考古（见 §1）确认，用户记忆中的「那个正确的旧版本」= <strong>v2.4.0（commit <code>7842648</code>，2026-09-21）</strong> —— 形态为
+    <strong>每块独立圆角（外 6px / 内侧 3px） + 纯白斜杠（白字 + 四向黑描边） + 白字</strong>。
+    现状线上 = v2.4.1 形态（<code>clip-path</code> 斜切、每块 <code>border-radius: 0</code>、斜杠被整条删除），由 <code>04e2000</code>（v2.5.0）引入。
+    本页 = <strong>考古证据 + 正确版规格书 + 逐项修正动作 + 修正前后对照 + 落地 CSS + 验收口径</strong>。
   </p>
 </header>
 
 <div class="legend">
-  <span class="li"><span class="rgroup"><span class="rseg" style="--tag-color:var(--rt-51)">51</span></span>单码 = 圆角矩形（<code>--radius-chip</code> 6px）</span>
-  <span class="li"><span class="rgroup rgroup--multi"><span class="rseg" style="--tag-color:var(--rt-56)">56</span><span class="rseg" style="--tag-color:var(--rt-ap1)">AP1</span></span>同段并列 = 斜切 + 等宽空白斜间隙（缝露背景色）</span>
+  <span class="li">
+    <span class="rstack"><span class="rgroup"><span class="rseg" style="--tag-color:var(--rt-51)">51</span></span></span>
+    单码 = 6px 圆角矩形
+  </span>
+  <span class="li">
+    <span class="rstack"><span class="rgroup rgroup--multi"><span class="rseg" style="--tag-color:var(--rt-56)">56</span><span class="rslash">/</span><span class="rseg" style="--tag-color:var(--rt-ap1)">AP1</span></span></span>
+    并列 = <b>每块圆角</b> + 白色斜杠（正确版）
+  </span>
   <span class="li"><span class="rarrow">&rarr;</span>段间换乘</span>
   <span class="li"><span class="rmore">+2</span>并列超 3 条折叠</span>
 </div>
 
-<h2>一、既有规范规格书（v2.4.1 · 生效值）</h2>
+<h2>一、考古结论与证据</h2>
+
+<div class="card">
+  <h3>1.1 用户三要素 × 四个历史版本（逐条核对）</h3>
+  <table>
+    <thead><tr><th>版本</th><th>提交 / 日期</th><th>每块独立圆角</th><th>白色斜间隙</th><th>白字</th><th>判定</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>v0.19.1 → v0.20.8</td>
+        <td class="mono">85c26bd / 7d9fce4 / df44c04<br>2026-09-10</td>
+        <td>否 圆角只做在<b>容器</b>（<code>.route-stack{border-radius:6px;overflow:hidden}</code>），块本体被 <code>clip-path</code> 平行四边形<b>切掉</b>圆角</td>
+        <td>否 缝里露的是卡片背景（非白）</td>
+        <td>是</td>
+        <td><span class="pill pill--p0">不符</span></td>
+      </tr>
+      <tr>
+        <td>v2.2.1</td>
+        <td class="mono">f456ee4 · 2026-09-20</td>
+        <td>是 <code>--radius-chip</code>（6px）</td>
+        <td>是 白斜杠 <code>__slash</code>；但组铺墨底 <code>background:var(--fg)</code> + <code>padding:3px</code> ⇒ <b>两块之间夹一整块黑</b></td>
+        <td>是</td>
+        <td><span class="pill pill--p1">接近 · 有 bug</span></td>
+      </tr>
+      <tr style="background:color-mix(in srgb,var(--brand-green) 7%,var(--surface))">
+        <td><b>v2.4.0</b></td>
+        <td class="mono"><b>7842648</b> · 2026-09-21</td>
+        <td><b>是 外侧 6px / 内侧 3px</b>（<code>--radius-chip-inner</code>）</td>
+        <td><b>是 纯白斜杠 `/` + 四向黑描边</b> ⇒ 白卡 / 灰底 / 彩色码旁均清晰，<b>零黑块</b></td>
+        <td><b>是</b></td>
+        <td><span class="pill pill--ok">正确版</span></td>
+      </tr>
+      <tr>
+        <td>v2.4.1（现线上）</td>
+        <td class="mono">04e2000（v2.5.0）· 2026-09-24</td>
+        <td>否 <code>border-radius: 0</code>（<code>clip-path</code> 斜切直角）</td>
+        <td>否 斜杠整条删除；缝里露背景</td>
+        <td>是</td>
+        <td><span class="pill pill--p0">不符（用户抱怨的现状）</span></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>1.2 证据链（可复现命令）</h3>
+  <pre># ① 引入 / 移除「白斜杠」提交（双向定位）
+git log -S "route-stack__slash" --oneline -- src/components/RouteStack.tsx
+#   f456ee4  feat: v2.2.1 修复包…            ← 引入
+#   04e2000  fix: v2.5.0 界面修复与推荐卡片重构 ← 移除（改 v2.4.1 形态）
+
+# ② 引入「斜切 + 咬合」参数（= v2.4.1 口径）
+git log -S "slash-cut" --oneline -- src/app/globals.css
+#   04e2000  fix: v2.5.0 界面修复与推荐卡片重构
+
+# ③ 正确版原文
+git show 7842648:src/app/globals.css | sed -n '3097,3165p'
+git show 7842648:src/components/RouteStack.tsx | sed -n '80,100p'</pre>
+
+  <div class="note">
+    <b>决定性旁证</b>：v2.4.0 的源码注释里直接写着当时的用户原话 ——
+    「用户诉求 = 『<b>两块彩色码 + 一个白色斜杠</b>』，<b>不要任何黑块</b>」，
+    与本轮真机反馈「<b>圆角线路主题色标签 + 白色留白斜间隙 + 白色文字</b>」<b>同构</b>。
+    ⇒ 用户记忆中的正确版即 v2.4.0，<b>无需另行设计</b>。
+  </div>
+  <div class="note">
+    <b>为什么会被改掉</b>：v2.4.1 的改造说明（仍在当前 <code>globals.css</code> 注释里）写的是
+    「用户明确要求斜杠应为<b>空白斜间隙</b>，而不是真的画一根白斜杠 ⇒ 彻底去掉斜杠字符与墨底，回归『斜切 + 等宽空隙』形态」。
+    即：当时把「白斜杠」误读为「不要斜杠」，于是连带把<b>每块圆角</b>也一起改成了斜切直角。本次真机反馈即对该次改动的否决。
+  </div>
+</div>
+
+<h2>二、正确版规格书（v2.4.0 · 生效值）</h2>
 <div class="card">
   <div class="panel canon">
     <span class="cap">① 单码 —— 圆角矩形</span>
     <div class="row">
-      <span class="rgroup"><span class="rseg" style="--tag-color:var(--rt-51)">51</span></span>
-      <span class="rgroup"><span class="rseg" style="--tag-color:var(--rt-56)">56</span></span>
-      <span class="rgroup"><span class="rseg" style="--tag-color:var(--rt-lrt)">氹仔线</span></span>
-      <span class="rgroup"><span class="rseg" style="--tag-color:var(--rt-tcm)">TCM 石排湾线</span></span>
-      <span class="note">结构：<code>.route-stack &gt; .route-stack__group &gt; .route-stack__seg</code>；组容器承担圆角 + <code>overflow:hidden</code>，块本体亦带 <code>border-radius: var(--radius-chip)</code></span>
+      <span class="rstack"><span class="rgroup"><span class="rseg" style="--tag-color:var(--rt-51)">51</span></span></span>
+      <span class="rstack"><span class="rgroup"><span class="rseg" style="--tag-color:var(--rt-56)">56</span></span></span>
+      <span class="rstack"><span class="rgroup"><span class="rseg" style="--tag-color:var(--rt-lrt)">氹仔线</span></span></span>
+      <span class="rstack"><span class="rgroup"><span class="rseg" style="--tag-color:var(--rt-tcm)">TCM 石排湾线</span></span></span>
+      <span class="note">组容器 <code>border-radius: var(--radius-chip)</code> + <code>overflow:hidden</code>；块本体亦带 <code>border-radius: var(--radius-chip)</code>（双保险）</span>
     </div>
   </div>
 
   <div class="panel canon">
-    <span class="cap">② 同段并列 —— 斜切 + 等宽空白斜间隙（缝宽 = 斜切 7px − 咬合 4px = 3px）</span>
+    <span class="cap">② 同段并列 —— 每块圆角 + <b>白色斜杠</b>（白字 + 四向黑描边，任意背景可见）</span>
     <div class="row">
-      <span class="rgroup rgroup--multi"><span class="rseg" style="--tag-color:var(--rt-56)">56</span><span class="rseg" style="--tag-color:var(--rt-ap1)">AP1</span></span>
-      <span class="rgroup rgroup--multi"><span class="rseg" style="--tag-color:var(--rt-56)">56</span><span class="rseg" style="--tag-color:var(--rt-ap1)">AP1</span><span class="rseg" style="--tag-color:var(--rt-26a)">26A</span></span>
-      <span class="rgroup rgroup--multi"><span class="rseg" style="--tag-color:var(--rt-3)">3</span><span class="rseg" style="--tag-color:var(--rt-25)">25</span><span class="rseg" style="--tag-color:var(--rt-lrt)">氹仔线</span><span class="rmore">+1</span></span>
-      <span class="note">首块左端竖直、末块右端竖直，中间各切一条<strong>互相平行</strong>的斜边；相邻块 <code>margin-right: -4px</code> 咬合 ⇒ 露出的是<strong>卡片背景色</strong>（白卡 = 白缝），不画任何字符。上限 3 条，第 4 条起折叠为 <code>+N</code>。</span>
-    </div>
-  </div>
-
-  <div class="panel canon">
-    <span class="cap">③ 段间换乘 —— 箭头（不由斜缝隙或斜杠承担）</span>
-    <div class="row">
-      <span class="rgroup"><span class="rseg" style="--tag-color:var(--rt-56)">56</span></span>
-      <span class="rarrow">&rarr;</span>
-      <span class="rgroup"><span class="rseg" style="--tag-color:var(--rt-51)">51</span></span>
-      <span class="rarrow">&rarr;</span>
-      <span class="rgroup"><span class="rseg" style="--tag-color:var(--rt-lrt)">氹仔线</span></span>
-      <span class="note">箭头 <code>color: var(--muted)</code> / <code>font-weight: var(--fw-announce)</code> / <code>font-size: 13px</code> / 左右各 <code>--space-2</code>(8px)</span>
-    </div>
-  </div>
-
-  <div class="panel canon">
-    <span class="cap">④ 复合形态 —— 并列 + 换乘（既有语汇组合，无新增）</span>
-    <div class="row">
-      <span class="rgroup rgroup--multi"><span class="rseg" style="--tag-color:var(--rt-56)">56</span><span class="rseg" style="--tag-color:var(--rt-ap1)">AP1</span></span>
-      <span class="rarrow">&rarr;</span>
-      <span class="rgroup"><span class="rseg" style="--tag-color:var(--rt-51)">51</span></span>
-      <span class="note">语义铁律：<b>斜缝隙 = 并列（同时可选）</b>；<b>箭头 = 先后（换乘）</b>。二者不可互换，也不得用 <code>/</code> 表达并列。</span>
-    </div>
-  </div>
-
-  <div class="panel canon">
-    <span class="cap">⑤ 深色 / 彩色底上的可辨识（既有 <code>--hairline-inset</code> 内描边，不改）</span>
-    <div class="darkbox">
-      <span class="rgroup"><span class="rseg" style="--tag-color:var(--rt-51)">51</span></span>
-      <span class="rgroup rgroup--multi"><span class="rseg" style="--tag-color:var(--rt-56)">56</span><span class="rseg" style="--tag-color:var(--rt-ap1)">AP1</span></span>
-      <span class="rgroup"><span class="rseg" style="--tag-color:var(--rt-lrt)">氹仔线</span></span>
-      <span style="color:#B9C0CA;font-size:12px">内描边 <code style="background:#2A313A;color:#C9D0D9">inset 0 0 0 1px rgba(255,255,255,.22)</code> 把标签从底上「拎」出来</span>
+      <span class="rstack"><span class="rgroup rgroup--multi"><span class="rseg" style="--tag-color:var(--rt-56)">56</span><span class="rslash">/</span><span class="rseg" style="--tag-color:var(--rt-ap1)">AP1</span></span></span>
+      <span class="rstack"><span class="rgroup rgroup--multi"><span class="rseg" style="--tag-color:var(--rt-56)">56</span><span class="rslash">/</span><span class="rseg" style="--tag-color:var(--rt-ap1)">AP1</span><span class="rslash">/</span><span class="rseg" style="--tag-color:var(--rt-26a)">26A</span></span></span>
+      <span class="rstack"><span class="rgroup rgroup--multi"><span class="rseg" style="--tag-color:var(--rt-3)">3</span><span class="rslash">/</span><span class="rseg" style="--tag-color:var(--rt-25)">25</span><span class="rslash">/</span><span class="rseg" style="--tag-color:var(--rt-lrt)">氹仔线</span><span class="rmore">+1</span></span></span>
     </div>
     <div class="note">
-      <b>已知取舍（既有，保持不变）</b>：斜缝隙靠「露出背景色」实现 ⇒ 在白卡上清晰；若把<strong>多码并列</strong>标签放到深色/彩色底上，缝隙会几乎看不见（这正是 v2.2.1 曾改用墨底、v2.4.1 又按用户要求推翻的原因）。<strong>本批次不解决该取舍</strong>（Spec §4.5：不引入新形态）；若将来必须放在彩色底上，走 Spec §13 变更流程。
+      <b>关键几何</b>：块<b>外侧</b>圆角 = <code>--radius-chip</code>（6px）；与其他块<b>相邻的内侧</b>圆角 = <code>--radius-chip-inner</code>（3px）
+      —— 内侧磨小是为了「拼缝过磨不掉内容、两端外角仍是 6px」，整组看起来是一条<b>圆角胶囊</b>而不是几个方角硬拼。
+      斜杠 <code>padding: 0 3px</code>；组底与斜杠底<b>均为 transparent</b>（<b>零黑块</b>）。
+    </div>
+  </div>
+
+  <div class="panel canon">
+    <span class="cap">③ 段间换乘 —— 箭头</span>
+    <div class="row">
+      <span class="rstack"><span class="rgroup"><span class="rseg" style="--tag-color:var(--rt-56)">56</span></span></span>
+      <span class="rarrow">&rarr;</span>
+      <span class="rstack"><span class="rgroup"><span class="rseg" style="--tag-color:var(--rt-51)">51</span></span></span>
+      <span class="rarrow">&rarr;</span>
+      <span class="rstack"><span class="rgroup"><span class="rseg" style="--tag-color:var(--rt-lrt)">氹仔线</span></span></span>
+      <span class="note"><code>--muted</code> / <code>--fw-announce</code> / 13px / 左右各 <code>--space-2</code></span>
+    </div>
+  </div>
+
+  <div class="panel canon">
+    <span class="cap">④ 复合：并列 + 换乘</span>
+    <div class="row">
+      <span class="rstack"><span class="rgroup rgroup--multi"><span class="rseg" style="--tag-color:var(--rt-56)">56</span><span class="rslash">/</span><span class="rseg" style="--tag-color:var(--rt-ap1)">AP1</span></span></span>
+      <span class="rarrow">&rarr;</span>
+      <span class="rstack"><span class="rgroup"><span class="rseg" style="--tag-color:var(--rt-51)">51</span></span></span>
+      <span class="note">语义：<b>白斜杠 = 并列（同时可选）</b>；<b>箭头 = 先后（换乘）</b>。不可互换，不得用斜杠表达换乘。</span>
+    </div>
+  </div>
+
+  <div class="panel canon">
+    <span class="cap">⑤ 深色 / 彩色底（白斜杠靠描边，天然跨主题，无需另做深色变体）</span>
+    <div class="darkbox">
+      <span class="rstack"><span class="rgroup"><span class="rseg" style="--tag-color:var(--rt-51)">51</span></span></span>
+      <span class="rstack"><span class="rgroup rgroup--multi"><span class="rseg" style="--tag-color:var(--rt-56)">56</span><span class="rslash">/</span><span class="rseg" style="--tag-color:var(--rt-ap1)">AP1</span></span></span>
+      <span class="rstack"><span class="rgroup"><span class="rseg" style="--tag-color:var(--rt-lrt)">氹仔线</span></span></span>
+      <span style="color:#B9C0CA;font-size:12px">块身 <code style="background:#2A313A;color:#C9D0D9">--hairline-inset</code> 内描边；斜杠白字 + 黑描边 ⇒ <b>两套主题同一份 CSS</b></span>
     </div>
   </div>
 </div>
 
-<h3>1.1 逐属性规格表（以 <code>src/app/globals.css</code> 生效值为准）</h3>
+<h3>2.1 逐属性规格表</h3>
 <div class="card">
   <table>
-    <thead><tr><th>维度</th><th>单码（生效值）</th><th>同段并列（生效值）</th><th>品牌栏 chip（修正后）</th></tr></thead>
+    <thead><tr><th>维度</th><th>单码（生效值）</th><th>同段并列（生效值）</th></tr></thead>
     <tbody>
-      <tr><td>选择器</td><td><code>.route-stack__group:not(.route-stack__group--multi) &gt; .route-stack__seg</code></td><td><code>.route-stack__group--multi &gt; .route-stack__seg</code></td><td><code>.nav-linechip</code></td></tr>
-      <tr><td>圆角</td><td><code>var(--radius-chip)</code> = <b>6px</b>（组容器 + 块本体双保险）</td><td><b>0</b>（轮廓由 <code>clip-path</code> 斜切承担）</td><td><code>var(--radius-chip)</code> = <b>6px</b>（原 <code>var(--radius-full)</code>）</td></tr>
-      <tr><td>轮廓</td><td><code>clip-path: none</code></td><td><code>clip-path: polygon(7px 0, 100% 0, calc(100% - 7px) 100%, 0 100%)</code>（首块左端竖直 / 末块右端竖直）</td><td>无</td></tr>
-      <tr><td>间距</td><td><code>margin-right: 0</code></td><td><code>margin-right: -4px</code>（末块 0）⇒ 视觉缝宽 <b>3px</b></td><td><code>gap: 6px</code>（文字与 × 之间）</td></tr>
-      <tr><td>内边距</td><td><code>3px 8px</code></td><td>同左</td><td><code>0 6px 0 10px</code></td></tr>
-      <tr><td>字号 / 字重</td><td><code>12px / 700</code></td><td>同左</td><td><code>13px / 700</code></td></tr>
-      <tr><td>行高</td><td><code>1.15</code>（CJK 字形完整落在实色区内）</td><td>同左</td><td>—</td></tr>
-      <tr><td>文字色</td><td><code>#fff</code>（统一白字，浅色线路色也不改黑字）</td><td>同左</td><td><code>#fff</code></td></tr>
-      <tr><td>底色</td><td colspan="2"><code>routes.color</code> 行内注入（<b>颜色是数据，禁止硬编码</b>）</td><td><code>picked.color</code> 行内注入</td></tr>
-      <tr><td>可辨识</td><td colspan="3"><code>box-shadow: var(--hairline-inset)</code> = <code>inset 0 0 0 1px rgba(255,255,255,.22)</code></td></tr>
-      <tr><td>实测总高</td><td colspan="2"><b>20px</b>（<code>12 × 1.15 + 3×2 = 19.8</code>）—— 与线上实测 <code>[110, 550, 37, 20]</code> 一致</td><td><b>30px</b></td></tr>
-      <tr><td>并列上限</td><td>—</td><td>3 条，第 4 条起 <code>+N</code>（<code>--muted</code>，无底色）</td><td>—</td></tr>
-      <tr><td>换行</td><td colspan="3"><code>.route-stack { flex-wrap: wrap; row-gap: 4px }</code>（换乘段多时可折行，不撑破容器）</td></tr>
+      <tr><td>圆角（外侧）</td><td><code>var(--radius-chip)</code> = <b>6px</b></td><td><b>6px</b>（首块左侧 / 末块右侧）</td></tr>
+      <tr><td>圆角（相邻内侧）</td><td>—</td><td><code>var(--radius-chip-inner)</code> = <b>3px</b>（<code>:not(:first-child)</code> 左 / <code>:not(:last-child)</code> 右）</td></tr>
+      <tr><td>轮廓</td><td><code>clip-path: none</code>（不再斜切）</td><td><code>clip-path: none</code>（<b>关键修正点</b>）</td></tr>
+      <tr><td>块间距</td><td><code>margin-right: 0</code></td><td><code>margin-right: 0</code>；由 <code>__slash</code> 自身 <code>padding: 0 3px</code> 撑开</td></tr>
+      <tr><td>内边距</td><td><code>3px 8px</code></td><td>同左</td></tr>
+      <tr><td>字号 / 字重 / 行高</td><td><code>12px / 700 / 1.15</code></td><td>同左</td></tr>
+      <tr><td>文字色</td><td><code>#fff</code>（浅色线路色也不改黑字）</td><td>同左；斜杠亦 <code>#fff</code></td></tr>
+      <tr><td>底色</td><td colspan="2"><code>routes.color</code> 行内注入（<b>颜色是数据，禁止硬编码</b>）</td></tr>
+      <tr><td>可辨识</td><td colspan="2"><code>box-shadow: var(--hairline-inset)</code> = <code>inset 0 0 0 1px rgba(255,255,255,.22)</code></td></tr>
+      <tr><td>斜杠样式</td><td>—</td><td><code>color:#fff; font-weight:700; font-size:12px; line-height:1; padding:0 3px; background:transparent</code> + 四向 <code>text-shadow</code> 黑描边</td></tr>
+      <tr><td>实测总高</td><td><b>20px</b>（<code>12×1.15 + 3×2 = 19.8</code>）</td><td>同左（斜杠不增高）</td></tr>
+      <tr><td>并列上限</td><td>—</td><td>3 条，第 4 条起 <code>+N</code></td></tr>
+      <tr><td>换行</td><td colspan="2"><code>flex-wrap: wrap; row-gap: 4px; max-width: 100%</code></td></tr>
     </tbody>
   </table>
 </div>
 
-<h2>二、偏差修正清单</h2>
+<h2>三、逐项修正动作（相对现线上 v2.4.1）</h2>
 <div class="card">
   <table>
-    <thead><tr><th>#</th><th>优先级</th><th>偏差</th><th>位置</th><th>现状（实测 / 源码）</th><th>修正动作</th></tr></thead>
+    <thead><tr><th>#</th><th>优先级</th><th>动作</th><th>位置 / 证据</th><th>说明</th></tr></thead>
     <tbody>
       <tr>
-        <td>D1</td>
-        <td><span class="pill pill--p0">P0 必改</span></td>
-        <td>品牌栏线路 chip 用 <b>999px 胶囊</b>，属第 3 种形态</td>
-        <td><code>globals.css:4886</code><br><code>NavBrandBar.tsx:53-57</code></td>
-        <td><code>border-radius: var(--radius-full, 999px)</code>；<code>height:32px</code>；<code>padding:0 4px 0 12px</code></td>
-        <td>圆角 → <code>var(--radius-chip)</code>；<code>height:30px</code>；<code>padding:0 6px 0 10px</code>；<code>×</code> 键 24px 圆 → 20px 圆。其余不动（<code>box-shadow</code> 保留）</td>
+        <td>R1</td>
+        <td><span class="pill pill--p0">P0</span></td>
+        <td><b>恢复白斜杠渲染</b></td>
+        <td><code>RouteStack.tsx</code>（v2.4.0 版本 L80-100）</td>
+        <td>块间插 <code>&lt;span className="route-stack__slash" aria-hidden="true"&gt;/&lt;/span&gt;</code>（<code>i &gt; 0</code> 时），与 <code>route-stack__seg</code> 同级、在色块<b>之前</b>渲染</td>
       </tr>
       <tr>
-        <td>D2</td>
-        <td><span class="pill pill--p1">P1 清理</span></td>
-        <td>旧 <code>.route-stack</code> 整段（v0.19.1）已成<b>死 CSS</b>，且残留冲突声明</td>
+        <td>R2</td>
+        <td><span class="pill pill--p0">P0</span></td>
+        <td><b>恢复 2 个 Token</b></td>
+        <td><code>globals.css:96-99</code>（当前有删除说明）</td>
+        <td>补回 <code>--radius-chip-inner: 3px;</code> 与 <code>--radius-group-pad: 7px;</code>（<code>--radius-group: 7px</code> 仍在），并订正那段「已无使用者 ⇒ 删除」的注释</td>
+      </tr>
+      <tr>
+        <td>R3</td>
+        <td><span class="pill pill--p0">P0</span></td>
+        <td><b>替换多码组规则</b>（删 v2.4.1 斜切 4 条，恢复圆角 + 内侧圆角）</td>
+        <td><code>globals.css:3259-3283</code>（<code>--slash-cut / --slash-bite / border-radius:0 / margin-right:-4px / clip-path</code>）</td>
+        <td>见 §5 落地 CSS；<b>逐选择器替换</b>，保留 <code>.route-stack</code> / <code>__group</code> / <code>__arrow</code> 不动</td>
+      </tr>
+      <tr>
+        <td>R4</td>
+        <td><span class="pill pill--p0">P0</span></td>
+        <td><b>恢复 <code>.route-stack__slash</code> 规则</b></td>
+        <td>新增（v2.4.0 有、当前已无）</td>
+        <td>白字 + 四向黑描边（<b>不</b>铺墨底）</td>
+      </tr>
+      <tr>
+        <td>R5</td>
+        <td><span class="pill pill--p1">P1</span></td>
+        <td><code>+N</code> 保留 <code>--muted</code>（正确版的一处缺陷修正）</td>
+        <td><code>globals.css:3295</code>（当前即 <code>--muted</code>）</td>
+        <td>v2.4.0 的 <code>__more</code> 是 <code>#fff</code> 且无描边 ⇒ 在透明组底上<b>白字白底不可见</b>（同提交给 <code>__slash</code> 加了描边却漏了 <code>__more</code>）。<b>保留当前 <code>--muted</code></b> = 「v2.4.0 + 1 处修正」。<span class="pill pill--p1">待总监确认</span></td>
+      </tr>
+      <tr>
+        <td>R6</td>
+        <td><span class="pill pill--p1">P1</span></td>
+        <td>品牌栏 <code>.nav-linechip</code> 对齐（999px 胶囊 → 6px 圆角）</td>
+        <td><code>globals.css:4886-4915</code>；<code>NavBrandBar.tsx:53-57</code></td>
+        <td>圆角 <code>var(--radius-chip)</code>；高 32 → 30px；<code>padding: 0 6px 0 10px</code>；<code>×</code> 键 <code>border-radius: 50% → var(--radius-chip)</code>、24 → 20px（与 07 §j.1 一致）</td>
+      </tr>
+      <tr>
+        <td>R7</td>
+        <td><span class="pill pill--p1">P1</span></td>
+        <td>遗留 <code>.route-chip</code> 圆角对齐</td>
+        <td><code>globals.css:716-731</code></td>
+        <td><code>--r-pill</code>(8px) → <code>--radius-chip</code>(6px)（与 07 §j.2 一致，规则保留）</td>
+      </tr>
+      <tr>
+        <td>R8</td>
+        <td><span class="pill pill--p1">P1</span></td>
+        <td>旧 <code>.route-stack</code> 段（v0.19.1）逐选择器删除</td>
         <td><code>globals.css:783-857</code></td>
-        <td>残留 <code>.route-stack{border-radius:6px;overflow:hidden}</code>、<code>.route-stack__seg{clip-path:polygon(...)}</code>、<code>.route-stack--sm *</code>、<code>.route-stack__seg:only-child</code> —— 被 <code>3210-3301</code> 段覆盖或本就无人命中</td>
-        <td><b>整段删除</b>；其中仍有价值的语义（单块不斜切 / <code>line-height:1.15</code> / 白字）迁入 v2.4.1 段注释</td>
+        <td>与 07 §j.3 同；容器属性合并进 B2 段。<b>禁大段盲删</b>，删前 <code>git diff</code> 留痕</td>
       </tr>
       <tr>
-        <td>D3</td>
-        <td><span class="pill pill--p1">P1 清理</span></td>
-        <td><code>.route-chip</code> 已成<b>死 CSS</b>（唯一使用点已迁到 RouteStack）</td>
-        <td><code>globals.css:716-729</code>、<code>778-781</code>（深色覆写）</td>
-        <td><code>border-radius: var(--r-pill)</code>（= 8px，第 4 种圆角）；全仓仅 <code>TimerWizard.tsx</code> 注释提及，无实际使用</td>
-        <td><b>删除</b>（含深色覆写块）</td>
-      </tr>
-      <tr>
-        <td>D4</td>
-        <td><span class="pill pill--p1">P1 订正</span></td>
-        <td>注释与现状不符（描述的是 v0.19.1 口径）</td>
-        <td><code>globals.css:783-784</code>、<code>848-850</code></td>
-        <td>「斜切留白分隔，不用 / 字符」「单块 = 左右都不斜切」—— 前者描述的形态已被 v2.2.1 / v2.4.1 两次推翻</td>
-        <td>随 D2 删除旧段一并移除；<code>3210</code> 段注释保留「形态演进史」即可</td>
-      </tr>
-      <tr>
-        <td>D5</td>
-        <td><span class="pill pill--p1">登记</span></td>
-        <td>组内通用规则把 <code>.route-stack--sm</code> 一并覆盖 ⇒ <b><code>size="sm"</code> 传参失效</b>（sm / md 视觉相同）</td>
-        <td>传入点 31 处（站条 / 列表 / 收藏 / 计时页 …）<br>规则：<code>globals.css:3252</code> vs 旧 <code>826-846</code></td>
-        <td>同特异性、后写者胜 ⇒ <code>padding 3px 8px / font 12px</code> 对 sm 与 md 都生效；线上实测站条内标签与头部标签<b>同尺寸</b></td>
-        <td><b>登记，本批次不改</b>（超出 Spec 范围；31 处视觉会整体变化 ⇒ 回归面过大）。若后续要修：在 <code>3252</code> 段内以变量承载 <code>--tag-pad-y / --tag-fs</code>，由 <code>.route-stack--sm</code> 覆写这两个变量（<b>不新增形态</b>，只恢复尺寸档）</td>
-      </tr>
-      <tr>
-        <td>D6</td>
-        <td><span class="pill pill--ok">核对通过</span></td>
-        <td>多码 <code>+N</code> 折叠块颜色偏弱</td>
-        <td><code>globals.css:3295</code></td>
-        <td><code>color: var(--muted)</code>，排在实色块之后</td>
-        <td><b>不动</b>（既有口径；加底 = 引入新形态）</td>
+        <td>R9</td>
+        <td><span class="pill pill--ok">登记</span></td>
+        <td><code>size="sm"</code> 传参失效（31 处）</td>
+        <td><code>globals.css:3252</code> vs 旧 <code>826-846</code>；同特异性后写者胜</td>
+        <td><b>本批次不改</b>（超出范围、31 处视觉整体变化）。修法：以变量 <code>--tag-pad-y / --tag-fs</code> 承载，由 <code>.route-stack--sm</code> 覆写（不新增形态）</td>
       </tr>
     </tbody>
   </table>
-  <div class="note">
-    <b>与架构师 <code>07-技术-接口与组件规格.md</code> 的关系</b>：本文负责<strong>设计表现与迁移视觉指引</strong>（改成什么样、怎么判断改对了）；
-    具体删除行号、变量命名与提交顺序以架构师 <code>07</code> 文档为准。两份清单冲突时以 <code>07</code> 为准（Spec §13 变更流程）。
-  </div>
 </div>
 
-<h2>三、修正前后对照</h2>
+<h2>四、修正前后对照</h2>
 <div class="card">
   <div class="ba">
-    <div class="h">修正前（偏离既有规范）</div>
-    <div class="h l">修正后（对齐既有规范）</div>
+    <div class="h">修正前 · 现线上（v2.4.1）</div>
+    <div class="h l">修正后 · 正确版（v2.4.0）</div>
 
     <div class="panel dev">
-      <span class="cap">品牌栏 chip · 999px 胶囊</span>
+      <span class="cap">同段并列：斜切 + 咬合 ⇒ 每块直角、斜缝只靠颜色差</span>
+      <div class="row">
+        <span class="rstack"><span class="rgroup rgroup--multi-bad"><span class="rseg rseg--bad" style="--tag-color:var(--rt-56)">56</span><span class="rseg rseg--bad" style="--tag-color:var(--rt-ap1)">AP1</span></span></span>
+        <span class="rstack"><span class="rgroup rgroup--multi-bad"><span class="rseg rseg--bad" style="--tag-color:var(--rt-56)">56</span><span class="rseg rseg--bad" style="--tag-color:var(--rt-ap1)">AP1</span><span class="rseg rseg--bad" style="--tag-color:var(--rt-26a)">26A</span></span></span>
+      </div>
+      <span class="note">细看：块与块之间<b>没有白色留白</b>；每个角都是尖角 ⇒ 与单码标签的圆角<b>不统一</b>（用户所指）</span>
+    </div>
+    <div class="panel canon l">
+      <span class="cap">同段并列：每块圆角 + 白色斜杠</span>
+      <div class="row">
+        <span class="rstack"><span class="rgroup rgroup--multi"><span class="rseg" style="--tag-color:var(--rt-56)">56</span><span class="rslash">/</span><span class="rseg" style="--tag-color:var(--rt-ap1)">AP1</span></span></span>
+        <span class="rstack"><span class="rgroup rgroup--multi"><span class="rseg" style="--tag-color:var(--rt-56)">56</span><span class="rslash">/</span><span class="rseg" style="--tag-color:var(--rt-ap1)">AP1</span><span class="rslash">/</span><span class="rseg" style="--tag-color:var(--rt-26a)">26A</span></span></span>
+      </div>
+      <span class="note">每块都是圆角矩形（外 6px / 内 3px），块间一道<b>清晰的白色斜间隙</b>（斜杠 + 黑描边，白卡 / 灰底 / 彩色旁均可见）</span>
+    </div>
+
+    <div class="panel dev">
+      <span class="cap">品牌栏 chip · 999px 胶囊（第 3 种形态）</span>
       <div class="row"><span class="spec-old">51 <i><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></i></span></div>
-      <span class="note">与同屏其它线路码标签「一个圆角矩形、一个是胶囊」，一眼看出不统一</span>
     </div>
     <div class="panel canon l">
       <span class="cap">品牌栏 chip · 6px 圆角矩形</span>
       <div class="row"><span class="spec-new">51 <i><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></i></span></div>
-      <span class="note">圆角与 <code>--radius-chip</code> 对齐；高度 32 → 30px；<code>×</code> 键 24 → 20px</span>
+      <span class="note">高 32 → 30px；<code>×</code> 键 24 → 20px 且圆角化（与外壳对称）</span>
     </div>
 
     <div class="panel dev">
-      <span class="cap">遗留 <code>.route-chip</code> · 8px 圆角（第 4 种）</span>
-      <div class="row"><span class="chip-old">56 路</span><span class="note">已无使用者 ⇒ 死 CSS</span></div>
+      <span class="cap">遗留 <code>.route-chip</code> · 8px（第 4 种圆角）</span>
+      <div class="row"><span class="chip-old">56 路</span></div>
     </div>
     <div class="panel canon l">
-      <span class="cap">并入 RouteStack</span>
-      <div class="row"><span class="rgroup"><span class="rseg" style="--tag-color:var(--rt-56)">56</span></span><span class="note">同一套 6px 圆角</span></div>
-    </div>
-
-    <div class="panel dev">
-      <span class="cap">旧 <code>.route-stack</code> 段（L783-857）残留声明</span>
-      <div class="row"><span class="note">被 <code>L3210</code> 段覆盖，但在 DevTools 里会看到互相矛盾的声明（排查成本高、易误改）</span></div>
-    </div>
-    <div class="panel canon l">
-      <span class="cap">单段规则（只保留 v2.4.1）</span>
-      <div class="row"><span class="note">一处定义 ⇒ DevTools 干净、<code>--slash-cut / --slash-bite</code> 唯一来源</span></div>
+      <span class="cap">对齐 6px</span>
+      <div class="row"><span class="chip-new">56 路</span></div>
+      <span class="note">全站线路码标签圆角取值收敛为 <b>1 种</b>（<code>--radius-chip</code>）</span>
     </div>
   </div>
 </div>
 
-<h2>四、迁移视觉指引（给前端）</h2>
+<h2>五、落地 CSS（给前端 · 与 07 §j 合并执行）</h2>
 <div class="card">
-  <h3>4.1 唯一需要「改形态」的地方：<code>.nav-linechip</code></h3>
-<pre>/* src/app/globals.css —— 只改这 3 个数，不动结构 */
-.nav-linechip {
-  display: inline-flex; align-items: center; gap: 6px;
-  height: 30px;                              /* 原 32px */
-  padding: 0 6px 0 10px;                     /* 原 0 4px 0 12px */
-  border-radius: var(--radius-chip);         /* 原 var(--radius-full, 999px) */
-  color: #fff; font-size: 13px; font-weight: 700;
-  box-shadow: var(--hairline-inset);         /* 与 RouteStack 同款可辨识描边 */
-  white-space: nowrap;
+  <h3>5.1 补回 Token（<code>globals.css</code> :root）</h3>
+<pre>  --radius-chip: 6px;
+  --radius-chip-inner: 3px;   /* 恢复：并列块「相邻内侧」圆角（v2.4.1 时误删） */
+  --radius-group-pad: 7px;    /* 恢复：多码组容器圆角（v2.4.1 时误删） */
+  --radius-group: 7px;        /* 既有，保留 */</pre>
+
+  <h3>5.2 替换多码组规则（删除 v2.4.1 的 4 条斜切，恢复圆角 + 白斜杠）</h3>
+<pre>/* ── 删除（v2.4.1 斜切口径）──────────────────────────────
+   .route-stack__group--multi .route-stack__seg { --slash-cut:7px; --slash-bite:4px;
+     border-radius:0; margin-right:calc(-1 * var(--slash-bite));
+     clip-path:polygon(var(--slash-cut) 0, 100% 0, calc(100% - var(--slash-cut)) 100%, 0 100%); }
+   .route-stack__group--multi .route-stack__seg:first-child { clip-path:polygon(0 0, 100% 0, calc(100% - var(--slash-cut)) 100%, 0 100%); }
+   .route-stack__group--multi .route-stack__seg:last-child  { margin-right:0; clip-path:polygon(var(--slash-cut) 0, 100% 0, 100% 100%, 0 100%); }
+   .route-stack__group--multi .route-stack__seg:only-child  { clip-path:none; border-radius:var(--radius-chip); margin-right:0; }
+   ──────────────────────────────────────────────────────── */
+
+/* ── 恢复（v2.4.0 正确版）────────────────────────────── */
+.route-stack__group--multi { background: transparent; border-radius: var(--radius-group-pad); padding: 0; }
+.route-stack__group:not(.route-stack__group--multi) { border-radius: var(--radius-chip); overflow: hidden; }
+
+.route-stack__group .route-stack__seg {
+  clip-path: none;                 /* 不再斜切 ⇒ 圆角得以保留 */
+  margin-right: 0;
+  border-radius: var(--radius-chip);
+  padding: 3px 8px;
+  font-size: 12px;
 }
-.nav-linechip__x { width: 20px; height: 20px; }   /* 原 24px */
-/* .nav-linechip__text 的 max-width:140px / ellipsis 保留（防超长线路名撑破品牌栏） */</pre>
+/* 相邻内侧圆角磨到 3px：拼缝过磨不掉内容，两端外角仍是 6px ⇒ 整组呈一条圆角胶囊 */
+.route-stack__group .route-stack__seg:not(:first-child) {
+  border-top-left-radius: var(--radius-chip-inner);
+  border-bottom-left-radius: var(--radius-chip-inner);
+}
+.route-stack__group .route-stack__seg:not(:last-child) {
+  border-top-right-radius: var(--radius-chip-inner);
+  border-bottom-right-radius: var(--radius-chip-inner);
+}
+/* 白斜杠：纯白字符 + 四向黑描边 ⇒ 白卡 / 灰底 / 彩色码旁都清晰；组与斜杠均 transparent（零黑块） */
+.route-stack__slash {
+  color: #fff; font-weight: 700; font-size: 12px; line-height: 1; padding: 0 3px;
+  background: transparent;
+  text-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.85),
+    -1px 0 1px rgba(0, 0, 0, 0.7),
+    1px 0 1px rgba(0, 0, 0, 0.7),
+    0 -1px 1px rgba(0, 0, 0, 0.7);
+}
+/* `+N` 保留 --muted（v2.4.0 的 #fff 在透明组底上不可见 ⇒ 本批次修正） */
+.route-stack__more { color: var(--muted); font-weight: 700; font-size: 12px; line-height: 1; padding: 0 4px; }</pre>
 
-  <h3>4.2 清理清单（只删，不改形态）</h3>
-<pre>deleted:  globals.css  .route-stack {}                                  /* L785-792  旧 v0.19.1 */
-deleted:  globals.css  .route-stack__seg { ... }                        /* L793-814 */
-deleted:  globals.css  .route-stack__seg:first-child {}                 /* L815-819 */
-deleted:  globals.css  .route-stack__seg:last-child {}                  /* L820-825 */
-deleted:  globals.css  .route-stack--sm .route-stack__seg {}            /* L826-831 */
-deleted:  globals.css  .route-stack--sm .route-stack__seg:first-child{} /* L832-835 */
-deleted:  globals.css  .route-stack--sm .route-stack__seg:last-child {} /* L836-840 */
-deleted:  globals.css  .route-stack--sm .route-stack__seg:only-child{}  /* L841-846 */
-deleted:  globals.css  .route-stack__seg:only-child {}                  /* L851-857 */
-deleted:  globals.css  .route-chip { ... }                              /* L716-729  死 CSS */
-deleted:  globals.css  @media(prefers-color-scheme:dark){ .route-chip{} } /* L778-781 */
-kept:     globals.css  .route-stack { flex-wrap; row-gap; overflow:visible }  /* L3210-3215 当前生效段 */
-kept:     globals.css  .route-stack__group / --multi / __arrow / __more       /* L3216-3301 */
-kept:     globals.css  .nav-linechip__text { max-width:140px; ellipsis }      /* 不删 */</pre>
+  <h3>5.3 组件（<code>RouteStack.tsx</code>）</h3>
+<pre>{list.slice(0, MAX_PARALLEL).map((c, i) =&gt; (
+  &lt;Fragment key={c}&gt;
+    {i &gt; 0 &amp;&amp; (
+      &lt;span className="route-stack__slash" aria-hidden="true"&gt;/&lt;/span&gt;
+    )}
+    &lt;span className="route-stack__seg" style={{ background: resolve?.(c) || "var(--primary)" }} title={lineNameOf(c)}&gt;
+      {lineNameOf(c)}
+    &lt;/span&gt;
+  &lt;/Fragment&gt;
+))}</pre>
+
+  <h3>5.4 尺寸档与深色主题</h3>
   <div class="note">
-    <b>顺序建议</b>：先改 <code>.nav-linechip</code>（D1，可单独上线回归）→ 再删死 CSS（D2 / D3）→ 最后删注释（D4）。
-    每步跑一遍 <code>npm run test:altbuses</code>，并真机看「导航头部 / 推荐卡 / 站条 / 收藏列表 / 地图品牌栏」五处标签。
+    ① <b>无独立 sm 档</b>：v2.4.0 起 <code>.route-stack--sm</code> 已被组内通用规则覆盖（见 R9），sm / md 视觉相同 —— 本批次<b>只登记不改</b>（31 处传参）。<br>
+    ② <b>深色主题无需另写变体</b>：色块靠 <code>--hairline-inset</code> 提亮边界、斜杠靠黑描边保证「白」的可读性 ⇒ 一份 CSS 两套主题都成立。<br>
+    ③ 并列上限 3 条；<code>+N</code> 用 <code>--muted</code>。
   </div>
+</div>
 
-  <h3>4.3 视觉验收口径（对应 AC-38 / AC-60）</h3>
+<h2>六、验收口径（AC-38 修正版）</h2>
+<div class="card">
   <table>
     <thead><tr><th>#</th><th>检查点</th><th>通过判据</th></tr></thead>
     <tbody>
-      <tr><td>V1</td><td>单码标签圆角</td><td>任取 5 处单码标签（头部 / 推荐卡 / 站条 / 收藏 / 计时页），<code>getComputedStyle(el).borderRadius</code> 均为 <code>6px</code></td></tr>
-      <tr><td>V2</td><td>并列标签形态</td><td>多码处 <code>clipPath</code> 非 <code>none</code>、<code>borderRadius</code> = <code>0px</code>，且相邻块缝宽恒为 <code>3px</code>（<code>7 − 4</code>，截图量取）</td></tr>
-      <tr><td>V3</td><td>品牌栏 chip 对齐</td><td><code>.nav-linechip</code> 计算圆角 = <code>6px</code>（不再是 999px）</td></tr>
-      <tr><td>V4</td><td>无第 4 种形态</td><td>全站 grep <code>route-chip</code> = 0 个使用点；线路码标签的 <code>border-radius</code> 只出现 <code>--radius-chip</code> / <code>0</code> / <code>50%</code>（× 键）三种取值</td></tr>
-      <tr><td>V5</td><td>换乘语汇</td><td>换乘处必为箭头；并列处必为斜缝隙；无 <code>/</code> 字符承担并列语义</td></tr>
-      <tr><td>V6</td><td>颜色来源</td><td>标签 <code>background</code> 全部来自 <code>routes.color</code> / <code>picked.color</code> 行内注入，CSS 内零线路色字面量</td></tr>
+      <tr><td>V1</td><td>单码圆角</td><td>5 处抽样 <code>getComputedStyle(el).borderRadius === '6px'</code></td></tr>
+      <tr><td>V2</td><td>并列块圆角</td><td>多码处 <code>borderRadius</code> 非 <code>0px</code>；首块左 / 末块右为 <code>6px</code>，相邻内侧为 <code>3px</code></td></tr>
+      <tr><td>V3</td><td>斜切已移除</td><td>多码处 <code>clipPath === 'none'</code>（现线上为 <code>polygon(...)</code>）</td></tr>
+      <tr><td>V4</td><td>白斜间隙存在</td><td><code>document.querySelectorAll('.route-stack__slash').length === （并列总块数 − 组数）</code>；斜杠计算色 <code>rgb(255,255,255)</code> 且 <code>textShadow</code> 非 <code>none</code></td></tr>
+      <tr><td>V5</td><td>零黑块</td><td>多码组与斜杠 <code>backgroundColor</code> 均为 <code>rgba(0,0,0,0)</code></td></tr>
+      <tr><td>V6</td><td>品牌栏 chip 对齐</td><td><code>.nav-linechip</code> 计算圆角 = <code>6px</code>（非 999px）</td></tr>
+      <tr><td>V7</td><td>圆角取值唯一</td><td>线路码标签的 <code>border-radius</code> 只出现 <code>6px</code> / <code>3px</code>（内侧)/<code>50%</code>（<code>×</code> 键圆形来源）三种</td></tr>
+      <tr><td>V8</td><td>颜色来源</td><td>标签 <code>background</code> 全部来自 <code>routes.color</code> / <code>picked.color</code> 行内注入，CSS 内零线路色字面量</td></tr>
+      <tr><td>V9</td><td>白斜间隙可辨识（双主题）</td><td>浅色与深色各截一次图：斜杠两侧均能与相邻色块清楚分离（肉眼判据）</td></tr>
     </tbody>
   </table>
 </div>
 
-<h2>五、明确不做（避免越界）</h2>
+<h2>七、明确不做</h2>
 <div class="card">
   <table>
     <thead><tr><th>不做</th><th>原因</th></tr></thead>
     <tbody>
-      <tr><td>Phase 1 提的「2px 白斜缝 + 每块保留圆角」新方案</td><td>用户指示：「不需要新方案，按之前已定方案」；Spec §3 列为 Out-of-Scope</td></tr>
-      <tr><td>把并列标签改成「圆角 + 直间隙」</td><td>同左（会改动既有语汇，属新形态）</td></tr>
-      <tr><td>修复 <code>size="sm"</code> 失效（D5）</td><td>超出本批次范围；只登记 + 给可选修法，待架构师裁定</td></tr>
-      <tr><td>解决「多码标签放彩色底上缝隙消失」</td><td>既有取舍；本批次不引入新形态</td></tr>
-      <tr><td>新增 <code>--tag-r</code> / <code>--tag-gap-par</code> / <code>--tag-slant</code> 等 Token</td><td>规范沿用 <code>--radius-chip</code> 与既有 <code>7px / 4px</code> 就地定义；不新增（Spec §8）</td></tr>
+      <tr><td>Phase 1 提的「每块圆角 + <b>2px 显式白斜条</b>（伪元素 skewX）」</td><td>用户指示「不需要新方案，按之前已定方案」⇒ 采用 v2.4.0 的<b>白斜杠字符</b>实现。两者视觉高度接近，但后者是既有资产、零新增</td></tr>
+      <tr><td>用 <code>clip-path</code> 斜切（v2.4.1）</td><td>会削掉圆角 —— 正是本次用户投诉点</td></tr>
+      <tr><td>给多码组铺墨色胶囊底（v2.2.1）</td><td>会产生「两块之间夹一整块黑」（v2.4.0 已否决）</td></tr>
+      <tr><td>新增 <code>--tag-*</code> Token</td><td>复用 <code>--radius-chip</code> / <code>--radius-chip-inner</code> / <code>--radius-group-pad</code>，不新增</td></tr>
+      <tr><td>修复 <code>size="sm"</code> 失效（R9）</td><td>超出本批次范围；只登记 + 给修法</td></tr>
     </tbody>
   </table>
 </div>

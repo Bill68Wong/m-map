@@ -246,8 +246,12 @@ const PALETTES = {
   white: {
     key: "white",
     name: "白/浅底（站牌）",
-    bg: "#ffffff",
-    frame: "#1b4d8f",
+    /* ★ v3.1.1（真机反馈 #4 / 12 文档 §C）：
+       · C-1 用户「M 外侧不需要蓝边框，留白即可」⇒ **取消青花蓝牌框**（`frame: null`）；
+       · C-2 图标底板与 manifest `background_color` / `--bg` 统一为**纸白 `#f2f4f0`**
+         （原 `#ffffff`，开屏→首屏会有一次跳变）。 */
+    bg: "#f2f4f0",
+    frame: null,
     route: "#1b4d8f",
     pin: "#0b6e4f",
     ring: "#1b4d8f",

@@ -30,6 +30,7 @@
   --track-alight:var(--brand-green); --track-alight-now:var(--danger);
   --track-you:var(--accent); --track-you-ring:color-mix(in srgb, var(--accent) 42%, transparent);
   --track-you-dot-w:12px; --track-line-w:6px;
+  --alarm-z:15; --recenter-z:12;
   --map-base:#E9ECE8; --map-road:color-mix(in srgb, var(--border) 62%, var(--surface));
   --map-road-major:color-mix(in srgb, var(--border-2) 70%, var(--surface));
   --map-line-passed:#8C93A0; --map-line-dim:#9FA5AE;
@@ -150,7 +151,7 @@ body{font-family:"Barlow","Noto Sans SC",-apple-system,"PingFang SC",sans-serif;
 .alarm{display:flex;align-items:center;gap:9px;padding:10px 12px;border-radius:var(--radius-card);
   background:var(--warn-soft);color:var(--warn);font-weight:600;font-size:var(--text-sm);white-space:nowrap}
 /* 浮层化：压在手页面板内容之上，不参与滚动流（不推挤下方内容） */
-.alarm-layer{position:absolute;left:var(--space-4);right:var(--space-4);z-index:35;
+.alarm-layer{position:absolute;left:var(--space-4);right:var(--space-4);z-index:var(--alarm-z,15);
   box-shadow:var(--shadow-card);animation:navAlarmIn 200ms var(--ease-standard)}
 @keyframes navAlarmIn{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:translateY(0)}}
 @media (prefers-reduced-motion:reduce){.alarm-layer{animation:none}}

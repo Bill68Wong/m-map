@@ -75,15 +75,23 @@ export default function RouteStack({
             </span>
           )}
           <span className={`route-stack__group${list.length > 1 ? " route-stack__group--multi" : ""}`}>
-            {list.slice(0, MAX_PARALLEL).map((c) => (
-              <span
-                key={c}
-                className="route-stack__seg"
-                style={{ background: resolve?.(c) || "var(--primary)" }}
-                title={lineNameOf(c)}
-              >
-                {lineNameOf(c)}
-              </span>
+            {/* ★ v3.1.1 裁定（回 v2.4.0）：同段并列 = 块间**白斜杠 `/`**（`__slash`，白字 + 四向黑描边），
+                **不铺墨底**（零黑块）；每块保圆角（外 6px / 相邻内侧 3px，见 globals.css）。 */}
+            {list.slice(0, MAX_PARALLEL).map((c, i) => (
+              <Fragment key={c}>
+                {i > 0 && (
+                  <span className="route-stack__slash" aria-hidden="true">
+                    /
+                  </span>
+                )}
+                <span
+                  className="route-stack__seg"
+                  style={{ background: resolve?.(c) || "var(--primary)" }}
+                  title={lineNameOf(c)}
+                >
+                  {lineNameOf(c)}
+                </span>
+              </Fragment>
             ))}
             {list.length > MAX_PARALLEL && (
               <span

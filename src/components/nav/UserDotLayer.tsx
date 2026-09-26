@@ -28,13 +28,24 @@ export interface UserDotLayerProps {
   fix: UserFix | null;
 }
 
-/** 蓝点 DOM content（原生元素；**无「您」字标签** —— 单一蓝点，AC-40/41） */
+/**
+ * 蓝点 DOM content（原生元素；**无「您」字标签** —— 单一蓝点，AC-40/41）。
+ * ★ v3.1.1 #4（12 文档 §B.3）：**双层 + ping** ——
+ *   `ring`（静态 4px 光圈）+ `ping`（扩散层，只动 transform/opacity）+ `core`（静态核心点）；
+ *   旧的「动 box-shadow」呼吸（非合成层、与到站 1.2s 同频）已移除。
+ */
 function buildContent(): HTMLElement {
   const wrap = document.createElement("div");
   wrap.className = "user-dot";
   wrap.title = "您当前的位置";
+  const ring = document.createElement("span");
+  ring.className = "user-dot__ring";
+  const ping = document.createElement("span");
+  ping.className = "user-dot__ping";
   const core = document.createElement("span");
   core.className = "user-dot__core";
+  wrap.appendChild(ring);
+  wrap.appendChild(ping);
   wrap.appendChild(core);
   return wrap;
 }

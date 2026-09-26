@@ -12,9 +12,14 @@
   <!-- 白色外圈（地图上把钉从底图里"拔"出来；白底上不可见，无副作用） -->
   <path d="M7.53 23.3 L16 40 L24.47 23.3 A9.5 9.5 0 1 0 7.53 23.3 Z"
         fill="none" stroke="#fff" stroke-width="2" stroke-linejoin="round" />
-  <!-- 钉身 -->
+  <!-- 钉身
+       ★ v3.1.1 #4：**终点钉 = 澳门绿 `#0b6e4f`**（= logo 那个绿 / `--brand-pin` 亮色值）。
+       ⚠️ 本文件经页面 CSS `background: url("/pin-destination.svg")` 引入 ⇒
+          **页面 CSS 变量不穿透外部 SVG**，`var()` 永远取兜底值 ⇒ 必须改这里的值（改页面 Token 无效）。
+       ⚠️ 固定色、**不随主题**：钉画在地图上，底图不跟主题变；若跟 `--brand-pin` 走，深色下会变
+          `#6dd58c`，在浅色底图上对比度只剩 1.53:1（几乎看不见）。 -->
   <path d="M7.53 23.3 L16 40 L24.47 23.3 A9.5 9.5 0 1 0 7.53 23.3 Z"
-        fill="var(--danger,#b4342a)" />
+        fill="var(--pin-dest, #0b6e4f)" />
   <!-- 钉头白点：圆心明确落在钉头圆心 -->
   <circle cx="16" cy="19" r="3.8" fill="#fff" />
 </svg>

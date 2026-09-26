@@ -11,7 +11,7 @@
   <g transform="translate(4 8) scale(0.75)">
     <g mask="url(#mm-hole-lockup-dark)">
       <path d="M12 48 L12 16 L30 34 L48 16" fill="none" stroke="var(--brand-route-on-dark, #a8c7fa)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"/>
-      <path d="M40.29 18.13 L48 46 L55.71 18.13 A8 8 0 1 0 40.29 18.13 Z" fill="var(--brand-pin-on-dark, #6dd58c)"/>
+      <path d="M40.29 18.13 L48 46 L55.71 18.13 A8 8 0 1 0 40.29 18.13 Z" fill="var(--brand-pin-on-dark, #0b6e4f)"/>
     </g>
     <circle cx="12" cy="48" r="4.6" fill="none" stroke="var(--brand-route-on-dark, #a8c7fa)" stroke-width="2.2"/><circle cx="30" cy="34" r="4.6" fill="none" stroke="var(--brand-route-on-dark, #a8c7fa)" stroke-width="2.2"/>
   </g>

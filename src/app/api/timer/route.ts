@@ -30,7 +30,9 @@ export async function POST(req: NextRequest) {
       zone?: string;
     };
     if (!planId) {
-      return NextResponse.json({ error: "缺少 planId" }, { status: 400 });
+      // ★ v3.1.1 #5（文案门禁）：**内部字段名不进用户可见错误体**（只进日志）。
+      console.warn("[timer] 请求缺少必要的方案标识");
+      return NextResponse.json({ error: "请求参数不完整" }, { status: 400 });
     }
     const overrideRoute =
       typeof route === "string" && route.trim() !== "" ? route.trim() : null;

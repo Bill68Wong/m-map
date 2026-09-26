@@ -13,7 +13,8 @@
  *   · **打字**（防抖 300ms）→ `mode=type` —— **只返回巴士站/轻轨站**（本地库，0 配额、秒回）；
  *   · **点【搜索】按钮** → `mode=enter` —— **总是调高德**，结果里才会出现「地点」类；
  *   · ⚠️ 即使输入与本地站名相同/部分相同，**搜索按钮仍可点**（产品明确要求）——
- *     所以按钮的 disabled 只看「是否为空 / 是否在加载」，不看「是否已有本地命中」。
+ *     所以按钮的 disabled 只看「是否为空 / **点搜索是否在途**」，不看「是否已有本地命中」，
+ *     ★ v3.1.1 #7 起**也不看打字预测是否在途**（否则输入后立刻点会被原生 disabled 吞掉）。
  *
  * ── 与旧 `PoiSearchBox` 的差别 ────────────────────────────────────────
  *   旧组件是「输入框 + **下拉浮层**」，适合嵌在抽屉里；
@@ -98,7 +99,17 @@ export default function SearchSheet({
 }: SearchSheetProps) {
   /** 输入框内容：**正在编辑的那个**端点为空（待输入），另一个显示已选值 */
   const [q, setQ] = useState("");
-  const [loading, setLoading] = useState(false);
+  /**
+   * ★ v3.1.1 #7（真机反馈「输入后立刻点搜索可能不成功」）：
+   *   原先用单个 `loading` 同时表示「打字预测请求」与「点搜索请求」，且 **按钮 `disabled={loading||…}`**
+   *   ⇒ 打字触发的 300ms 防抖请求一发出，按钮就被禁用；用户紧接着点「搜索」时
+   *   **原生 disabled 吞掉 click（onClick 根本不触发）** ⇒ 看着"点了没反应"。
+   *   ⇒ 拆成 `busy`（区分 type / enter）：打字预测**不禁用**按钮，只有 enter 在途才禁用。
+   */
+  const [busy, setBusy] = useState<null | "type" | "enter">(null);
+  const loading = busy !== null;
+  /** ★ 并发保护：只认最后一次请求的响应（防「打字预测」的迟到响应覆盖「点搜索」的结果） */
+  const reqIdRef = useRef(0);
   const [resp, setResp] = useState<PoiSuggestResponse | null>(null);
   const [err, setErr] = useState("");
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -160,7 +171,8 @@ export default function SearchSheet({
       setResp(null);
       return null;
     }
-    setLoading(true);
+    const id = ++reqIdRef.current; // ★ v3.1.1 #7：并发保护（只认最后一次）
+    setBusy(mode);
     setErr("");
     try {
       const sp = new URLSearchParams({ q: s.slice(0, 50), mode });
@@ -171,14 +183,17 @@ export default function SearchSheet({
       }
       const res = await fetch(`/api/poi/suggest?${sp.toString()}`, { cache: "no-store" });
       const json = (await res.json()) as PoiSuggestResponse;
-      setResp(json);
+      // ★ 过期响应（已被更新的请求取代）⇒ **不写入 state**（避免旧结果覆盖新结果）
+      if (id === reqIdRef.current) setResp(json);
       return json;
     } catch {
-      setErr("搜索暂不可用，请稍后再试");
-      setResp(null);
+      if (id === reqIdRef.current) {
+        setErr("搜索暂不可用，请稍后再试");
+        setResp(null);
+      }
       return null;
     } finally {
-      setLoading(false);
+      if (id === reqIdRef.current) setBusy(null);
     }
   }
 
@@ -245,12 +260,14 @@ export default function SearchSheet({
               inputMode="search"
             />
             {loading && <span className="ssheet__spin" aria-label="搜索中" />}
-            {/* ★ 产品要求：输入与本地站名相同/部分相同时，**搜索按钮仍可点** */}
+            {/* ★ 产品要求：输入与本地站名相同/部分相同时，**搜索按钮仍可点**。
+                ★ v3.1.1 #7：**打字预测在途（busy==='type'）不禁用**，只有「点搜索」在途才禁用
+                  ⇒ 输入后立即可点（修「点了没反应」）。 */}
             <button
               type="button"
               className="ssheet__go"
               onClick={runSearch}
-              disabled={loading || !q.trim()}
+              disabled={busy === "enter" || !q.trim()}
               title="搜索站点或地点"
             >
               搜索

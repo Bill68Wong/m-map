@@ -368,7 +368,8 @@ export default function RouteSheet({
 export { DETENTS, detentIndex };
 
 /* ── ★ 本批（需求⑧ / AC-52/53）：三档偏好 segment（唯一入口 = 推荐列表顶部）──
-   图标 = **内联线性 SVG**（16px / stroke 2 / currentColor，与 Tabler 同描边风格；无 emoji）。 */
+   图标 = **内联线性 SVG**（16px / stroke 2 / currentColor，与 Tabler 同描边风格；无 emoji）。
+   ⚠️ v3.1.1 #5：解释行**禁用开发术语**（不得出现 cost / 权重 / 系数 / 参数名等代码语）。 */
 const PREF_OPTS: { value: PrefMode; label: string; icon: ReactNode }[] = [
   {
     value: "balanced",
@@ -407,17 +408,17 @@ const PREF_OPTS: { value: PrefMode; label: string; icon: ReactNode }[] = [
 const PREF_HINT: Record<PrefMode, ReactNode> = {
   balanced: (
     <>
-      排序依据 cost = 总时长 + <b>10 分/次</b>换乘 + <b>0.8 ×</b> 步行分
+      排序依据：<b>用时</b> · 换乘 · 步行
     </>
   ),
   fewer_transfers: (
     <>
-      先比<b>换乘次数</b>，再比总时长
+      排序依据：优先看 <b>换乘次数</b>，再看用时
     </>
   ),
   less_walk: (
     <>
-      先比<b>步行总量</b>，再比总时长
+      排序依据：优先看 <b>步行总量</b>，再看用时
     </>
   ),
 };

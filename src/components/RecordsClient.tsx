@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import RouteStack from "./RouteStack";
 
@@ -64,6 +64,11 @@ export default function RecordsClient({
   const [deleting, setDeleting] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  /** ★ v3.1.1 #5：加载失败的原始错误只进控制台（界面只给用户语言） */
+  useEffect(() => {
+    if (dbError) console.error("[records] 通勤记录加载失败：", dbError);
+  }, [dbError]);
+
   async function remove(id: number) {
     if (!window.confirm("确定删除这条记录？（删除后不参与统计）")) return;
     setDeleting(id);
@@ -94,7 +99,7 @@ export default function RecordsClient({
 
       {dbError && (
         <p className="t-error t-body" style={{ marginBottom: 12, width: "100%" }}>
-          数据库错误：{dbError}
+          数据暂时无法加载，请稍后重试
         </p>
       )}
       {error && (

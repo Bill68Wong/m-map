@@ -94,11 +94,17 @@
 
   /* 圆角 Radius（上限 10px；按钮不用 pill） */
   --radius-chip: 6px;
-  /* ★ v2.4.1：多码并列改「空白斜间隙」后，原先为「墨底衬底」与「内侧圆角」准备的
-     两个变量（--radius-group-pad / --radius-chip-inner）已无使用者 ⇒ 删除。
-     斜切参数改为就地定义在 `.route-stack__group--multi .route-stack__seg` 内
-     （--slash-cut 7px / --slash-bite 4px ⇒ 视觉缝宽 3px）。 */
-  --radius-group: 7px;
+  /**
+   * ★ v3.1.1 恢复（回归 v2.4.0 标签形态）：
+   *   · `--radius-group-pad`：**多码组容器**圆角（7px）。
+   *   · `--radius-chip-inner`：**相邻内侧**圆角（3px）—— 并列块相邻的左右内角收小，拼缝不硌手；
+   *     两端外角仍是 `--radius-chip`(6px)。
+   *   ⚠️ 这两个 Token 曾于 v2.4.1 被误删（当时注释写「已无使用者」——因为那一版把并列改成了
+   *     「斜切 + 空白缝」、每块圆角一起没了）。v3.1.1 随形态回归一并**恢复**。
+   */
+  --radius-group-pad: 7px;
+  --radius-chip-inner: 3px;
+  --radius-group: 7px; /* 既有 Token（保留） */
   --radius-btn: 8px;
   --radius-card: 10px;
   --radius-sheet: 14px;
@@ -3138,16 +3144,18 @@ button[aria-disabled="true"] {
 }
 
 /* ── B2：线路标签「分段 / 并列」（v2.4.1「斜切 + 等宽空白缝」） ── */
+/* ── B2：线路标签「分段 / 并列」（★ v3.1.1 裁定回归 v2.4.0 形态） ── */
 .route-stack {
-  /* ★ 2026-09-26：由已删除的 v0.19.1 旧段合并而来的**容器属性** */
+  /* 容器 = v2.4.0 两段声明的**净效果**（设计师已确认验收只看块/组计算值、不比容器字面）：
+     ① inline-flex / flex-shrink / max-width；① 的 `overflow:hidden` 与 `border-radius:6px` **弃用**
+        （会被换行裁边）；② `flex-wrap:wrap` / `row-gap:4px` / `overflow:visible` 生效。 */
   display: inline-flex;
-  align-items: center;
+  align-items: center; /* 覆盖 ① 的 stretch（实测 v2.4.0 布局为居中） */
   flex-shrink: 0;
   max-width: 100%;
   flex-wrap: wrap;
   row-gap: 4px;
-  /* 组胶囊自带圆角，外层不再裁剪（否则多段换行时会被切） */
-  overflow: visible;
+  overflow: visible; /* 圆角交块本体 / 组容器承担 ⇒ 容器不裁剪，多段换行不被切边 */
 }
 .route-stack__group {
   display: inline-flex;
@@ -3155,28 +3163,27 @@ button[aria-disabled="true"] {
   flex-shrink: 0;
 }
 /*
- * ★★ v2.4.1 重构（用户拍板）：多码并列改为「**空白斜间隙**」
+ * ★★ v3.1.1 裁定：**回归 v2.4.0 形态**（用户真机反馈「标签没统一到那个正确的旧版本」）。
  *
  * ── 形态演进史（每一步都由真浏览器实测驱动）───────────────────────────
  *   v0.19.1：斜切平行四边形 + 负 margin 咬合 ⇒ 斜缝
- *   v2.2.1 ：按 §G.2 解法 A 改成「独立圆角块 + 白斜杠 + 墨色胶囊底」
- *   v2.4.0 ：修掉「两码之间夹一整块黑」（把墨底从整组收进斜杠自身）
- *   ★ v2.4.1：用户明确要求「斜杠应为**空白斜间隙**，而不是真的画一根白斜杠」
- *     ⇒ **彻底去掉斜杠字符与墨底**，回归「斜切 + 等宽空隙」形态
+ *   v2.2.1 ：独立圆角块 + 白斜杠 + **墨色胶囊底**（§G.2 解法 A）—— 有「两码之间夹一整块黑」的 bug
+ *   v2.4.0 ：「用户诉求 = **两块彩色码 + 一个白色斜杠**，**不要任何黑块**」
+ *            ⇒ 去掉墨底、斜杠自身加四向黑描边；**每块保圆角**（外 6 / 相邻内侧 3）
+ *   ✗ v2.4.1：把「不要墨底」误读成「不要斜杠」⇒ 删掉斜杠字符，改「斜切 + 等宽空隙」，
+ *            并连带把每块圆角一起改没了（同组件内 6px / 0px 混排 = 用户投诉的「部分没做圆角」）
+ *   ★ v3.1.1：**回到 v2.4.0**（白斜杠 + 每块圆角）；证据见
+ *     `docs/迭代-导航优化-20260926/12-真机反馈-设计规格.md` §A（像素级两版对照实测）
  *
  * ── 实现要点 ───────────────────────────────────────────────────────────
- *   · 相邻侧各切一条**互相平行**的斜边（斜率相同）；
- *   · 负 margin 让两块咬合靠拢 ⇒ 两条平行斜线之间形成**等宽斜缝**；
- *   · 缝里露出的是**卡片本身的背景色**（白卡 ⇒ 白缝）⇒ 不需要画任何字符。
- *
- *   ⚠️ 取舍（改之前先读）：斜缝靠背景色当分隔 ⇒ 白卡上清晰；
- *      但若将来把多码标签放到**深色 / 彩色底**上，缝会几乎看不见
- *      （这正是 §G.2 当初选墨底的顾虑；v2.4.1 按用户明确要求推翻它）。
+ *   · 块间 = `.route-stack__slash`（白 `/` + 四向黑 `text-shadow`，`background: transparent`）；
+ *   · 每块 `clip-path: none` + `border-radius`（首/末外角 6px、相邻内侧 3px）⇒ 圆角一致；
+ *   · `+N` 用实色 `--muted`（v2.4.0 原写 `#fff` 会落白卡上「看不见」，这里保留修正版）。
  */
 .route-stack__group--multi {
-  /* 不铺底色：缝隙要露出**卡片本身的背景**，而不是我们画上去的一层底 */
+  /* 不铺任何底色（零黑块）；组容器圆角 = 「墨底」时代的视觉残留，保留以贴合 v2.4.0 实测值 */
   background: transparent;
-  border-radius: 0;
+  border-radius: var(--radius-group-pad);
   padding: 0;
 }
 /* 单码组：纯净圆角矩形（不加任何底） */
@@ -3184,7 +3191,7 @@ button[aria-disabled="true"] {
   border-radius: var(--radius-chip);
   overflow: hidden;
 }
-/* 组内通用：字号与 padding 统一（单码 / 多码都一样） */
+/* 组内通用：字号与 padding 统一（单码 / 多码都一样）—— `clip-path: none` 是「每块保圆角」的关键 */
 .route-stack__group .route-stack__seg {
   clip-path: none;
   margin-right: 0;
@@ -3192,30 +3199,38 @@ button[aria-disabled="true"] {
   padding: 3px 8px;
   font-size: 12px;
 }
-/* ★★ v2.4.1：**仅多码组**用斜切（单码仍是干净圆角矩形，保持不变）─────────
-   斜切 7px · 咬合 4px ⇒ 视觉缝宽 = 7 − 4 = **3px**。
-   两条斜边斜率相同 ⇒ 缝**等宽**，不会一头宽一头窄。 */
-.route-stack__group--multi .route-stack__seg {
-  --slash-cut: 7px;
-  --slash-bite: 4px;
-  border-radius: 0;
-  margin-right: calc(-1 * var(--slash-bite));
-  clip-path: polygon(var(--slash-cut) 0, 100% 0, calc(100% - var(--slash-cut)) 100%, 0 100%);
+/* ★ 相邻内侧圆角收小到 3px（拼缝处不硌手；两端外角仍是 6px）—— 恢复 v2.4.0 的 `--radius-chip-inner` */
+.route-stack__group .route-stack__seg:not(:first-child) {
+  border-top-left-radius: var(--radius-chip-inner);
+  border-bottom-left-radius: var(--radius-chip-inner);
 }
-/* 首块：左端竖直（整组从直边开始），只斜右边界 */
-.route-stack__group--multi .route-stack__seg:first-child {
-  clip-path: polygon(0 0, 100% 0, calc(100% - var(--slash-cut)) 100%, 0 100%);
+.route-stack__group .route-stack__seg:not(:last-child) {
+  border-top-right-radius: var(--radius-chip-inner);
+  border-bottom-right-radius: var(--radius-chip-inner);
 }
-/* 末块：只斜左边界、右端竖直；并取消负 margin（否则整组尾部会往里缩） */
-.route-stack__group--multi .route-stack__seg:last-child {
-  margin-right: 0;
-  clip-path: polygon(var(--slash-cut) 0, 100% 0, 100% 100%, 0 100%);
+/* ★ 块间白斜杠（v2.4.0）：白字 + 四向黑描边 ⇒ 白卡 / 灰底 / 彩码旁都看得见；**组底与斜杠底都透明**（零黑块）。
+   深色主题共用一份规则（不另写变体）。 */
+.route-stack__slash {
+  color: #fff;
+  opacity: 1;
+  font-weight: 700;
+  font-size: 12px;
+  line-height: 1;
+  padding: 0 3px;
+  background: transparent;
+  text-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.85),
+    -1px 0 1px rgba(0, 0, 0, 0.7),
+    1px 0 1px rgba(0, 0, 0, 0.7),
+    0 -1px 1px rgba(0, 0, 0, 0.7);
 }
-/* 组内只有一条时（兜底）不斜切 */
-.route-stack__group--multi .route-stack__seg:only-child {
+/* ★ v3.1.1（sm 修正版）：只保留**尺寸类**属性 —— `clip-path` 一律 `none`。
+   ⚠️ 不照抄 v2.4.0 的 `--sm` 规则（那 4 条与新并列规则特异性相同 0,3,0，靠文件顺序决出 ⇒
+     会把 `clip-path` 又带回来，重现「同组件内圆角不一致」bug）。 */
+.route-stack--sm .route-stack__seg {
   clip-path: none;
-  border-radius: var(--radius-chip);
-  margin-right: 0;
+  padding: 3px 11px;
+  font-size: 12px;
 }
 /* 段间「换乘箭头」：粗一档 + muted，两侧留 --space-2(8px)（§G.4） */
 .route-stack__arrow {
@@ -3977,13 +3992,16 @@ button[aria-disabled="true"] {
    ══════════════════════════════════════════════════════════════════════ */
 
 /* ── 出发地标记（与目的地标记同构；绿色区分「起点」） ── */
+/* ★ 2026-09-22：出发地标记（与目的地图标同构）
+   ★ v3.1.1 #4：由「18px 绿圆点」改为**红钉**（与终点钉同款钉形，仅换色/形状）——
+     修正「起点/终点语义色反了」：起点 = 红钉 `#B4342A`、终点 = 绿钉 `#0B6E4F`。
+     几何 Token（`--destpin-w/-h/-shadow`）与终点钉共用；位置由 marker 的 `offset(-10,-26)`
+     令**钉尖**锚定坐标点（同终点钉约定）。 */
 .nav-map__originpin {
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: var(--brand-green);
-  border: 2.5px solid #fff;
-  box-shadow: 0 1px 4px rgba(15, 23, 32, 0.35);
+  width: var(--destpin-w);
+  height: var(--destpin-h);
+  background: url("/pin-origin.svg") center / contain no-repeat;
+  filter: drop-shadow(var(--destpin-shadow));
 }
 
 /* ══ 全屏搜索层 ══ */
@@ -6485,19 +6503,54 @@ body[data-sheet="open"] .nav-searchbar {
 
 /* ── 地图蓝点（UserDotLayer 原生 marker 的 DOM content）──
    ★ 2026-09-26（AC-40/41）：**删除 `.user-dot__label`**（「您」字）—— 全屏唯一蓝点。
-   光圈起点接 Token `--you-ring-0`（呼吸终点 `--you-ring-1` 由 navYouPulse 使用）。 */
-.user-dot { position: relative; width: 16px; height: 16px; }
-.user-dot__core {
+   ★ v3.1.1 #4（12 文档 §B.3）：**双层结构 + 独立 ping 层** ——
+     ① 核心点**静态**（12px + 2.5px 白描边）—— 保证任何时刻都看得清「我在哪」；
+     ② 静态 4px 光圈（`--you-ring-0`）；
+     ③ ping 扩散层：**只动 `transform`/`opacity`**（合成层，零重绘）+ 周期 **2.4s**
+        （刻意与「到站脉动 1.2s」拉开 2×，避免全屏共振成「一起闪」）。
+     旧实现动 `box-shadow`（非合成层，GPS 跟随时每帧重绘）⇒ 本版移除。 */
+.user-dot {
+  position: relative;
+  width: 16px;
+  height: 16px;
+}
+.user-dot__core,
+.user-dot__ring,
+.user-dot__ping {
   position: absolute;
   inset: 0;
   margin: auto;
-  width: var(--track-you-dot-w);
-  height: var(--track-you-dot-w);
+  width: var(--you-dot-w, 12px);
+  height: var(--you-dot-w, 12px);
   border-radius: var(--radius-full);
+}
+.user-dot__core {
   background: var(--track-you);
   border: 2.5px solid var(--surface);
+  z-index: 2;
+}
+.user-dot__ring {
   box-shadow: 0 0 0 var(--you-ring-0, 4px) var(--track-you-ring);
-  animation: navYouPulse 1.6s ease-in-out infinite;
+  z-index: 1;
+}
+.user-dot__ping {
+  background: var(--track-you);
+  opacity: 0;
+  z-index: 0;
+  animation: navYouPing 2.4s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+@keyframes navYouPing {
+  0% {
+    transform: scale(0.6);
+    opacity: 0.45;
+  }
+  70% {
+    opacity: 0.06;
+  }
+  100% {
+    transform: scale(2.2);
+    opacity: 0;
+  }
 }
 
 /* ── 全屏化：导航中隐藏底导（body[data-nav="riding"]）── */
@@ -6511,9 +6564,12 @@ body[data-nav="riding"] .bottom-nav { display: none; }
   .navstrip__row.is-at .navstrip__dot,
   .navstrip__row.is-alight-now .navstrip__dot,
   .nav-alarm.is-now,
-  .nav-alarm-layer,
-  .user-dot__core {
+  .nav-alarm-layer {
     animation: none;
+  }
+  /* ★ v3.1.1 #4：蓝点 ping 层直接隐藏（仅留静态核心点 + 4px 光圈） */
+  .user-dot__ping {
+    display: none;
   }
   .nav-toast,
   .nav-alight-done {
@@ -6566,7 +6622,11 @@ body[data-nav="riding"] .bottom-nav { display: none; }
 
   /* 固定深底（永远亮色，**不**随主题切换）—— 供 mark-dark.svg / lockup-dark.svg 使用 */
   --brand-route-on-dark: #a8c7fa;
-  --brand-pin-on-dark: #6dd58c;
+  /* ★ v3.1.1 #6（C-3）：用户拍板「深色 logo 的绿钉 = 亮色同款」⇒ `#6dd58c` → `#0b6e4f`。
+     ⚠️ 已知取舍：`#0b6e4f` 在深底 `#111318` 上对比度 2.97:1（略低于小图形 3:1 门槛）；
+     用户明确「深色 logo 暂时没有使用场景」，故按其原话执行。**青花蓝底 app 图标内的钉绿
+     仍固定 `#6dd58c`**（那里深绿在蓝底上仅 1.34:1，等同不可见）——不随本项变更。 */
+  --brand-pin-on-dark: #0b6e4f;
   --brand-fg-on-dark: #e2e2e9;
   --brand-muted-on-dark: #c4c6d0;
 }
@@ -6574,7 +6634,7 @@ body[data-nav="riding"] .bottom-nav { display: none; }
 @media (prefers-color-scheme: dark) {
   :root {
     --brand-route: #a8c7fa;
-    --brand-pin: #6dd58c;
+    --brand-pin: #0b6e4f; /* ★ v3.1.1 C-3：与亮色同款（原 #6dd58c） */
     --brand-fg: #e2e2e9;
     --brand-muted: #c4c6d0;
   }
@@ -6612,6 +6672,7 @@ body[data-nav="riding"] .bottom-nav { display: none; }
    ============================================================================ */
 :root {
   /* ── 蓝点呼吸（登记型）── */
+  --you-dot-w: 12px; /* 蓝点直径（与 --track-you-dot-w 同值；v3.1.1 §B.3 蓝点层引用） */
   --you-ring-0: 4px; /* 呼吸起点（= 既有光圈值） */
   --you-ring-1: 10px; /* 呼吸终点（新增） */
   --you-snap-max: 60px; /* 乘车中「吸附到线路投影」的最大距离 */
@@ -6649,6 +6710,11 @@ body[data-nav="riding"] .bottom-nav { display: none; }
      ⇒ 二者始终贴合（无跑位/无反向）。拖动期由 `html[data-sheet-dragging=on]` 置 0ms 跟手。 */
   transition: bottom var(--sheet-dur-settle) var(--sheet-ease);
   pointer-events: auto;
+  /* 图标 + 文案（v3.1.1 #2：定位靶心 + 「回到我的位置」） */
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 46vw;
   height: 32px;
   padding: 0 12px;
   border-radius: var(--radius-btn);

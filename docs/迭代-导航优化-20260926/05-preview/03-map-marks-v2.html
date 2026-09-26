@@ -462,10 +462,10 @@ pre{display:block;background:var(--surface-2);border:1px solid var(--border);bor
   background: var(--track-you); border: 2.5px solid #fff;
   box-shadow: 0 0 0 3px var(--track-you-ring);   /* 与「停靠中」的 accent-soft 环二选一 */
 }
-/* 行驶中骑线点：由 JS 写 --you-top（%），不占行 */
+/* 行驶中骑线点：挂在 row(afterIdx) 内，--you-frac 由 JS 写 0..1（07 §d.3 冻结写法） */
 .navstrip__youmark {
-  position: absolute; left: calc(var(--strip-w, 3px) / 2);
-  top: var(--you-top, 50%); transform: translate(-50%, -50%);
+  position: absolute; left: calc(var(--track-rail-w, 3px) / 2);
+  top: calc(50% + var(--you-frac, 0) * 100%); transform: translate(-50%, -50%);
   width: 12px; height: 12px; border-radius: var(--radius-full);
   background: var(--track-you); border: 2.5px solid #fff;
   box-shadow: 0 0 0 4px var(--track-you-ring);

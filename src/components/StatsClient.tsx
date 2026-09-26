@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import RouteStack from "./RouteStack";
 import Icon from "./ui/Icon";
 
@@ -60,6 +61,11 @@ export default function StatsClient({
 }) {
   const width = (n: number) => Math.min(100, Math.round((n / GOAL) * 100));
 
+  /** ★ v3.1.1 #5：加载失败的原始错误只进控制台（界面只给用户语言） */
+  useEffect(() => {
+    if (dbError) console.error("[stats] 统计数据加载失败：", dbError);
+  }, [dbError]);
+
   return (
     <main className="page">
       <header style={{ marginBottom: 16, width: "100%", padding: "0 2px" }}>
@@ -93,7 +99,7 @@ export default function StatsClient({
 
       {dbError && (
         <p className="t-error t-body" style={{ marginBottom: 12, width: "100%" }}>
-          数据库错误：{dbError}
+          数据暂时无法加载，请稍后重试
         </p>
       )}
 

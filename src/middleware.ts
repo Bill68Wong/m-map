@@ -81,6 +81,9 @@ const PUBLIC_FILES = new Set([
   // ── 地图静态图形（CSS url() 引用）──
   "/pin-destination.svg",
   "/pin-destination-mono.svg",
+  /* ★ v3.1.1（#4 起点钉新增）：根级 `public/` 新文件必须显式登记 —— 漏登 = 线上被 307 到 /login，
+     起点钉在配口令的生产环境直接 404（本地无口令不复现；见铁律「fail-closed 每新增一文件都要登记」）。 */
+  "/pin-origin.svg",
 ]);
 
 /** ④ 由自身 Bearer 鉴权、不受口令门约束（Vercel Cron 重算派生数据） */

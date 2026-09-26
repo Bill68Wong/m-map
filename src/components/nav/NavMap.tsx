@@ -32,6 +32,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { isInsideRings, loadMacauDistrict, maskOuterRing, type MacauDistrict } from "@/lib/amap/district";
 import { type ColoredLeg, type LL } from "@/lib/nav/route-overview";
 import { loadAMap } from "./amap-loader";
+import Icon from "@/components/ui/Icon";
 import {
   fitGapPx,
   maskFill,
@@ -60,14 +61,21 @@ const INIT_ZOOM = 12;
  * ★ 2026-09-23：15 → **14**（用户拍板）——要求「打开定位后的默认视野就要能看到站点」。
  *   实测定位完成后的视野 ≈ 14.47 级 ⇒ 阈值取 14 时定位完成即显示，不必手动放大；
  *   而全澳总览（≈12.4 级）仍不显示，避免整屏 470+ 站点糊在街区细节上。
+ * ★ v3.1.1（真机反馈 #3）：14 → **15**（用户反馈「站点太密集」）。
+ *   定位完成后视野 ≈ 14.47 **< 15** ⇒ 打开时**不显示**站点、轻微放大一档才出现（正是本次诉求）；
+ *   全澳总览（12.4）与首页默认视野都更干净。
+ *   ⚠️ 这**推翻了 2026-09-23「打开定位就要看到站点」的旧拍板**（两者不可兼得），
+ *     属 12 文档 §D 的既定取舍（用户已真机确认取 15）。
  */
-const STATION_MIN_ZOOM = 14;
+const STATION_MIN_ZOOM = 15;
 /**
  * ★ 2026-09-22：**路线查看模式下的站点阈值**（比常规低一档）。
  *   为什么需要：进入路线模式会 `setBounds` 把视野缩到「装下整条线」，
- *   跨全澳的长线（如 26 号）实测落到 zoom ≈ 12~13，**低于常规阈值 15**
- *   ⇒ 站点图层整体不显示 ⇒ 看不到「本线站点高亮」的效果 ✗
- *   ⇒ 路线模式下放宽到 12（此时仍需显示本线站点，否则功能等于白做）。
+ *   跨全澳的长线（如 26 号）实测落到 zoom ≈ 12~13，**低于常规阈值** ⇒ 站点图层整体不显示
+ *   ⇒ 看不到「本线站点高亮」的效果 ✗ ⇒ 路线模式下放宽到 12。
+ * ★ v3.1.1：**保持 12 不动**（不可提高到 13 —— 长线 `setBounds` 后落在 **12.x**，
+ *   `12.3 < 13` ⇒ 整层站点不显示，正是 2026-09-22 记录过的坑）；
+ *   且本批需求②「非本线不渲染」后路线模式最多只剩十几~二十几个点，**不会密集**，无需提阈值。
  */
 const STATION_MIN_ZOOM_ROUTE = 12;
 /** 视图事件节流（毫秒）：`zoomend`/`moveend` 高频触发，节流后再裁剪/渲染 */
@@ -191,6 +199,14 @@ export interface NavMapProps {
    *   `null` / 空集 ⇒ 不过滤（回落到常规「本线高亮 / 其他变灰」逻辑）。
    */
   lineStops?: ReadonlySet<string> | null;
+  /**
+   * ★ 2026-09-26（v3.1.1 真机反馈 #2）：**恢复按钮显示语境**。
+   *   真机反馈：「滑动地图左下角出现『回到路线』按钮、意义不明」——根因是它在 `free` 态**无条件**显示，
+   *   首页浏览拖图也会出现，而那时并没有「路线」可回。
+   *   ⇒ 仅当**导航语境**（宿主：`detailActive`）才渲染该按钮；非导航态拖动**不出现**
+   *     （双击地图 / 定位键两个恢复入口**保留**）。
+   */
+  recenterEnabled?: boolean;
   /** 附加类名（承载全屏布局） */
   className?: string;
 }
@@ -215,6 +231,7 @@ export default function NavMap({
   userFix = null,
   traveled = null,
   lineStops = null,
+  recenterEnabled = false,
 }: NavMapProps) {
   const canvasRef = useRef<HTMLDivElement | null>(null);
   /** `.nav-map` 根元素（写观测钩子：data-map-follow / data-map-zoom / …） */
@@ -609,7 +626,9 @@ export default function NavMap({
         originMarkerRef.current = new AMap.Marker({
           position: pos,
           content: '<div class="nav-map__originpin" aria-hidden="true"></div>',
-          offset: new AMap.Pixel(-9, -9),
+          // ★ v3.1.1 #4：由 18px 圆点改为钉形（20×26，钉尖在底边中点）⇒ offset 同终点钉
+          //   （-10, -26 = -w/2, -h）令**钉尖**精确锚定坐标点。
+          offset: new AMap.Pixel(-10, -26),
           title: origin.label,
           zIndex: 110,
         });
@@ -1310,16 +1329,19 @@ export default function NavMap({
         enabled={phase === "ready"}
         fix={userFix}
       />
-      {/* ★ 本批（需求① / AC-27）：让位锁恢复入口 —— free 态显示，点即恢复跟随 + 重放取景 */}
-      {followState === "free" && (
+      {/* ★ 本批（需求① / AC-27；v3.1.1 #2 收紧）：让位锁恢复入口 —— **仅导航语境**且 free 态显示；
+          点即恢复跟随 + 重放取景。文案/形态直观化：定位靶心图标 + 「回到我的位置」。 */}
+      {recenterEnabled && followState === "free" && (
         <button
           type="button"
           className="nav-map__recenter"
           data-recenter="on"
           onClick={restore}
-          aria-label="回到路线"
+          aria-label="回到我的位置，重新跟随地图"
+          title="回到我的位置"
         >
-          回到路线
+          <Icon name="locate" size={16} />
+          <span>回到我的位置</span>
         </button>
       )}
       {phase === "loading" && (

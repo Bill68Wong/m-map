@@ -365,6 +365,8 @@ export default function NavShell({
           traveled={detailActive && ride.phase === "riding" ? ride.traveled : null}
           /* ★ 本批（需求②）：站点白名单（导航模式仅显示本线路站点） */
           lineStops={detailActive ? lineStops : null}
+          /* ★ v3.1.1 #2：「回到我的位置」仅在**导航语境**显示（非导航态拖图不出现该按钮） */
+          recenterEnabled={detailActive}
         />
 
         {/* 品牌栏（三栏网格）：左=空 · 中=换向键+线路标签 · 右=竖排按钮组 */}
