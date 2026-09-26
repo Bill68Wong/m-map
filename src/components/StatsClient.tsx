@@ -73,15 +73,7 @@ export default function StatsClient({
           <h1 className="h-headline" style={{ margin: 0 }}>
             通勤统计
           </h1>
-          <a
-            className="btn btn--outline btn--sm"
-            style={{ fontWeight: 500, marginLeft: "auto" }}
-            href="/api/export"
-            download
-          >
-            <Icon name="download" size={20} />
-            导出 CSV
-          </a>
+          {/* 2026-09-27：CSV 导出入口已关闭（全站「下载数据」口径）；接口 /api/export 已移除 */}
         </div>
         <p className="t-label t-muted" style={{ marginTop: 6, lineHeight: 1.6 }}>
           {summary ? (

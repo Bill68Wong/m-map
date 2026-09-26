@@ -11,7 +11,8 @@
  *     地点卡则为「重命名」弹层（地点是单点，无起终点可改）。
  *   · **回放**（AC-116）：点组合 = 首页式**实时规划**（`?from…&to…`）；
  *                       点地点 = 首页式**选点**（`?to…`，起点默认「我的位置」，**不自动规划**）；
- *   · **备份**：v2→v3 迁移的一次性提示 + 可再次下载隐藏备份键内容（AC-111）。
+ *   · **备份**：v2→v3 迁移**静默备份**（隐藏键，AC-111）+ 一次性升级提示；
+ *     ⚠️ 2026-09-27 口径：**不提供任何文件下载**（迁移自动下载已移除、「下载备份」入口关闭）。
  *
  * ── 五态（03 §3.8）───────────────────────────────────────────────────
  *   Loading（骨架）/ Empty（整体 + 分区引导）/ Populated / Edge（超长名省略、只读、迁移失败）。
@@ -23,7 +24,7 @@ import SearchSheet from "@/components/nav/SearchSheet";
 import { useUserFix } from "@/components/nav/useUserFix";
 import FavoritesList, { type ComboAction, type PlaceAction } from "./ComboPlans";
 import { useCombos, type ComboV3, type PlaceV3 } from "@/lib/favorites/useCombos";
-import { FAVORITES_BACKUP_KEY, hasBackupKey } from "@/lib/favorites/v3";
+import { hasBackupKey } from "@/lib/favorites/v3";
 import { endpointOf, type FavoriteEndpoint } from "@/lib/favorites/types";
 import type { NavPoint } from "@/lib/nav/types";
 
@@ -171,25 +172,6 @@ export default function FavoritesClient() {
     closeSheet();
   };
 
-  /** 再下载一次迁移备份（隐藏键内容） */
-  const downloadBackup = () => {
-    try {
-      const raw = window.localStorage.getItem(FAVORITES_BACKUP_KEY);
-      if (!raw) return;
-      const blob = new Blob([raw], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `must-favorites-v2-backup-${Date.now()}.json`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 4000);
-    } catch {
-      /* ignore */
-    }
-  };
-
   const sheetTitle = useMemo(
     () => (editCombo ? "编辑起点终点" : editPlace ? "重命名地点" : ""),
     [editCombo, editPlace],
@@ -219,13 +201,10 @@ export default function FavoritesClient() {
           旧收藏的升级没完成（原数据完好未动）。稍后重试即可。
         </p>
       )}
-      {/* 备份提示（一次性） */}
+      {/* 备份提示（一次性；2026-09-27 起：仅告知，不提供任何下载入口） */}
       {notice && (
         <p className="fav-note t-label" role="status">
-          旧版收藏已升级为「组合 + 地点」。原数据已备份，可
-          <button type="button" className="btn btn--text btn--sm" onClick={downloadBackup}>
-            下载备份
-          </button>
+          旧版收藏已升级为「组合 + 地点」。原数据已在本机保留备份。
           <button type="button" className="btn btn--text btn--sm" onClick={dismissNotice}>
             知道了
           </button>
