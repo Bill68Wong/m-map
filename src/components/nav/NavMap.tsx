@@ -185,6 +185,12 @@ export interface NavMapProps {
    * 初始为 0 时不触发（首屏定位由 `init()` 负责）。
    */
   locateTick?: number;
+  /**
+   * ★ 本批新增（需求② 站点过滤 / AC-29~31）：**站点白名单（主码）**。
+   *   非空 ⇒ 仅渲染集合内站点（路线查看 / 导航模式由宿主计算）；
+   *   `null` / 空集 ⇒ 不过滤（回落到常规「本线高亮 / 其他变灰」逻辑）。
+   */
+  lineStops?: ReadonlySet<string> | null;
   /** 附加类名（承载全屏布局） */
   className?: string;
 }
@@ -208,8 +214,11 @@ export default function NavMap({
   overview = null,
   userFix = null,
   traveled = null,
+  lineStops = null,
 }: NavMapProps) {
   const canvasRef = useRef<HTMLDivElement | null>(null);
+  /** `.nav-map` 根元素（写观测钩子：data-map-follow / data-map-zoom / …） */
+  const rootRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<any>(null);
   /** 高德命名空间（供右上定位按钮重跑定位） */
   const amapRef = useRef<any>(null);
@@ -223,8 +232,10 @@ export default function NavMap({
   const districtRef = useRef<MacauDistrict | null>(null);
   /** 是否已应用范围限制（setLimitBounds 成功） */
   const boundsAppliedRef = useRef(false);
-  /** 定位早于边界就绪时的暂存坐标 */
-  const pendingLocateRef = useRef<{ lng: number; lat: number } | null>(null);
+  /** 定位早于边界就绪时的暂存坐标（+ 是否显式意图） */
+  const pendingLocateRef = useRef<{ pos: { lng: number; lat: number }; focus: boolean } | null>(null);
+  /** 最近一次成功定位坐标（mepin 重建用） */
+  const lastLocatePosRef = useRef<{ lng: number; lat: number } | null>(null);
   /** 全量站点（一次拉取，ref 缓存）与已渲染标记（code → marker） */
   const stationsRef = useRef<StationPointLite[] | null>(null);
   const stationMarkersRef = useRef<Map<string, any>>(new Map());
@@ -255,6 +266,44 @@ export default function NavMap({
    */
   const viewRef = useRef<NavMapProps["view"]>(null);
   viewRef.current = view;
+  /**
+   * ★ 本批新增（需求① 取景稳定化 / AC-25~28 / 58 / 59）：
+   *   · `destRef` / `originRef`：取景 effect **依赖收敛为 `[view.tick, phase]`** 后，
+   *     程序化取景从 ref 读最新 OD（渲染期同步赋值，参照既有 `viewRef`）；
+   *   · `followState` / `followRef`：让位锁状态机（`follow` ⇄ `free`）；
+   *   · `programmaticRef`：程序化相机调用打标（区分手势 zoomstart 与程序 zoomstart）；
+   *   · `lastCmdRef`：最后一次取景意图（恢复按钮/双击重放用）。
+   */
+  const destRef = useRef<NavMapProps["dest"]>(null);
+  destRef.current = dest;
+  const originRef = useRef<NavMapProps["origin"]>(null);
+  originRef.current = origin;
+  const [followState, setFollowState] = useState<"follow" | "free">("follow");
+  const followRef = useRef(followState);
+  followRef.current = followState;
+  const programmaticRef = useRef(false);
+  const lastCmdRef = useRef<NavMapProps["view"]>(null);
+
+  /** 让位锁观测钩子（H1）：无副作用，仅 `setAttribute` */
+  useEffect(() => {
+    rootRef.current?.setAttribute("data-map-follow", followState);
+  }, [followState]);
+
+  /**
+   * ★ 程序化相机调用**唯一打标入口**（§a.1）：`setZoomAndCenter` / `panBy` / `setBounds`
+   *   一律包在本函数内 ⇒ `zoomstart` 中判 `programmaticRef.current` 即可区分
+   *   「手势缩放」与「程序缩放」（350ms 覆盖动画时长）。
+   */
+  const applyCamera = useCallback((fn: () => void) => {
+    programmaticRef.current = true;
+    try {
+      fn();
+    } finally {
+      window.setTimeout(() => {
+        programmaticRef.current = false;
+      }, 350);
+    }
+  }, []);
 
   const [phase, setPhase] = useState<"loading" | "ready" | "failed">("loading");
   const [note, setNote] = useState<string>("");
@@ -263,8 +312,9 @@ export default function NavMap({
   /**
    * 定位落在澳门范围内 → 居中到定位点（横向 5km）；范围外 → 不移动地图。
    * 蓝点无论如何都按真实坐标落位。
+   * @param focus 显式意图（点定位键）——`true` 时**跳过**「有 view 意图则不抢镜头」守卫，强制居中。
    */
-  const applyLocateView = useCallback((pos: { lng: number; lat: number }) => {
+  const applyLocateView = useCallback((pos: { lng: number; lat: number }, focus = false) => {
     const map = mapRef.current;
     const canvas = canvasRef.current;
     if (!map) return;
@@ -279,14 +329,15 @@ export default function NavMap({
       // ★ 2026-09-22：若调用方正在做**外部取景**（搜索弹窗要求「目的地居上半屏」或「两点适配」），
       //   定位**不再抢镜头** —— 否则异步定位完成后会把地图拉回「我的位置」居中，
       //   覆盖掉刚做好的取景（实测：标记因此掉进被弹窗遮住的下半屏）。蓝点照常落位。
-      if (viewRef.current && viewRef.current.mode !== "none") {
+      // ★ 本批：显式意图（focus=true，点定位键）⇒ 跳过该守卫，强制居中。
+      if (!focus && viewRef.current && viewRef.current.mode !== "none") {
         canvas?.setAttribute("data-locate-skip-view", "on");
         return;
       }
       const w: number = map.getSize?.()?.width ?? (typeof window !== "undefined" ? window.innerWidth : 390);
       const z = zoomForAcross(pos.lat, w);
       try {
-        map.setZoomAndCenter(z, [pos.lng, pos.lat]);
+        applyCamera(() => map.setZoomAndCenter(z, [pos.lng, pos.lat]));
         canvas?.setAttribute("data-nav-zoom", String(z));
       } catch {
         /* 视角设置失败不影响底图 */
@@ -295,44 +346,53 @@ export default function NavMap({
       // ★ 范围外：不自动移出（保持澳门视野）；蓝点如实落位（可能落在视野之外）
       canvas?.setAttribute("data-locate-outside", "on");
     }
-  }, []);
+  }, [applyCamera]);
 
   /**
    * 跑一次定位（首屏 + 右上定位按钮共用）。
    * 范围内 → 居中到定位点；范围外 → 不移动地图（保持澳门视野）；蓝点如实落位。
    */
-  const runLocate = useCallback(() => {
-    const AMap = amapRef.current;
-    const map = mapRef.current;
-    if (!AMap || !map) return;
-    const geo = new AMap.Geolocation({ enableHighAccuracy: true, timeout: 10_000, convert: true });
-    setLocating(true);
-    geo.getCurrentPosition((status: string, result: any) => {
-      setLocating(false);
-      if (status === "complete" && result?.position) {
-        // ★ position 已是 GCJ-02（convert:true）→ 不再转换
-        const pos = { lng: result.position.lng, lat: result.position.lat };
-        locatedRef.current = true;
-        canvasRef.current?.removeAttribute("data-locate-outside");
-        if (userMarkerRef.current) userMarkerRef.current.setPosition([pos.lng, pos.lat]);
-        else
-          userMarkerRef.current = new AMap.Marker({
-            position: [pos.lng, pos.lat],
-            content: '<div class="nav-map__mepin" aria-label="我的位置"></div>',
-            offset: new AMap.Pixel(-9, -9),
-            zIndex: 110,
-          });
-        if (mapRef.current && userMarkerRef.current) mapRef.current.add(userMarkerRef.current);
-        if (boundsAppliedRef.current) applyLocateView(pos);
-        else pendingLocateRef.current = pos; // 边界未就绪 → 暂存，就绪后再决定
-        onLocate?.(pos);
-      } else {
-        // ★ 定位失败 → 停在澳门视野（不重设视角）+ 提示（§D.1）
-        setNote("无法定位 · 请手动选择出发点");
-        onLocate?.(null);
-      }
-    });
-  }, [applyLocateView, onLocate]);
+  const runLocate = useCallback(
+    (opts?: { focus?: boolean }) => {
+      const AMap = amapRef.current;
+      const map = mapRef.current;
+      if (!AMap || !map) return;
+      const focus = opts?.focus === true;
+      const geo = new AMap.Geolocation({ enableHighAccuracy: true, timeout: 10_000, convert: true });
+      setLocating(true);
+      geo.getCurrentPosition((status: string, result: any) => {
+        setLocating(false);
+        if (status === "complete" && result?.position) {
+          // ★ position 已是 GCJ-02（convert:true）→ 不再转换
+          const pos = { lng: result.position.lng, lat: result.position.lat };
+          locatedRef.current = true;
+          lastLocatePosRef.current = pos;
+          canvasRef.current?.removeAttribute("data-locate-outside");
+          // ★ 本批：GPS 实时蓝点（UserDotLayer）存在时，**不再创建 mepin**（单一点，AC-40/41）。
+          if (!userFix && mapRef.current) {
+            if (userMarkerRef.current) userMarkerRef.current.setPosition([pos.lng, pos.lat]);
+            else {
+              userMarkerRef.current = new AMap.Marker({
+                position: [pos.lng, pos.lat],
+                content: '<div class="nav-map__mepin" aria-label="我的位置"></div>',
+                offset: new AMap.Pixel(-9, -9),
+                zIndex: 110,
+              });
+              mapRef.current.add(userMarkerRef.current);
+            }
+          }
+          if (boundsAppliedRef.current) applyLocateView(pos, focus);
+          else pendingLocateRef.current = { pos, focus }; // 边界未就绪 → 暂存，就绪后再决定
+          onLocate?.(pos);
+        } else {
+          // ★ 定位失败 → 停在澳门视野（不重设视角）+ 提示（§D.1）
+          setNote("无法定位 · 请手动选择出发点");
+          onLocate?.(null);
+        }
+      });
+    },
+    [applyLocateView, onLocate, userFix],
+  );
 
   const init = useCallback(async () => {
     setPhase("loading");
@@ -378,7 +438,7 @@ export default function NavMap({
           const bounds = new AMap.Bounds([b.minLng, b.minLat], [b.maxLng, b.maxLat]);
           map.setLimitBounds(bounds); // ① 拖不出澳门
           map.setZooms([MIN_ZOOM, MAX_ZOOM]); // ② 拉不远
-          map.setBounds(bounds); // ③ 首屏 = 澳门全境
+          applyCamera(() => map.setBounds(bounds)); // ③ 首屏 = 澳门全境（程序化，打标）
           boundsAppliedRef.current = true;
           canvas?.setAttribute("data-limit-bounds", "on");
           canvas?.setAttribute("data-limit-bounds-src", dist.source);
@@ -410,7 +470,7 @@ export default function NavMap({
           if (pendingLocateRef.current) {
             const p = pendingLocateRef.current;
             pendingLocateRef.current = null;
-            applyLocateView(p);
+            applyLocateView(p.pos, p.focus);
           }
         } catch {
           // 连 setLimitBounds 都失败 → 完全降级（不阻塞任何功能）
@@ -439,7 +499,7 @@ export default function NavMap({
       setNote((e as Error)?.message ?? "地图加载失败");
       onLocate?.(null);
     }
-  }, [jsKey, mapStyleId, runLocate, applyLocateView, onLocate]);
+  }, [jsKey, mapStyleId, runLocate, applyLocateView, onLocate, applyCamera]);
 
   useEffect(() => {
     void init();
@@ -452,10 +512,16 @@ export default function NavMap({
       mapRef.current = null;
       userMarkerRef.current = null;
       destMarkerRef.current = null;
+      originMarkerRef.current = null;
       maskRef.current = null;
       districtRef.current = null;
       boundsAppliedRef.current = false;
       pendingLocateRef.current = null;
+      lastLocatePosRef.current = null;
+      // ★ 本批：卸载/重建（jsKey 变）→ 让位锁与程序化打标复位
+      setFollowState("follow");
+      programmaticRef.current = false;
+      lastCmdRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jsKey]);
@@ -511,9 +577,10 @@ export default function NavMap({
       // ★ S2「地图标定」：选完目的地 → 居中到该点（限制范围内自动收敛）
       // ★ 2026-09-22：若调用方给了 `view`（新版搜索弹窗），取景改由下面的 view effect 统一负责
       //   —— 因为那时需要「居上半屏」或「适配两点」，不能简单 setCenter。不传 `view` 时保持原行为。
-      if (!view) {
+      // ★ 本批：`free` 让位锁生效时**不抢镜头**（用户此后不再被打断，AC-27）。
+      if (!view && followRef.current !== "free") {
         try {
-          map.setCenter(pos);
+          applyCamera(() => map.setCenter(pos));
         } catch {
           /* ignore */
         }
@@ -521,7 +588,7 @@ export default function NavMap({
     } catch {
       /* 标记失败不影响底图 */
     }
-  }, [dest, phase, view]);
+  }, [dest, phase, view, applyCamera]);
 
   // ── ★ 2026-09-22 新增：**出发地标记**（选完出发地后与目的地同时显示）──
   useEffect(() => {
@@ -555,122 +622,249 @@ export default function NavMap({
 
   /**
    * ★ 2026-09-22 新增：**视口取景**（新版搜索弹窗覆盖在地图上时用）。
-   *
-   * 为什么需要单独的 effect：新版弹窗是**覆盖层**（下半屏遮住地图）。
+   * 为什么需要独立的取景函数：新版弹窗是**覆盖层**（下半屏遮住地图）。
    *   若沿用「容器中心居中」，标记会落进被遮住的下半屏 ⇒ 用户看不见 ✗
-   *   ⇒ `dest-center-top` 把视口上移 1/4 屏；`fit-two` 用 `setFitView` + 底部 avoid 让两点都落在上半屏。
+   *   ⇒ `dest-center-top` 把视口上移 1/4 屏；`fit-two` 自算让两点都落在上半屏。
+   *
+   * ★ 本批（需求① / AC-59）：抽出 **`applyView(cmd)` —— 唯一相机入口**。
+   *   只被两处调用：① 取景 effect（`view.tick` 变化）；② 恢复按钮 / 双击地图 `restore()`。
+   *   **严禁**在任何数据 effect（总览绘制 / 站点图层 / 车辆 / OD 标记）中调用。
+   *   所有 `setZoomAndCenter` / `panBy` 一律经 `applyCamera` 打标（区分手势/程序缩放）。
+   */
+  const applyView = useCallback(
+    (cmd: NavMapProps["view"]) => {
+      const map = mapRef.current;
+      if (!map || !cmd || cmd.mode === "none") return;
+      const dest = destRef.current;
+      const origin = originRef.current;
+      const winH = typeof window !== "undefined" ? window.innerHeight : 800;
+
+      if (cmd.mode === "dest-center-top") {
+        if (!dest) return;
+        try {
+          // ★ 关键点：`immediately=true`（第 3 参）**关掉缩放动画**。
+          //   踩坑记录（三次尝试）：
+          //     ① `setZoomAndCenter` 默认带动画，紧随的 `panBy` 被动画中断 ⇒ 标记停在下半屏；
+          //     ② 改用 `setFitView` + 45% 底部留白 ⇒ 改善但仍偏下；
+          //     ③ 留白提到 70% ⇒ **过度矫正，标记被推出视野**。
+          //   ⇒ 正解：先**无动画**居中，再平移固定比例 —— 可控且可预期。
+          const size = map.getSize?.() ?? { width: 390, height: winH };
+          const h: number = size.height ?? winH;
+          /**
+           * ★ 2026-09-24：改按**真实遮挡区**取景 —— 读 RoutePanel（`.rpanel`）真实顶边，
+           *   把点从整屏中心抬到「面板上方可见区」的中心；读不到（桌面右栏 / 异常）⇒
+           *   回落旧口径「上移 1/5 屏」。
+           */
+          const panelTop = panelTopPx(h);
+          applyCamera(() => {
+            map.setZoomAndCenter(16, [dest.lng, dest.lat], true);
+            map.panBy(0, panelTop !== null ? Math.round(h / 2 - panelTop / 2) : Math.round(h * 0.2));
+          });
+        } catch {
+          /* ignore */
+        }
+        return;
+      }
+
+      if (cmd.mode === "fit-two") {
+        if (!origin || !dest) return;
+        /**
+         * ★ 2026-09-22 二次修复「选完出发地后地图跑到珠海/西边」。
+         *
+         * 前一版用 `setFitView(overlays, …)` + 等 marker 就绪重试 —— **实测仍然失效**：
+         *   取景后 zoom 掉到最小值 11（= 一屏 27.6km），中心跑到珠海斗门/黄杨山一带 ✗
+         *   （`setFitView` 内部会参考 `setLimitBounds` 与遮罩范围，在这个「底图限制在澳门」
+         *     的场景下把视野撑到了极限。）
+         *
+         * 现改为**完全自算**，不依赖任何 marker 或 fitView：
+         *   ① 中心 = 两点中点；
+         *   ② 由经纬跨度**反推 zoom**（留 1.25 倍余量），可用像素 = **未被面板遮挡的区域**；
+         *   ③ `setZoomAndCenter(..., immediately=true)` 无动画落位，再 `panBy` 把中点抬到
+         *      「可见槽中心」。
+         * ★ 2026-09-24：可用高度由「写死半屏」改为 **RoutePanel 真实顶边**（读不到回落半屏）。
+         */
+        try {
+          const centerLat = (origin.lat + dest.lat) / 2;
+          const centerLng = (origin.lng + dest.lng) / 2;
+          const size = map.getSize?.() ?? { width: 390, height: 700 };
+          // 可用视野：宽留 50px/侧（marker 宽约 30px + 呼吸位）；高 = 面板顶边以上，留 20px 呼吸位
+          const availW = Math.max(80, size.width - 100);
+          const panelTop = panelTopPx(size.height);
+          const slotTop = panelTop !== null ? panelTop : Math.round(size.height / 2);
+          const availH = Math.max(80, slotTop - 20);
+          // 两点跨度 × 1.25：让两点占据可用区的大部分（取 2.8 会太保守 ⇒ zoom 被压到 11）
+          const lngSpan = Math.max(Math.abs(origin.lng - dest.lng) * 1.25, 1e-5);
+          const latSpan = Math.max(Math.abs(origin.lat - dest.lat) * 1.25, 1e-5);
+          const zx = Math.log2((360 * availW) / (256 * lngSpan));
+          const zy = Math.log2(
+            (360 * availH) / (256 * latSpan * Math.cos((centerLat * Math.PI) / 180)),
+          );
+          // 下限 12：跨全澳的远距离 OD 也至少能看清陆地方位；上限 16：两点很近时不要怼到街景级
+          const z = Math.max(12, Math.min(16, Math.floor(Math.min(zx, zy))));
+          applyCamera(() => {
+            map.setZoomAndCenter(z, [centerLng, centerLat], true);
+            // 把「两点中点」从整屏中心抬到「可见槽中心」；回落口径 = 上移 1/4 屏
+            map.panBy(
+              0,
+              panelTop !== null ? Math.round(size.height / 2 - panelTop / 2) : Math.round(size.height / 4),
+            );
+          });
+          canvasRef.current?.setAttribute("data-nav-zoom", String(z));
+          canvasRef.current?.setAttribute("data-view-mode", "fit-two-selfcalc");
+        } catch {
+          /* ignore */
+        }
+        return;
+      }
+
+      /**
+       * ★ 2026-09-23：`fit-box` —— 把外包框适配进「面板顶边以上的可视槽」（自算，禁 setBounds）。
+       * `slotTopPx` = 当前档面板顶边像素（full≈12vh / half=50vh / peek=80vh）；
+       * 复用 `fit-two` 的反推 zoom 逻辑（宽/高按可用区，留呼吸位），再把框中心抬到「顶部槽中心」。
+       * ★ 2026-09-24：呼吸边距接上设计 Token `--map-fit-gap`（此前悬空未接线；回落 20）。
+       */
+      if (cmd.mode === "fit-box") {
+        const box = cmd.box;
+        if (!box) return;
+        try {
+          const size = map.getSize?.() ?? { width: 390, height: 700 };
+          const slotTop = Math.max(80, Math.round(cmd.slotTopPx ?? size.height * 0.12));
+          const centerLat = (box.minLat + box.maxLat) / 2;
+          const centerLng = (box.minLng + box.maxLng) / 2;
+          // 可用区：宽留 50px/侧；高只用「顶边以上区域」，上下各留 gap 呼吸位
+          const gap = fitGapPx();
+          const availW = Math.max(80, size.width - 100);
+          const availH = Math.max(80, slotTop - gap * 2);
+          const lngSpan = Math.max((box.maxLng - box.minLng) * 1.25, 1e-5);
+          const latSpan = Math.max((box.maxLat - box.minLat) * 1.25, 1e-5);
+          const zx = Math.log2((360 * availW) / (256 * lngSpan));
+          const zy = Math.log2(
+            (360 * availH) / (256 * latSpan * Math.cos((centerLat * Math.PI) / 180)),
+          );
+          const z = Math.max(12, Math.min(16, Math.floor(Math.min(zx, zy))));
+          applyCamera(() => {
+            map.setZoomAndCenter(z, [centerLng, centerLat], true);
+            // 框中心：从整屏中心（size.height/2）抬到「顶部槽中心」（slotTop/2）
+            map.panBy(0, Math.round(size.height / 2 - slotTop / 2));
+          });
+          canvasRef.current?.setAttribute("data-nav-zoom", String(z));
+          canvasRef.current?.setAttribute("data-view-mode", "fit-box-selfcalc");
+        } catch {
+          /* ignore */
+        }
+      }
+    },
+    [applyCamera],
+  );
+
+  /** 恢复入口：回到跟随 + 重放最后一次取景意图（§a.4） */
+  const restore = useCallback(() => {
+    setFollowState("follow");
+    const cmd = lastCmdRef.current ?? viewRef.current;
+    if (cmd && cmd.mode !== "none") applyView(cmd);
+  }, [applyView]);
+
+  /**
+   * 取景 effect（★ 依赖收敛为 `[view.tick, phase]`；`dest/origin` 改 ref 读）：
+   *   · **让位锁**（AC-59 核心）：`free` 态**跳过一切自动取景**（含 `frame()` 指令）；
+   *   · 记录最后一次意图（`lastCmdRef`）供 `restore()` 重放。
+   */
+  const viewTick = view?.tick ?? 0;
+  useEffect(() => {
+    const cmd = viewRef.current;
+    if (!cmd || cmd.mode === "none") return;
+    lastCmdRef.current = cmd;
+    if (phase !== "ready") return;
+    if (followRef.current === "free") return; // ★ 让位锁：free 态跳过一切自动取景
+    applyView(cmd);
+  }, [viewTick, phase, applyView]);
+
+  /**
+   * ★ 本批：让位锁事件注册（dragstart / zoomstart / dblclick）。
+   *   · `dragstart` 恒为用户行为 ⇒ free；
+   *   · `zoomstart` 仅当**非程序化**（`programmaticRef`）时 ⇒ free；
+   *   · `dblclick` ⇒ `restore()`（辅助恢复入口）。
    */
   useEffect(() => {
+    if (phase !== "ready") return;
     const map = mapRef.current;
-    if (!map || phase !== "ready" || !view || view.mode === "none") return;
-    const winH = typeof window !== "undefined" ? window.innerHeight : 800;
-
-    if (view.mode === "dest-center-top") {
-      if (!dest) return;
+    if (!map) return;
+    const onDragStart = () => setFollowState("free");
+    const onZoomStart = () => {
+      if (!programmaticRef.current) setFollowState("free");
+    };
+    const onDblClick = () => restore();
+    map.on("dragstart", onDragStart);
+    map.on("zoomstart", onZoomStart);
+    map.on("dblclick", onDblClick);
+    return () => {
       try {
-        // ★ 关键点：`immediately=true`（第 3 参）**关掉缩放动画**。
-        //   踩坑记录（三次尝试）：
-        //     ① `setZoomAndCenter` 默认带动画，紧随的 `panBy` 被动画中断 ⇒ 标记停在下半屏；
-        //     ② 改用 `setFitView` + 45% 底部留白 ⇒ 改善但仍偏下；
-        //     ③ 留白提到 70% ⇒ **过度矫正，标记被推出视野**。
-        //   ⇒ 正解：先**无动画**居中，再平移固定比例 —— 可控且可预期。
-        map.setZoomAndCenter(16, [dest.lng, dest.lat], true);
-        const size = map.getSize?.() ?? { width: 390, height: winH };
-        const h: number = size.height ?? winH;
-        /**
-         * ★ 2026-09-24：改按**真实遮挡区**取景 —— 读 RoutePanel（`.rpanel`）真实顶边，
-         *   把点从整屏中心抬到「面板上方可见区」的中心；读不到（桌面右栏 / 异常）⇒
-         *   回落旧口径「上移 1/5 屏」。
-         */
-        const panelTop = panelTopPx(h);
-        map.panBy(0, panelTop !== null ? Math.round(h / 2 - panelTop / 2) : Math.round(h * 0.2));
+        map.off("dragstart", onDragStart);
+        map.off("zoomstart", onZoomStart);
+        map.off("dblclick", onDblClick);
       } catch {
         /* ignore */
       }
-      return;
-    }
+    };
+  }, [phase, restore]);
 
-    if (view.mode === "fit-two") {
-      if (!origin || !dest) return;
-      /**
-       * ★ 2026-09-22 二次修复「选完出发地后地图跑到珠海/西边」。
-       *
-       * 前一版用 `setFitView(overlays, …)` + 等 marker 就绪重试 —— **实测仍然失效**：
-       *   取景后 zoom 掉到最小值 11（= 一屏 27.6km），中心跑到珠海斗门/黄杨山一带 ✗
-       *   （`setFitView` 内部会参考 `setLimitBounds` 与遮罩范围，在这个「底图限制在澳门」
-       *     的场景下把视野撑到了极限。）
-       *
-       * 现改为**完全自算**，不依赖任何 marker 或 fitView：
-       *   ① 中心 = 两点中点；
-       *   ② 由经纬跨度**反推 zoom**（留 1.25 倍余量），可用像素 = **未被面板遮挡的区域**；
-       *   ③ `setZoomAndCenter(..., immediately=true)` 无动画落位，再 `panBy` 把中点抬到
-       *      「可见槽中心」。
-       * ★ 2026-09-24：可用高度由「写死半屏」改为 **RoutePanel 真实顶边**（读不到回落半屏）。
-       */
+  /**
+   * ★ 本批：观测钩子 H2 `data-map-zoom`（**实时**实测 zoom；AC-25/26/59 跨刷新比对）。
+   *   ⚠️ 与既有 `data-nav-zoom`（程序设定值）语义不同，勿混用。
+   */
+  useEffect(() => {
+    if (phase !== "ready") return;
+    const map = mapRef.current;
+    if (!map) return;
+    const write = () => {
       try {
-        const centerLat = (origin.lat + dest.lat) / 2;
-        const centerLng = (origin.lng + dest.lng) / 2;
-        const size = map.getSize?.() ?? { width: 390, height: 700 };
-        // 可用视野：宽留 50px/侧（marker 宽约 30px + 呼吸位）；高 = 面板顶边以上，留 20px 呼吸位
-        const availW = Math.max(80, size.width - 100);
-        const panelTop = panelTopPx(size.height);
-        const slotTop = panelTop !== null ? panelTop : Math.round(size.height / 2);
-        const availH = Math.max(80, slotTop - 20);
-        // 两点跨度 × 1.25：让两点占据可用区的大部分（取 2.8 会太保守 ⇒ zoom 被压到 11）
-        const lngSpan = Math.max(Math.abs(origin.lng - dest.lng) * 1.25, 1e-5);
-        const latSpan = Math.max(Math.abs(origin.lat - dest.lat) * 1.25, 1e-5);
-        const zx = Math.log2((360 * availW) / (256 * lngSpan));
-        const zy = Math.log2(
-          (360 * availH) / (256 * latSpan * Math.cos((centerLat * Math.PI) / 180)),
-        );
-        // 下限 12：跨全澳的远距离 OD 也至少能看清陆地方位；上限 16：两点很近时不要怼到街景级
-        const z = Math.max(12, Math.min(16, Math.floor(Math.min(zx, zy))));
-        map.setZoomAndCenter(z, [centerLng, centerLat], true);
-        // 把「两点中点」从整屏中心抬到「可见槽中心」；回落口径 = 上移 1/4 屏
-        map.panBy(0, panelTop !== null ? Math.round(size.height / 2 - panelTop / 2) : Math.round(size.height / 4));
-        canvasRef.current?.setAttribute("data-nav-zoom", String(z));
-        canvasRef.current?.setAttribute("data-view-mode", "fit-two-selfcalc");
+        rootRef.current?.setAttribute("data-map-zoom", String(map.getZoom()));
       } catch {
         /* ignore */
       }
-      return;
-    }
-
-    /**
-     * ★ 2026-09-23：`fit-box` —— 把外包框适配进「面板顶边以上的可视槽」（自算，禁 setBounds）。
-     * `slotTopPx` = 当前档面板顶边像素（full≈12vh / half=50vh / peek=80vh）；
-     * 复用 `fit-two` 的反推 zoom 逻辑（宽/高按可用区，留呼吸位），再把框中心抬到「顶部槽中心」。
-     * ★ 2026-09-24：呼吸边距接上设计 Token `--map-fit-gap`（此前悬空未接线；回落 20）。
-     */
-    if (view.mode === "fit-box") {
-      const box = view.box;
-      if (!box) return;
+    };
+    write();
+    map.on("zoomend", write);
+    return () => {
       try {
-        const size = map.getSize?.() ?? { width: 390, height: 700 };
-        const slotTop = Math.max(80, Math.round(view.slotTopPx ?? size.height * 0.12));
-        const centerLat = (box.minLat + box.maxLat) / 2;
-        const centerLng = (box.minLng + box.maxLng) / 2;
-        // 可用区：宽留 50px/侧；高只用「顶边以上区域」，上下各留 gap 呼吸位
-        const gap = fitGapPx();
-        const availW = Math.max(80, size.width - 100);
-        const availH = Math.max(80, slotTop - gap * 2);
-        const lngSpan = Math.max((box.maxLng - box.minLng) * 1.25, 1e-5);
-        const latSpan = Math.max((box.maxLat - box.minLat) * 1.25, 1e-5);
-        const zx = Math.log2((360 * availW) / (256 * lngSpan));
-        const zy = Math.log2(
-          (360 * availH) / (256 * latSpan * Math.cos((centerLat * Math.PI) / 180)),
-        );
-        const z = Math.max(12, Math.min(16, Math.floor(Math.min(zx, zy))));
-        map.setZoomAndCenter(z, [centerLng, centerLat], true);
-        // 框中心：从整屏中心（size.height/2）抬到「顶部槽中心」（slotTop/2）
-        map.panBy(0, Math.round(size.height / 2 - slotTop / 2));
-        canvasRef.current?.setAttribute("data-nav-zoom", String(z));
-        canvasRef.current?.setAttribute("data-view-mode", "fit-box-selfcalc");
+        map.off("zoomend", write);
       } catch {
         /* ignore */
       }
+    };
+  }, [phase]);
+
+  /**
+   * ★ 本批（需求⑤ / AC-40/41）：GPS 实时蓝点存在时**移除 mepin**（两者不并存）；
+   *   蓝点消失（拒权/无信号）且已定位过 ⇒ 用最近坐标**重建 mepin**。
+   */
+  useEffect(() => {
+    if (phase !== "ready") return;
+    const map = mapRef.current;
+    const AMap = amapRef.current;
+    if (!map) return;
+    try {
+      if (userFix) {
+        if (userMarkerRef.current) {
+          map.remove(userMarkerRef.current);
+          userMarkerRef.current = null;
+        }
+        return;
+      }
+      const pos = lastLocatePosRef.current;
+      if (locatedRef.current && pos && !userMarkerRef.current && AMap) {
+        userMarkerRef.current = new AMap.Marker({
+          position: [pos.lng, pos.lat],
+          content: '<div class="nav-map__mepin" aria-label="我的位置"></div>',
+          offset: new AMap.Pixel(-9, -9),
+          zIndex: 110,
+        });
+        map.add(userMarkerRef.current);
+      }
+    } catch {
+      /* ignore */
     }
-  }, [view, dest, origin, phase]);
+  }, [userFix, phase]);
 
   // ★ 同步点击回调到 ref（避免回调变化导致图层重建）
   useEffect(() => {
@@ -692,8 +886,12 @@ export default function NavMap({
   // ★ 车辆点击回调直接交给 `VehicleLayer`（原生化层自管 ref），此处不再缓存
 
   // ★ 右上定位按钮：locateTick 变化 → 重跑定位（首屏由 init 负责，tick=0 不触发）
+  //   ★ 本批：点定位键 = **显式意图** ⇒ 先恢复跟随，再强制居中（`focus: true`，AC-27）
   useEffect(() => {
-    if (locateTick > 0) runLocate();
+    if (locateTick > 0) {
+      setFollowState("follow");
+      runLocate({ focus: true });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [locateTick]);
 
@@ -745,8 +943,25 @@ export default function NavMap({
         const zoom = typeof map.getZoom === "function" ? map.getZoom() : 0;
         // ★ 无副作用观测钩子（同 `data-nav-zoom` 传统）：自动化验收读取实际生效的 zoom
         canvasRef.current?.setAttribute("data-nav-z", String(zoom));
+        // ★ 本批（需求② / AC-29~31）：**站点白名单**
+        //   · 宿主在路线查看 / 导航模式传入 `lineStops`（各腿站点并集）；
+        //   · 空集保护：`lineStops` 空 ⇒ 折成 null（不过滤）；路线模式回落 `routeStopsRef`。
+        const white =
+          lineStops && lineStops.size > 0
+            ? lineStops
+            : routeStopsRef.current.size > 0
+              ? routeStopsRef.current
+              : null;
+        // ★ 观测钩子 H3：站点图层过滤态（nav=白名单 / route=本线 / all=不过滤）
+        //   ⚠️ 契约（07 §1.1/§1.2）：**唯一挂载点 = `.nav-map` 根**（选择器 `.nav-map[data-station-layer]`）
+        rootRef.current?.setAttribute(
+          "data-station-layer",
+          lineStops && lineStops.size > 0 ? "nav" : routeStopsRef.current.size > 0 ? "route" : "all",
+        );
         // ★ 2026-09-22：路线模式下阈值放宽（否则长线缩到全澳后站点全消失，看不到高亮）
-        const minZoom = routeStopsRef.current.size > 0 ? STATION_MIN_ZOOM_ROUTE : STATION_MIN_ZOOM;
+        // ★ 本批：导航模式（白名单）同样放宽 —— 详情 fit-box 常在 zoom≈13 ⇒ 沿用路线档阈值
+        const routeMode = routeStopsRef.current.size > 0 || (!!lineStops && lineStops.size > 0);
+        const minZoom = routeMode ? STATION_MIN_ZOOM_ROUTE : STATION_MIN_ZOOM;
         if (zoom < minZoom) {
           clearAll(); // 拉远：清空（产品口径）
           return;
@@ -758,7 +973,10 @@ export default function NavMap({
         const sw = bounds.getSouthWest();
         const ne = bounds.getNorthEast();
         const visible = new Set<string>();
+        const stationMain = (c: string) => /^[A-Za-z]+\d+/.exec(String(c ?? ""))?.[0] ?? String(c ?? "");
         for (const s of data) {
+          // ★ 白名单外 ⇒ **不创建 marker**（数据层过滤，非 opacity/display 隐藏；AC-29）
+          if (white && !white.has(stationMain(s.code))) continue;
           if (s.lat < sw.lat || s.lat > ne.lat || s.lng < sw.lng || s.lng > ne.lng) continue;
           visible.add(s.code);
           if (stationMarkersRef.current.has(s.code)) continue;
@@ -875,8 +1093,11 @@ export default function NavMap({
      *   ⇒ **普通地图模式下站点图层从未启动**（拉近拉远都不显示；线上实测 `data-station-count` 恒为 null）。
      *   之所以一直没暴露：进出「路线查看模式」会触发 `stationRebuildTick` 重建，站点侥幸显示过一次。
      * ⇒ 补回 `phase`：loading → ready 时重新执行，图层正常启动。
+     *
+     * ★ 本批：依赖补 `lineStops` —— 白名单变化（进入/退出导航）时重建站点图层
+     *   （marker 的「建/不建」在创建时决定，必须重建才生效）。
      */
-  }, [phase, stationRebuildTick]);
+  }, [phase, stationRebuildTick, lineStops]);
 
   /**
    * ★ 2026-09-22：**路线查看模式** —— 画线 + 站点区分 + 自动装下整条线。
@@ -994,7 +1215,7 @@ export default function NavMap({
                 [Math.min(...lngs), Math.min(...lats)],
                 [Math.max(...lngs), Math.max(...lats)],
               );
-              map.setBounds(b, true, [40, 40, 40, 40]);
+              applyCamera(() => map.setBounds(b, true, [40, 40, 40, 40]));
             } catch {
               /* ignore */
             }
@@ -1010,7 +1231,7 @@ export default function NavMap({
     return () => {
       cancelled = true;
     };
-  }, [routeLine]);
+  }, [routeLine, applyCamera]);
 
   /**
    * ★ 2026-09-23：**路线总览绘制**（详情 pane）。
@@ -1057,9 +1278,14 @@ export default function NavMap({
 
   return (
     <div
+      ref={rootRef}
       className={`nav-map ${className}`}
       /* ★ 观测钩子（契约唯一名称）：data-map = ok|failed（地图可用性；区别于画布上的 data-map-mask） */
       data-map={phase === "failed" ? "failed" : phase === "ready" ? "ok" : undefined}
+      /* ★ 本批观测钩子：H1 由 effect 写、H2/H3 由事件与 render() 写；此处直接派生
+         H4 data-userdot（蓝点存在性）/ H9 data-vehicle-shown（在显车辆数）。 */
+      data-userdot={userFix ? "blue" : "none"}
+      data-vehicle-shown={String(vehicles.length)}
     >
       <div ref={canvasRef} className="nav-map__canvas" />
       {/* ★ 2026-09-23：在途巴士图标（**原生 AMap.Marker** + DOM content；拖拽期零 JS） */}
@@ -1084,6 +1310,18 @@ export default function NavMap({
         enabled={phase === "ready"}
         fix={userFix}
       />
+      {/* ★ 本批（需求① / AC-27）：让位锁恢复入口 —— free 态显示，点即恢复跟随 + 重放取景 */}
+      {followState === "free" && (
+        <button
+          type="button"
+          className="nav-map__recenter"
+          data-recenter="on"
+          onClick={restore}
+          aria-label="回到路线"
+        >
+          回到路线
+        </button>
+      )}
       {phase === "loading" && (
         <div className="nav-map__cover">
           <span className="rc-sk rc-sk--big" />

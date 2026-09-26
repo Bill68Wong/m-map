@@ -32,12 +32,24 @@ export interface FixLite {
 export const R2_WINDOW_MS = 45_000;
 export const R2_TOL_M = 80; // 巴士 R2 投影容差
 export const R2_LRT_TOL_M = 60; // 轻轨收紧档
-export const R2_DISPLACE_M = 150; // 沿线位移
+export const R2_DISPLACE_M = 150; // 沿线位移（保留：R2Opts 缺省用）
 export const R2_SPEED_MIN_KMH = 8;
 export const R2_SPEED_MAX_KMH = 80;
 export const R2_LRT_SPEED_MIN_KMH = 12;
 export const R2_MIN_SAMPLES_WITH_R1 = 2; // 有 R1 佐证
 export const R2_MIN_SAMPLES_ALONE = 3; // R2 单独判定
+
+/* ── ★ 本批 R2 自适应 + 多帧确认（需求⑨ / AC-56）── */
+/** 位移下限（米）——按 dt 缩放后的**下限**，保证 GPS 慢速漂移不被误判 */
+export const R2_DISPLACE_MIN_M = 60;
+/** 巴士速度下限（原 8 太严 ⇒ 上车瞬间低速被判漏）；轻轨仍用 R2_LRT_SPEED_MIN_KMH */
+export const R2_SPEED_MIN_KMH_FLEX = 5.5;
+/** `tol = max(基准容差, accuracy × 1.5)` —— 手机在车内定位精度差时的自适应 */
+export const R2_ACC_TOL_FACTOR = 1.5;
+/** 多帧确认：连续命中帧数（R1 strong 立即切换，不等 streak） */
+export const R2_STREAK = 2;
+/** 精度门（米）：单帧 accuracy 超此值 ⇒ 该帧不可信，不参与 R2 */
+export const R2_FIX_MAX_ACC_M = 150;
 
 /** 状态切换后的冷却（毫秒）—— 防抖 + 防死循环 */
 export const SWITCH_COOLDOWN_MS = 20_000;
@@ -155,6 +167,8 @@ export interface AutoBoardInput {
   nowMs: number;
   /** 本次会话该 leg 是否已自动触发过（单次会话单次） */
   autoUsed: boolean;
+  /** ★ 本批：调用方维护的连续命中帧数（多帧确认 R2_STREAK） */
+  streak?: number;
 }
 
 export interface AutoBoardResult {
@@ -162,44 +176,84 @@ export interface AutoBoardResult {
   plate: string | null;
   source: "vehicle" | "gps";
   reason: "r1" | "r1weak+r2" | "r2" | "none";
+  /** ★ 本批：更新后的连续命中帧数（`hit` 时累加，未命中归零） */
+  streak: number;
 }
 
-const NO_HIT: AutoBoardResult = { hit: false, plate: null, source: "vehicle", reason: "none" };
+/** 未命中基线（`streak` 由调用方覆盖） */
+const NO_HIT: AutoBoardResult = { hit: false, plate: null, source: "vehicle", reason: "none", streak: 0 };
+
+/** 取「可信帧」（accuracy ≤ 精度门；缺失按 0 视为可信） */
+function trustedFixes(fixes: FixLite[]): FixLite[] {
+  return fixes.filter((f) => !(Number.isFinite(f.accuracy) && f.accuracy > R2_FIX_MAX_ACC_M));
+}
+
+/** 由 GPS 采样自适应算 R2 阈值（tol 随 accuracy、displace 随 dt 缩放） */
+function adaptiveOpts(fixes: FixLite[], baseTolM: number): R2Opts {
+  const latest = fixes[fixes.length - 1] ?? null;
+  const acc = latest && Number.isFinite(latest.accuracy) ? latest.accuracy : 0;
+  const tol = Math.max(baseTolM, acc * R2_ACC_TOL_FACTOR);
+  const win = latest ? fixes.filter((f) => latest.ts - f.ts <= R2_WINDOW_MS) : [];
+  const dtSec = win.length >= 2 ? (win[win.length - 1].ts - win[0].ts) / 1000 : 0;
+  const displace = Math.max(R2_DISPLACE_MIN_M, (R2_SPEED_MIN_KMH_FLEX / 3.6) * dtSec);
+  return { tolM: tol, displaceM: displace };
+}
 
 export function autoBoardOf(input: AutoBoardInput): AutoBoardResult {
-  if (!AUTO_BOARDING_ENABLED) return NO_HIT;
-  if (input.autoUsed) return NO_HIT;
-  if (input.nowMs - input.lastSwitchTs < SWITCH_COOLDOWN_MS) return NO_HIT;
+  const prevStreak = Math.max(0, input.streak ?? 0);
+  if (!AUTO_BOARDING_ENABLED) return { ...NO_HIT, streak: 0 };
+  if (input.autoUsed) return { ...NO_HIT, streak: 0 };
+  if (input.nowMs - input.lastSwitchTs < SWITCH_COOLDOWN_MS) return { ...NO_HIT, streak: 0 };
 
   const geomOk = input.colored.length >= 2 && !input.legDegraded;
+  const fixes = trustedFixes(input.fixes); // ★ 精度门：剔除不可信帧
 
   if (input.legKind === "lrt") {
-    // 轻轨：仅 R2 收紧档（投影 ≤60m、速度 ≥12、采样 ≥3）
-    if (!geomOk) return NO_HIT;
-    const hit = r2Of(input.fixes, input.colored, {
-      tolM: R2_LRT_TOL_M,
+    // 轻轨：仅 R2 收紧档（投影 ≤60m、速度 ≥12、采样 ≥3）；tol 随 accuracy 自适应
+    if (!geomOk) return { ...NO_HIT, streak: 0 };
+    const opts = adaptiveOpts(fixes, R2_LRT_TOL_M);
+    const hit = r2Of(fixes, input.colored, {
+      tolM: opts.tolM,
+      displaceM: opts.displaceM,
       speedMinKmh: R2_LRT_SPEED_MIN_KMH,
       minSamples: R2_MIN_SAMPLES_ALONE,
     });
-    return hit ? { hit: true, plate: null, source: "gps", reason: "r2" } : NO_HIT;
+    return hit
+      ? { hit: true, plate: null, source: "gps", reason: "r2", streak: prevStreak + 1 }
+      : { ...NO_HIT, streak: 0 };
   }
 
   // 巴士：R1 优先
   const r1 = r1Of(input.vehicles, input.boardMain, input.boardPos);
   if (r1.kind === "strong") {
-    return { hit: true, plate: r1.plate, source: "vehicle", reason: "r1" };
+    return { hit: true, plate: r1.plate, source: "vehicle", reason: "r1", streak: prevStreak + 1 };
   }
-  if (!geomOk) return NO_HIT; // 几何缺失 ⇒ 退化为 R1-only（已判定无 strong）
+  if (!geomOk) return { ...NO_HIT, streak: 0 }; // 几何缺失 ⇒ 退化为 R1-only（已判定无 strong）
 
+  const opts = adaptiveOpts(fixes, R2_TOL_M);
   if (r1.kind === "weak") {
-    const ok = r2Of(input.fixes, input.colored, { minSamples: R2_MIN_SAMPLES_WITH_R1 });
-    if (ok) return { hit: true, plate: r1.plate, source: "vehicle", reason: "r1weak+r2" };
+    const ok = r2Of(fixes, input.colored, {
+      tolM: opts.tolM,
+      displaceM: opts.displaceM,
+      speedMinKmh: R2_SPEED_MIN_KMH_FLEX,
+      minSamples: R2_MIN_SAMPLES_WITH_R1,
+    });
+    if (ok) {
+      return { hit: true, plate: r1.plate, source: "vehicle", reason: "r1weak+r2", streak: prevStreak + 1 };
+    }
   }
   // R2 单独（无车牌，进度来源 = GPS）
-  if (r2Of(input.fixes, input.colored, { minSamples: R2_MIN_SAMPLES_ALONE })) {
-    return { hit: true, plate: null, source: "gps", reason: "r2" };
+  if (
+    r2Of(fixes, input.colored, {
+      tolM: opts.tolM,
+      displaceM: opts.displaceM,
+      speedMinKmh: R2_SPEED_MIN_KMH_FLEX,
+      minSamples: R2_MIN_SAMPLES_ALONE,
+    })
+  ) {
+    return { hit: true, plate: null, source: "gps", reason: "r2", streak: prevStreak + 1 };
   }
-  return NO_HIT;
+  return { ...NO_HIT, streak: 0 };
 }
 
 /* ══════════════════════════ 安全网 ══════════════════════════ */

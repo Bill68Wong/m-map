@@ -13,6 +13,7 @@
  * 设计：docs/设计-全澳导航-v1-20260918.md §C.6
  */
 import type { RecommendCard } from "@/lib/recommend/types";
+import { cmpByPref, PREF_DEFAULTS, type Prefs } from "@/lib/recommend/score";
 import type { AmapPlanSeed, RecomputeProvenance } from "./types";
 
 export interface RankedItem {
@@ -41,21 +42,21 @@ export function walkMetersOf(item: RankedItem): number {
   return o + i;
 }
 
-/** 按 §C.6 排序（返回新数组，稳定） */
-export function rankItems(items: RankedItem[]): RankedItem[] {
-  return [...items].sort((a, b) => {
-    // ① T_ours 升序
-    const dt = a.card.totalMin - b.card.totalMin;
-    if (Math.abs(dt) > 1e-9) return dt;
-    // ② 换乘次数升序
-    const dtr = transfersOf(a) - transfersOf(b);
-    if (dtr !== 0) return dtr;
-    // ③ 总步行量升序
-    const dw = walkMetersOf(a) - walkMetersOf(b);
-    if (dw !== 0) return dw;
-    // ④ 来源：高德优先
-    if (a.origin !== b.origin) return a.origin === "amap" ? -1 : 1;
-    // ⑤ planId 升序（稳定）
-    return a.card.planId - b.card.planId;
-  });
+/**
+ * 按用户偏好三档排序（返回新数组，稳定）。
+ *
+ * ★ B4（需求 8）：主判据由 `cmpByPref` 决定 ——
+ *   · `balanced`（缺省）：cost 升序（cost = totalMin + α·换乘 + (β−1)·步行 + 紧接换乘风险）；
+ *   · `fewer_transfers`：换乘次数升序（tie-break cost↑）；
+ *   · `less_walk`：步行量升序（tie-break cost↑）。
+ * 三档 tie-break 均**回收 `cost` 作次级判据**，末位保留既有「来源（高德优先）/ `planId`」稳定序。
+ *
+ * @param prefs 缺省 = `PREF_DEFAULTS.balanced`（与原「综合」档等价）
+ */
+export function rankItems(items: RankedItem[], prefs: Prefs = PREF_DEFAULTS.balanced): RankedItem[] {
+  // `cmpByPref` 以 **card** 为键，而来源（amap/local）挂在 `RankedItem` 上 ⇒ 先建 card→origin 查表
+  const originByCard = new Map<RecommendCard, "amap" | "local">();
+  for (const it of items) originByCard.set(it.card, it.origin);
+  const originOf = (c: RecommendCard): "amap" | "local" => originByCard.get(c) ?? "local";
+  return [...items].sort((a, b) => cmpByPref(a.card, b.card, prefs, originOf));
 }

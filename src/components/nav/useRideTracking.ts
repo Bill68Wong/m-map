@@ -20,6 +20,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CUT_TOLERANCE_M,
   cutAt,
+  fracBetween,
   mainOf,
   progressOf,
   rankBoardingVehicles,
@@ -27,11 +28,14 @@ import {
   type TrackVehicle,
 } from "@/lib/nav/track";
 import { advanceLrt, buildLrtLadder, type LrtLadder } from "@/lib/nav/lrt-progress";
+import { cumDistM, nearestOnPath } from "@/lib/nav/route-overview";
+import { autoAlightOf } from "@/lib/nav/alight-detect";
 import {
   ANOMALY_CONFIRM,
   ANOMALY_MIN_GAP_MS,
   autoBoardOf,
   anomalyOf,
+  R2_STREAK,
   type Anomaly,
   type AutoBoardResult,
   type FixLite,
@@ -47,6 +51,12 @@ const POLL_MS = 12_000;
 const MISS_LIMIT = 3;
 /** GPS 采样窗口保留时长（ms） */
 const FIX_KEEP_MS = 90_000;
+/** ★ 本批：蓝点吸附到线路投影的最大距离（米）——对不上就冻结（Token `--you-snap-max`） */
+const YOU_SNAP_MAX_M = 60;
+/** ★ 本批：蓝点精度门（米）——超过视为不可信 ⇒ 冻结 */
+const YOU_ACC_MAX_M = 150;
+/** ★ 本批：自动下车瞬态反馈停留时长（ms） */
+const JUST_ALIGHTED_MS = 5_000;
 
 /* ── 文案（去 AI 化；06 §4 最终文案表）── */
 const NOTE_NO_PROGRESS = "这段暂时看不到实时进度，请对照站名，快到了自己下车";
@@ -57,6 +67,23 @@ const NOTE_LRT_WEAK = "暂时收不到信号 · 位置停在上一站";
 const NOTE_FETCH_FAIL = "车辆数据获取失败，稍后自动重试";
 
 export type RidePhase = "off" | "boarding" | "riding" | "done";
+
+/** ★ 本批（需求⑤）：地图蓝点（视觉层 = GPS 投影；`frozen` = 冻结不跳） */
+export interface RideYouDot {
+  lng: number;
+  lat: number;
+  src: "gps";
+  /** 冻结（投影失败 / 精度差 / 无信号）——保留上次好点，不跳 */
+  frozen: boolean;
+  ts: number;
+  /** 水平精度（米；投影点沿用最近一帧 GPS，供 `UserDotLayer` 复用 `UserFix` 形状） */
+  accuracy: number;
+}
+/** ★ 本批（需求⑤）：纵条用户点（段内插值：`frac=0` 贴 `afterIdx` 站，`∈(0,1)` 位于区间内） */
+export interface RideYouAt {
+  afterIdx: number;
+  frac: number;
+}
 
 export interface RideTrackView {
   phase: RidePhase;
@@ -78,6 +105,14 @@ export interface RideTrackView {
   anomaly: "none" | "not_boarded" | "alighted";
   /** 上次数据帧时刻（ms）——新鲜度用 */
   lastUpdateTs: number;
+  /** ★ 本批：地图蓝点（riding 用投影点；非 riding = null ⇒ 宿主回落原始 GPS） */
+  youDot: RideYouDot | null;
+  /** ★ 本批：纵条段内插值用户点 */
+  youAt: RideYouAt | null;
+  /** ★ 本批：当前在显车辆（riding 按 plate 过滤 → 0/1 辆；AC-45/46） */
+  mapVehicles: VehicleLite[];
+  /** ★ 本批：自动下车瞬态（`data-track-state='alighted'` 窗口） */
+  justAlighted: boolean;
   onStart: () => void;
   onStop: () => void;
   onBoard: () => void;
@@ -88,6 +123,8 @@ export interface RideTrackView {
   onNotArrive: () => void;
   onNotThisBus: () => void;
   onDismissAnomaly: () => void;
+  /** ★ 本批：撤销自动下车（仅最后一次自动下车可撤销；AC-56） */
+  onUndoAlight: () => void;
 }
 
 export interface UseRideTrackingOpts {
@@ -125,6 +162,15 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
   const [progressSource, setProgressSource] = useState<"vehicle" | "gps">("vehicle");
   const [anomaly, setAnomaly] = useState<Anomaly>("none");
   const [lastUpdateTs, setLastUpdateTs] = useState(0);
+  /** ★ 本批：车辆帧序号（`mapVehicles` 随 12s 帧重算，AC-46） */
+  const [listTick, setListTick] = useState(0);
+  /** ★ 本批：站点里程阶梯版本（ladder 就绪后触发 `youAt` 重算） */
+  const [ladderTick, setLadderTick] = useState(0);
+  /** ★ 本批：自动下车瞬态（≤5s；`data-track-state='alighted'`） */
+  const [justAlighted, setJustAlighted] = useState(false);
+  /** ★ 本批：蓝点 / 纵条用户点 */
+  const [youDot, setYouDot] = useState<RideYouDot | null>(null);
+  const [youAt, setYouAt] = useState<RideYouAt | null>(null);
 
   const vehicleRef = useRef<TrackVehicle | null>(null);
   const missRef = useRef(0);
@@ -146,6 +192,28 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
   const lastAnomalyTsRef = useRef(0);
   /** 进入 riding 时的起点（判定「已推进 ≥1 站」） */
   const ridingStartIdxRef = useRef(-1);
+  /** ★ 本批：最近一次「好蓝点」（投影失败 / 无信号 ⇒ 冻结不跳） */
+  const lastGoodDotRef = useRef<RideYouDot | null>(null);
+  /** ★ 本批：自动下车连续命中帧数 */
+  const alightStreakRef = useRef(0);
+  /** ★ 本批：自动上车连续命中帧数（多帧确认 R2_STREAK） */
+  const boardStreakRef = useRef(0);
+  /** ★ 本批：自动下车瞬态计时器 */
+  const justAlightedTimerRef = useRef<number | null>(null);
+  /** ★ 本批：自动下车撤销快照（仅最后一次自动下车可撤销） */
+  const undoRef = useRef<{
+    legIndex: number;
+    phase: RidePhase;
+    plate: string | null;
+    prog: TrackProgress | null;
+    traveled: LL[] | null;
+    candidates: { plate: string; hint: string }[];
+    progressSource: "vehicle" | "gps";
+    ladder: LrtLadder | null;
+    lrtState: { passedIdx: number; computed: number; dist: number; ts: number; badStreak: number };
+  } | null>(null);
+  /** ★ 本批：车辆帧顶层运营商（供 mapVehicles 涂装色） */
+  const lastCompanyRef = useRef<string | null>(null);
 
   const stopMains = useMemo(() => {
     const s = strips?.[legIndex];
@@ -157,6 +225,31 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
     () => (boardAnchor ? { lng: boardAnchor.lng, lat: boardAnchor.lat } : null),
     [boardAnchor],
   );
+
+  /**
+   * ★ 本批（需求⑥ / AC-45/46）：**在显车辆** —— riding 时按 `plate` 过滤 ⇒ 0/1 辆；
+   *   随 12s 帧（`listTick`）重算 ⇒ `VehicleLayer` 重定位（不再只拉一次）。
+   *   非 riding（boarding/off/done）⇒ `[]`。
+   */
+  const mapVehicles = useMemo<VehicleLite[]>(() => {
+    if (phase !== "riding" || !plate) return [];
+    const v = listRef.current.find((x) => x.plate === plate);
+    if (!v) return [];
+    return [
+      {
+        plate: v.plate,
+        lat: v.lat,
+        lng: v.lng,
+        status: (v.status as VehicleLite["status"]) ?? "unknown",
+        interval: v.interval
+          ? { from: { code: v.interval.from.code, name: "" }, to: { code: v.interval.to?.code ?? "", name: "" } }
+          : null,
+        atStation: v.atStation ? { code: v.atStation.code, name: "" } : null,
+        company: lastCompanyRef.current ?? undefined,
+      },
+    ];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, plate, listTick]);
 
   /** 更新 GPS 采样缓冲 */
   useEffect(() => {
@@ -190,6 +283,20 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
     lastSwitchTsRef.current = 0;
     anomalyStreakRef.current = 0;
     ridingStartIdxRef.current = -1;
+    // ★ 本批
+    lastGoodDotRef.current = null;
+    alightStreakRef.current = 0;
+    boardStreakRef.current = 0;
+    undoRef.current = null;
+    if (justAlightedTimerRef.current) {
+      window.clearTimeout(justAlightedTimerRef.current);
+      justAlightedTimerRef.current = null;
+    }
+    setJustAlighted(false);
+    setYouDot(null);
+    setYouAt(null);
+    setListTick(0);
+    setLadderTick(0);
   }, []);
 
   useEffect(() => {
@@ -261,6 +368,7 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
     const stops = (strips?.[legIndex]?.stops ?? []).map((s) => map.get(mainOf(s.code)) ?? null);
     ladderRef.current = buildLrtLadder(leg.colored, stops);
     lrtStateRef.current = { passedIdx: -1, computed: -1, dist: 0, ts: 0, badStreak: 0 };
+    setLadderTick((t) => t + 1); // 阶梯就绪 → 触发 youAt 重算
   }, [legs, legIndex, strips, ensureStationMap]);
 
   /** 拉一帧车辆数据 */
@@ -278,7 +386,7 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
           `/api/route-vehicles?code=${encodeURIComponent(leg.route)}&dir=${encodeURIComponent(dir)}&kind=bus`,
           { cache: "no-store" },
         );
-        const j = (await r.json()) as { vehicles?: VehicleLite[] };
+        const j = (await r.json()) as { vehicles?: VehicleLite[]; company?: string | null };
         const list: TrackVehicle[] = (j.vehicles ?? []).map((v) => ({
           plate: v.plate,
           lat: v.lat,
@@ -288,7 +396,9 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
           atStation: v.atStation ?? null,
         }));
         listRef.current = list;
+        lastCompanyRef.current = j.company ?? null; // ★ 本批：帧顶层运营商（mapVehicles 涂装色）
         setLastUpdateTs(Date.now());
+        setListTick((t) => t + 1); // ★ 本批：触发 mapVehicles 重算（AC-46）
 
         const boardMain = stopsBoard(strips, legIndex) || mainOf(anchors?.[legIndex]?.board?.code ?? "");
         if (!lockPlate) {
@@ -311,12 +421,8 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
         const p = progressOf(stopMains, v);
         if (p.kind === "at" || p.kind === "between") setProg(p);
 
-        if (leg.colored.length >= 2 && !leg.degraded) {
-          const cut = cutAt(leg.colored, { lng: v.lng, lat: v.lat });
-          if (cut.dist <= CUT_TOLERANCE_M && cut.idx >= 1) {
-            setTraveled([...leg.colored.slice(0, cut.idx + 1), [v.lng, v.lat] as LL]);
-          }
-        }
+        // ★ 本批（07 §c.4 裁定）：**视觉层（已驶过灰线 + 蓝点）一律用 GPS 切割**
+        //   —— 车辆帧**不再**更新 `traveled`（逻辑层进度仍以车辆为权威）。
       } catch {
         setNote(NOTE_FETCH_FAIL);
       } finally {
@@ -352,11 +458,12 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
       setAlarm("none");
       setAnomaly("none");
       anomalyStreakRef.current = 0;
+      boardStreakRef.current = 0; // ★ 本批：切换后清零多帧确认计数
+      alightStreakRef.current = 0;
       void reason;
-      if (source === "gps" || lrt) {
-        ladderRef.current = null;
-        void ensureLadder();
-      }
+      // ★ 本批：**任何来源**都建一次站点里程阶梯（供纵条 youAt / 自动下车判定）
+      ladderRef.current = null;
+      void ensureLadder();
     },
     [legs, legIndex, ensureLadder],
   );
@@ -377,17 +484,31 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
       lastSwitchTs: lastSwitchTsRef.current,
       nowMs: Date.now(),
       autoUsed: autoUsedRef.current,
+      streak: boardStreakRef.current,
     });
-    if (res.hit) switchToRiding(res.plate, res.source, res.reason);
+    // ★ 本批（AC-56）：R1 strong 立即切换；R2 / R1weak+R2 需连续 ≥R2_STREAK 帧确认
+    boardStreakRef.current = res.streak;
+    if (!res.hit) return;
+    if (res.reason === "r1" || res.streak >= R2_STREAK) {
+      switchToRiding(res.plate, res.source, res.reason);
+    }
   }, [phase, active, legs, legIndex, strips, anchors, boardPos, switchToRiding]);
 
-  /* 候车态：拉候选；并在车辆帧到位时尝试自动切换 */
+  /* 候车态：拉候选（★ 本批：**12s 持续轮询**，非只拉一帧 —— 上车灵敏度，AC-56）；
+     并在车辆帧到位时尝试自动切换。purpose 复用 `live_pos`（服务端只记账、不参与熔断）。 */
   useEffect(() => {
     if (phase !== "boarding" || !active || !legs[legIndex]) return;
     void (async () => {
       await fetchFrame(null);
       tryAuto();
     })();
+    const t = window.setInterval(() => {
+      void (async () => {
+        await fetchFrame(null);
+        tryAuto();
+      })();
+    }, POLL_MS);
+    return () => window.clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, active, legIndex]);
 
@@ -405,42 +526,42 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
     return () => window.clearInterval(t);
   }, [phase, plate, active, fetchFrame]);
 
-  /* GPS 驱动推进（无车牌 / 轻轨）：用 userFix 推站序进度 + 已驶过切割 */
+  /* GPS 驱动推进（无车牌 / 轻轨）：用 userFix 推站序进度；★ 视觉层（已驶过灰线）**一律 GPS 切割** */
   useEffect(() => {
     if (phase !== "riding" || !active || !userFix) return;
     const leg = legs[legIndex];
     if (!leg) return;
     const gpsDriven = progressSource === "gps" || !plate;
     if (gpsDriven) {
-      if (!ladderRef.current) {
+      if (ladderRef.current) {
+        const res = advanceLrt({
+          prevPassedIdx: lrtStateRef.current.passedIdx,
+          prevComputed: lrtStateRef.current.computed,
+          prevDist: lrtStateRef.current.dist,
+          prevTs: lrtStateRef.current.ts,
+          badStreak: lrtStateRef.current.badStreak,
+          ladder: ladderRef.current,
+          fix: { lng: userFix.lng, lat: userFix.lat, accuracy: userFix.accuracy, ts: userFix.ts },
+        });
+        lrtStateRef.current = {
+          passedIdx: res.passedIdx,
+          computed: res.computed,
+          dist: res.distNow,
+          ts: res.ts,
+          badStreak: res.badStreak,
+        };
+        if (res.progress.kind !== "lost") setProg(res.progress);
+        if (res.frozen && res.badStreak >= 2) setNote(NOTE_LRT_WEAK);
+        else if (!res.frozen && note === NOTE_LRT_WEAK) setNote("");
+      } else {
         void ensureLadder();
-        return;
       }
-      const res = advanceLrt({
-        prevPassedIdx: lrtStateRef.current.passedIdx,
-        prevComputed: lrtStateRef.current.computed,
-        prevDist: lrtStateRef.current.dist,
-        prevTs: lrtStateRef.current.ts,
-        badStreak: lrtStateRef.current.badStreak,
-        ladder: ladderRef.current,
-        fix: { lng: userFix.lng, lat: userFix.lat, accuracy: userFix.accuracy, ts: userFix.ts },
-      });
-      lrtStateRef.current = {
-        passedIdx: res.passedIdx,
-        computed: res.computed,
-        dist: res.distNow,
-        ts: res.ts,
-        badStreak: res.badStreak,
-      };
-      if (res.progress.kind !== "lost") setProg(res.progress);
-      if (res.frozen && res.badStreak >= 2) setNote(NOTE_LRT_WEAK);
-      else if (!res.frozen && note === NOTE_LRT_WEAK) setNote("");
-      // 已驶过切割（GPS 投影）——仅 GPS 驱动时更新，避免与车辆切割抖动
-      if (leg.colored.length >= 2 && !leg.degraded) {
-        const cut = cutAt(leg.colored, { lng: userFix.lng, lat: userFix.lat });
-        if (cut.dist <= CUT_TOLERANCE_M && cut.idx >= 1) {
-          setTraveled([...leg.colored.slice(0, cut.idx + 1), [userFix.lng, userFix.lat] as LL]);
-        }
+    }
+    // ★ 本批（07 §c.4 裁定）：视觉层（灰线）**与蓝点同源 = GPS 切割**（不再用车辆切割）。
+    if (leg.colored.length >= 2 && !leg.degraded) {
+      const cut = cutAt(leg.colored, { lng: userFix.lng, lat: userFix.lat });
+      if (cut.dist <= CUT_TOLERANCE_M && cut.idx >= 1) {
+        setTraveled([...leg.colored.slice(0, cut.idx + 1), [userFix.lng, userFix.lat] as LL]);
       }
     }
     setLastUpdateTs(Date.now());
@@ -498,6 +619,72 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
     }
     if (anomalyStreakRef.current >= ANOMALY_CONFIRM) setAnomaly(a);
   }, [phase, prog, userFix, anomaly, autoSwitched, progressSource, legs, legIndex]);
+
+  /**
+   * ★ 本批（需求⑤ / AC-40~44）：**蓝点 + 纵条用户点**（视觉层 = GPS 投影；逻辑层不动）。
+   *   · 蓝点：`nearestOnPath` 吸附（≤60m）；投影失败 / accuracy>150 / 无信号 ⇒ **冻结不跳**；
+   *   · 纵条：`youAt`（段内插值 `frac`）—— 停靠中贴在节点、行驶中骑线插值。
+   *   ⚠️ 两者**只作视觉**，不参与 `passedIdx/atIdx/nextIdx` 判定（避免两套口径打架）。
+   */
+  useEffect(() => {
+    if (phase !== "riding" || !active) {
+      lastGoodDotRef.current = null;
+      setYouDot(null);
+      setYouAt(null);
+      return;
+    }
+    const leg = legs[legIndex];
+    if (!leg || leg.colored.length < 2 || leg.degraded) {
+      setYouDot(null);
+      setYouAt(null);
+      return;
+    }
+
+    // ── 蓝点（GPS 投影 + 冻结）──
+    let dot: RideYouDot | null = null;
+    if (userFix) {
+      const accOk = !(Number.isFinite(userFix.accuracy) && userFix.accuracy > YOU_ACC_MAX_M);
+      if (accOk) {
+        const proj = nearestOnPath(leg.colored, { lng: userFix.lng, lat: userFix.lat });
+        if (proj.distM <= YOU_SNAP_MAX_M) {
+          const p = leg.colored[proj.idx];
+          dot = { lng: p[0], lat: p[1], src: "gps", frozen: false, ts: userFix.ts, accuracy: userFix.accuracy };
+          lastGoodDotRef.current = dot;
+        }
+      }
+    }
+    if (!dot && lastGoodDotRef.current) dot = { ...lastGoodDotRef.current, frozen: true };
+    setYouDot(dot);
+
+    // ── 纵条 youAt（段内插值）──
+    const lastIdx = stopMains.length - 1;
+    if (!prog || lastIdx < 1) {
+      setYouAt(null);
+      return;
+    }
+    if (prog.atIdx !== null) {
+      setYouAt({ afterIdx: prog.atIdx, frac: 0 }); // 停靠中：点贴节点
+      return;
+    }
+    const i0 = prog.passedIdx;
+    if (i0 < 0) {
+      setYouAt({ afterIdx: -1, frac: 0 }); // 尚未到上车站
+      return;
+    }
+    const cum = ladderRef.current && ladderRef.current.ladder.length ? ladderRef.current.ladder : null;
+    let dNow: number | null = null;
+    if (progressSource === "gps") {
+      dNow = lrtStateRef.current.dist > 0 ? lrtStateRef.current.dist : null;
+    } else {
+      const v = vehicleRef.current;
+      if (v) {
+        const c = cumDistM(leg.colored);
+        dNow = c[nearestOnPath(leg.colored, { lng: v.lng, lat: v.lat }).idx];
+      }
+    }
+    const frac = cum && dNow != null ? fracBetween(cum, i0, i0 + 1, dNow) : 0;
+    setYouAt({ afterIdx: i0, frac });
+  }, [phase, active, userFix, legs, legIndex, prog, progressSource, stopMains, listTick, ladderTick]);
 
   /* ── 操作 ── */
   const start = useCallback(() => {
@@ -564,13 +751,16 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
         setPlate(ranked[0].plate);
         setProgressSource("vehicle");
         ridingStartIdxRef.current = -1;
+        setListTick((t) => t + 1);
+        ladderRef.current = null;
+        void ensureLadder(); // ★ 本批：手动上车也建阶梯（youAt / 自动下车）
       } catch {
         setNote("车辆数据获取失败，请稍后重试");
       } finally {
         setTraveling(false);
       }
     })();
-  }, [legs, legIndex, strips, boardPos, anchors, switchToRiding]);
+  }, [legs, legIndex, strips, boardPos, anchors, switchToRiding, ensureLadder]);
 
   const repick = useCallback((p: string) => {
     setPlate(p);
@@ -579,36 +769,97 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
     setNote("");
     setProg(null);
     setTraveled(null);
+    boardStreakRef.current = 0;
     lastSwitchTsRef.current = Date.now();
   }, []);
 
-  const alight = useCallback(() => {
-    const total = card?.rides.length ?? 1;
-    setProg(null);
-    setTraveled(null);
+  /**
+   * 下车推进（手动 / 自动共用）。
+   * @param auto 自动判定触发 —— `true` 时保存撤销快照 + 置瞬态 `justAlighted`（≤5s）
+   */
+  const doAlight = useCallback(
+    (auto: boolean) => {
+      const total = card?.rides.length ?? 1;
+      if (auto) {
+        // ★ 撤销快照（在推进**前**保存）
+        undoRef.current = {
+          legIndex,
+          phase,
+          plate,
+          prog,
+          traveled,
+          candidates,
+          progressSource,
+          ladder: ladderRef.current,
+          lrtState: { ...lrtStateRef.current },
+        };
+        setJustAlighted(true);
+        if (justAlightedTimerRef.current) window.clearTimeout(justAlightedTimerRef.current);
+        justAlightedTimerRef.current = window.setTimeout(() => {
+          setJustAlighted(false);
+          justAlightedTimerRef.current = null;
+        }, JUST_ALIGHTED_MS);
+      }
+      setProg(null);
+      setTraveled(null);
+      setAlarm("none");
+      alarmRef.current = "none";
+      setPlate(null);
+      setAnomaly("none");
+      setAutoSwitched(false);
+      setAutoNote("");
+      anomalyStreakRef.current = 0;
+      vehicleRef.current = null;
+      missRef.current = 0;
+      ladderRef.current = null;
+      lrtStateRef.current = { passedIdx: -1, computed: -1, dist: 0, ts: 0, badStreak: 0 };
+      alightStreakRef.current = 0;
+      boardStreakRef.current = 0;
+      buzz([120, 60, 120]);
+      if (legIndex + 1 < total) {
+        setLegIndex((i) => i + 1);
+        setPhase("boarding");
+        autoUsedRef.current = false;
+        lastSwitchTsRef.current = 0;
+        setNote("");
+      } else {
+        setPhase("done");
+        releaseWake();
+      }
+    },
+    [card, legIndex, phase, plate, prog, traveled, candidates, progressSource, buzz, releaseWake],
+  );
+
+  /** 手动「我已下车」 */
+  const alight = useCallback(() => doAlight(false), [doAlight]);
+
+  /** ★ 本批：撤销自动下车（仅最后一次自动下车可撤销；撤销后清空快照） */
+  const onUndoAlight = useCallback(() => {
+    const u = undoRef.current;
+    if (!u) return;
+    undoRef.current = null;
+    if (justAlightedTimerRef.current) {
+      window.clearTimeout(justAlightedTimerRef.current);
+      justAlightedTimerRef.current = null;
+    }
+    setJustAlighted(false);
+    setLegIndex(u.legIndex);
+    setPhase(u.phase);
+    setPlate(u.plate);
+    setProg(u.prog);
+    setTraveled(u.traveled);
+    setCandidates(u.candidates);
+    setProgressSource(u.progressSource);
     setAlarm("none");
     alarmRef.current = "none";
-    setPlate(null);
     setAnomaly("none");
-    setAutoSwitched(false);
-    setAutoNote("");
     anomalyStreakRef.current = 0;
-    vehicleRef.current = null;
-    missRef.current = 0;
-    ladderRef.current = null;
-    lrtStateRef.current = { passedIdx: -1, computed: -1, dist: 0, ts: 0, badStreak: 0 };
-    buzz([120, 60, 120]);
-    if (legIndex + 1 < total) {
-      setLegIndex((i) => i + 1);
-      setPhase("boarding");
-      autoUsedRef.current = false;
-      lastSwitchTsRef.current = 0;
-      setNote("");
-    } else {
-      setPhase("done");
-      releaseWake();
-    }
-  }, [card, legIndex, buzz, releaseWake]);
+    alightStreakRef.current = 0;
+    boardStreakRef.current = 0;
+    ladderRef.current = u.ladder;
+    lrtStateRef.current = { ...u.lrtState };
+    autoUsedRef.current = true; // 撤销后不再自动（防抖）
+  }, []);
 
   const onRefresh = useCallback(() => {
     if (phase === "riding" && plate) void fetchFrame(plate);
@@ -652,6 +903,39 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
     anomalyStreakRef.current = 0;
   }, []);
 
+  /**
+   * ★ 本批（需求⑨ / AC-55）：**全自动下车** effect。
+   *   · 车辆源：车停靠本段下车站（多帧确认）；GPS 源：沿线里程越过下车站 ≥30m；
+   *   · 环线（首尾同站）恒不判；冻结（丢信号 / 车辆丢失 3 帧 / 轻轨 badStreak≥2）不判；
+   *   · 命中 ⇒ `doAlight(true)`（保存撤销快照 + 瞬态反馈）。
+   */
+  useEffect(() => {
+    if (phase !== "riding" || !active) return;
+    const leg = legs[legIndex];
+    if (!leg) return;
+    const stopMainsLocal = strips?.[legIndex]?.stops.map((s) => mainOf(s.code)) ?? [];
+    const lastIdx = stopMainsLocal.length - 1;
+    const loop = stopMainsLocal.length > 1 && stopMainsLocal[0] === stopMainsLocal[lastIdx];
+    const frozen =
+      progressSource === "vehicle" ? missRef.current >= MISS_LIMIT : lrtStateRef.current.badStreak >= 2;
+    const dNow = progressSource === "gps" ? (lrtStateRef.current.dist > 0 ? lrtStateRef.current.dist : null) : null;
+    const dAlightRaw = ladderRef.current ? ladderRef.current.ladder[lastIdx] : undefined;
+    const dAlight = typeof dAlightRaw === "number" && Number.isFinite(dAlightRaw) ? dAlightRaw : null;
+    const r = autoAlightOf({
+      source: progressSource,
+      lastIdx,
+      atIdx: prog?.atIdx ?? null,
+      passedIdx: prog?.passedIdx ?? -1,
+      dNow,
+      dAlight,
+      loop,
+      frozen,
+      streak: alightStreakRef.current,
+    });
+    alightStreakRef.current = r.streak;
+    if (r.hit) doAlight(true);
+  }, [phase, active, prog, userFix, legIndex, progressSource, strips, legs, doAlight]);
+
   return {
     phase,
     legIndex,
@@ -667,6 +951,10 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
     progressSource,
     anomaly,
     lastUpdateTs,
+    youDot,
+    youAt,
+    mapVehicles,
+    justAlighted,
     onStart: start,
     onStop: stop,
     onBoard: board,
@@ -677,6 +965,7 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
     onNotArrive,
     onNotThisBus,
     onDismissAnomaly,
+    onUndoAlight,
   };
 }
 

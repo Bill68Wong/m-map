@@ -41,8 +41,22 @@ import { LrtEtaInline } from "./LrtEta";
 import RouteStack from "./RouteStack";
 import { EtaText, macauClock, Row, TierBadge } from "./RoutePieces";
 import { buildCardHref } from "@/lib/recommend/card-link";
+import { TRANSFER_SAFETY_MIN } from "@/lib/recommend/score";
 import { usePressGuard } from "@/lib/use-press-guard";
 import type { RecommendCard as CardData, SchoolZone } from "@/lib/recommend/types";
+
+/** ★ 本批（AC-50）：换乘可行性（`H8 data-transfer-feasible`）——取**最差**一张换乘。 */
+function transferFeasibleOf(card: CardData): "yes" | "tight" | "no" {
+  let worst: "yes" | "tight" | "no" = "yes";
+  for (const t of card.transfers) {
+    if (t.slackMin == null) continue;
+    const v: "yes" | "tight" | "no" =
+      t.slackMin < 0 ? "no" : t.slackMin < TRANSFER_SAFETY_MIN ? "tight" : "yes";
+    if (v === "no") return "no";
+    if (v === "tight") worst = "tight";
+  }
+  return worst;
+}
 
 export default function RecommendCard({
   card,
@@ -86,6 +100,8 @@ export default function RecommendCard({
   const press = usePressGuard();
   const colorOf = (c: string) => colors[c] ?? null;
   const first = card.rides[0];
+  /** ★ 本批（AC-50）：换乘可行性（观测钩子 H8 取值） */
+  const transferFeasible = transferFeasibleOf(card);
   /** ★ v2.4.1：下车站取**末段**（旧版取首段 ⇒ 换乘路线把换乘站当下车站显示） */
   const last = card.rides[card.rides.length - 1];
   const hasAlts = (card.altBuses?.length ?? 0) > 0;
@@ -137,6 +153,10 @@ export default function RecommendCard({
       className="card rc anim-fade-up"
       role="button"
       tabIndex={0}
+      /* ★ 本批（需求⑦ / AC-50）：观测钩子 H8 `data-transfer-feasible`
+         —— 由 `card.transfers[].slackMin` 派生（取**最差**）：null ⇒ yes / <0 ⇒ no /
+            < TRANSFER_SAFETY_MIN(3) ⇒ tight / 否则 yes。 */
+      data-transfer-feasible={transferFeasible}
       onPointerDown={press.onPointerDown}
       onPointerMove={press.onPointerMove}
       onClick={onClick}

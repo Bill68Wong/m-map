@@ -36,6 +36,7 @@ import { fetchLive } from "@/lib/recommend/live";
 import { amapPlanToSeed, modelOption, type ModeledOption } from "@/lib/recommend/model";
 import { contextFor, loadStatics, type RecStatic } from "@/lib/recommend/query";
 import { loadHeadway } from "@/lib/recommend/headway";
+import { PREF_DEFAULTS, type Prefs } from "@/lib/recommend/score";
 import { mainCodeOf } from "@/lib/recommend/segment-lookup";
 import type { AltBusView, OptionSeed, RecommendCard, SchoolZone } from "@/lib/recommend/types";
 import { candidatesToSeeds, chainToCandidates, pathsToCandidates, LOCAL_SUMMARY } from "./enumerate-nav";
@@ -80,6 +81,12 @@ export interface NavInput {
   walk?: WalkOverride;
   /** ★ v2.3.0：五档覆盖（仅在 `chain` 非空时生效） */
   tiers?: TierOverride;
+  /**
+   * ★ B4（需求 8）：**用户偏好三档**（`balanced` 默认 / `fewer_transfers` / `less_walk`）。
+   *   缺省 ⇒ `PREF_DEFAULTS.balanced`（cost 升序，与「综合」档等价）。
+   *   ⚠️ 偏好只影响**排序**（`rankItems` / `sortCards`）；**不进** `switch-plans` 组内排序。
+   */
+  prefs?: Prefs;
 }
 
 export interface NavStats {
@@ -348,6 +355,8 @@ export async function planNav(pool: Pool, input: NavInput): Promise<NavOutput> {
   const chain = input.chain && input.chain.length >= 2 ? input.chain : undefined;
   const chainMode = !!chain;
   const tierOverride = chainMode ? tierSpeedOverrideOf(input.tiers) : undefined;
+  // ★ B4（需求 8）：偏好三档（缺省 balanced）
+  const prefs = input.prefs ?? PREF_DEFAULTS.balanced;
 
   // ① 静态
   const tStatic = Date.now();
@@ -473,19 +482,23 @@ export async function planNav(pool: Pool, input: NavInput): Promise<NavOutput> {
   // ⑥ 实时（两来源共用一次）
   const tLive = Date.now();
   const weekday = new Date(nowMs + 8 * 3_600_000).getUTCDay();
+  // ★ B4（需求 7）：发车间隔索引 —— 既供 `fetchLive` 做「未发车估算」（旧行为），
+  //   **也注入 `ModelContext.headway`** 供 `model.ts` 第 2 段巴士等车按到达时刻查班距（§h.2）。
+  //   失败/表不存在 ⇒ `loadHeadway` 内部兜底（空索引）⇒ 第 2 段等车明示降级（waitMin=null）。
+  const headway = await loadHeadway(pool);
   const batch = await fetchLive(pool, allSeeds, st.routeIdx, st.segIdx, {
     todayWeekday: weekday,
     nowMs,
     lrtPre: st.lrtPre,
     // ★ 2026-09-21：发车间隔索引 ⇒ 让「本方向无在途车」的线路也能出卡（估算等待时间，见 live.ts）。
     //   失败/表不存在 ⇒ loadHeadway 内部已兜底（返回空索引）⇒ 退化为旧行为，不影响出卡。
-    headway: await loadHeadway(pool),
+    headway,
   });
   const liveMs = Date.now() - tLive;
   // ★ v2.4.1：`destLabel` = 目的地展示名 —— 供 `model.ts` 把末段步行文案写成
   //   「步行 N 分 → 目的地」。**必须由这里显式传入**：本链路的 `toSlug` 对非预设地点
   //   会兜底成 `"place"`，模型层靠 slug 反查只能得到 slug 原文。
-  const baseCtx = { ...contextFor(st, nowMs, zone, batch.live), tierOverride, destLabel: dest.label };
+  const baseCtx = { ...contextFor(st, nowMs, zone, batch.live), tierOverride, destLabel: dest.label, headway };
 
   // ⑦ 建模
   const tModel = Date.now();
@@ -555,11 +568,11 @@ export async function planNav(pool: Pool, input: NavInput): Promise<NavOutput> {
   // ⑧ 合并 + 排序
   //   ★ chain 模式：站链由用户显式指定 ⇒ **不过本地补漏质量闸门**（覆盖度/补漏语义不适用），
   //     直接把链候选送入统一排优；缺省模式仍走 `mergeSources` 闸门（口径不变）。
-  const rankedLocal = rankItems(localItems);
+  const rankedLocal = rankItems(localItems, prefs);
   const merged = chainMode
     ? { items: rankedLocal, dropped: [] as { key: string; reason: string }[], localCap: Number.POSITIVE_INFINITY }
     : mergeSources(amapItems, rankedLocal, {});
-  const ranked = rankItems(merged.items);
+  const ranked = rankItems(merged.items, prefs);
   const cards = ranked.slice(0, limit).map((r) => r.card);
 
   // ★ P2-a：回填「本班之外的后续班次」（**逐字复用旧 `service.ts` v1.1.5 口径**）

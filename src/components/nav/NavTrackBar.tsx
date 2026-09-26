@@ -4,8 +4,13 @@
  * 吸底操作条（src/components/nav/NavTrackBar.tsx，2026-09-25 · v2.14 · 06 §2.1 / AC-16/23/24）
  *
  * ── 结构（吸底，含安全区）────────────────────────────────────────────
- *   状态行：`● 状态 · 车牌/线路` + **来源标签**（AC-23）+ 右侧「下一站 / 新鲜度」（AC-24，紧急信息优先）；
+ *   状态行：`● 状态 · 车牌/线路` + **来源标签**（AC-23）+ 右侧「即将到达 / 新鲜度」
+ *   （★ 本批 AC-33：**去掉重复的「下一站」** —— 下一站唯一来源 = 纵条 `.navstrip__badge`）；
  *   按钮行：主按钮（我已下车）+ 文字纠错（不是这辆 / 还没到）+ 图标刷新。
+ *
+ * ── 挂载位置（★ 本批）────────────────────────────────────────────────
+ *   由 `RouteSheet` 渲染在 **`.route-sheet__actions-slot`**（面板根，`transform` 同上下文，AC-58）；
+ *   本组件只负责内容，不再自持 `position: sticky` 定位。
  *
  * ── 常驻纠错入口（07 §1.5）────────────────────────────────────────────
  *   安全网检出 `anomaly` 时**不静默**：状态行右侧给中性提示 + 对应纠错按钮高亮。
@@ -24,8 +29,6 @@ export interface NavTrackBarProps {
   routeLabel: string;
   /** 上车站显示名（等车态） */
   boardLabel: string;
-  /** 下一站显示名 */
-  nextLabel: string;
   /** 下车站显示名 */
   alightLabel: string;
   plate: string | null;
@@ -41,6 +44,8 @@ export interface NavTrackBarProps {
   note: string;
   /** 新鲜度（秒）；null = 不显示 */
   freshSec: number | null;
+  /** ★ 本批：自动下车瞬态（用于 `data-track-state='alighted'`，AC-55/56） */
+  justAlighted?: boolean;
   onStart: () => void;
   onBoard: () => void;
   onAlight: () => void;
@@ -64,7 +69,6 @@ export default function NavTrackBar(props: NavTrackBarProps) {
     phase,
     routeLabel,
     boardLabel,
-    nextLabel,
     alightLabel,
     plate,
     source,
@@ -74,6 +78,7 @@ export default function NavTrackBar(props: NavTrackBarProps) {
     anomaly,
     note,
     freshSec,
+    justAlighted = false,
     onStart,
     onBoard,
     onAlight,
@@ -118,7 +123,7 @@ export default function NavTrackBar(props: NavTrackBarProps) {
         </>
       );
     }
-    right = alarm === "soon" ? `即将到达 ${alightLabel}` : nextLabel ? `下一站 ${nextLabel}` : null;
+    right = alarm === "soon" ? `即将到达 ${alightLabel}` : null;
   } else {
     left = <>已到达目的地</>;
   }
@@ -131,7 +136,7 @@ export default function NavTrackBar(props: NavTrackBarProps) {
     anomaly === "not_boarded" ? "疑似还没上车" : anomaly === "alighted" ? "疑似已下车" : null;
 
   return (
-    <div className="nav-actions" data-nav-phase={phase}>
+    <div className="nav-actions" data-nav-phase={phase} data-track-state={justAlighted ? "alighted" : phase}>
       <div className="nav-actions__staterow">
         <span className="nav-actions__dot" aria-hidden="true" />
         {left}

@@ -64,6 +64,13 @@ export interface BottomSheetProps {
   peek: ReactNode;
   /** 各 pane（推荐列表 / 详情） */
   children: ReactNode;
+  /**
+   * ★ 本批（需求③ / AC-58）：**吸底操作条挂载点**（`.route-sheet__actions-slot`）。
+   *   挂在 `.route-sheet` 根下 ⇒ 与面板**同一 `transform` 上下文** ⇒ 物理上不可能跑位。
+   */
+  actions?: ReactNode;
+  /** ★ 本批（需求⑧ / AC-52）：观测钩子 H7 `data-pref`（当前偏好档） */
+  pref?: string;
 }
 
 export default function BottomSheet({
@@ -86,19 +93,22 @@ export default function BottomSheet({
   bar,
   peek,
   children,
+  actions = null,
+  pref,
 }: BottomSheetProps) {
   return (
     <section
       ref={sectionRef}
       className="route-sheet"
       /* ★ 观测钩子（契约唯一名称，已冻结）：data-sheet-state / data-detent /
-         data-phase / data-live / data-dragging / data-open（旧别名已全部移除） */
+         data-phase / data-live / data-dragging / data-open / data-pref（旧别名已全部移除） */
       data-sheet-state={pane}
       data-detent={detent}
       data-phase={phase}
       data-live={live}
       data-dragging={dragging ? "on" : "off"}
       data-open={open ? "on" : "off"}
+      data-pref={pref}
       aria-hidden={!open}
       inert={!open ? true : undefined}
       aria-label={ariaLabel}
@@ -122,6 +132,9 @@ export default function BottomSheet({
       </div>
 
       <div className="route-sheet__panes">{children}</div>
+
+      {/* ★ 本批：吸底操作条挂载点 —— 挂在面板根（`transform` 同上下文；AC-58） */}
+      {actions && <div className="route-sheet__actions-slot">{actions}</div>}
 
       {/* peek 摘要：grip + OD + 指标（点整区回默认档；亦为起拖区；absolute 覆盖） */}
       <div

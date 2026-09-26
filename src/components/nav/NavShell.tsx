@@ -54,6 +54,7 @@ import { useUserFix } from "./useUserFix";
 import { useNavFrame } from "./useNavFrame";
 import { detentIndex, detentTopsPx, readSafeTopPx, type Detent } from "./sheet-detents";
 import { unionBox } from "@/lib/nav/route-overview";
+import { mainOf } from "@/lib/nav/track";
 import { useCombos } from "@/lib/favorites/useCombos";
 import { endpointOf } from "@/lib/favorites/types";
 import type { RecommendCard } from "@/lib/recommend/types";
@@ -154,6 +155,20 @@ export default function NavShell({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fromPoint?.lng, fromPoint?.lat, to?.lng, to?.lat]);
 
+  /**
+   * ★ 本批（需求① / 坑：dest/origin 行内字面量 → 取景 effect 每次重渲染重跑）：
+   *   把传给 `NavMap` 的 `dest`/`origin` 换成 **useMemo 稳定引用**，
+   *   避免每次 NavShell 重渲染都产生新对象、触发下游 OD 标记 effect 抖动。
+   */
+  const destArg = useMemo(
+    () => (to ? { lng: to.lng, lat: to.lat, label: to.label } : null),
+    [to],
+  );
+  const originArg = useMemo(
+    () => (from ? { lng: from.lng, lat: from.lat, label: from.label } : null),
+    [from],
+  );
+
   /** ★ 路线总览数据流（仅 detail pane 打开时启用） */
   const ov = useRouteOverview(
     pane === "detail" ? detailCard?.card ?? null : null,
@@ -163,6 +178,21 @@ export default function NavShell({
 
   /** ★ 2026-09-25：导航态（detail pane 打开） */
   const navActive = rsOpen && pane === "detail";
+  /** 导航态镜像（供稳定回调读取最新值，避免闭包过期 —— 点击不中断，AC-47/48） */
+  const navActiveRef = useRef(navActive);
+  navActiveRef.current = navActive;
+
+  /**
+   * ★ 本批（需求② / AC-29~31）：**站点白名单**（主码）。
+   *   导航/路线查看模式 ⇒ 本程各腿站点**并集**（`ov.body.strips`，`mainOf` 归一）；
+   *   空集保护：`size > 0` 才过滤（否则折成 `null` ⇒ 不过滤）。
+   */
+  const lineStops = useMemo<ReadonlySet<string> | null>(() => {
+    if (!(rsOpen && pane === "detail")) return null;
+    const set = new Set<string>();
+    for (const strip of ov.body?.strips ?? []) for (const s of strip.stops) set.add(mainOf(s.code));
+    return set.size > 0 ? set : null;
+  }, [rsOpen, pane, ov.body]);
 
   /** ★ 2026-09-25：GPS 通道（候车 15s / 乘车 30s 节流；权限由手势申请） */
   const userFixR = useUserFix({
@@ -269,21 +299,25 @@ export default function NavShell({
     reframeOnSettle(topsPx[Math.min(topsPx.length - 1, Math.max(0, detentIndex(d)))]);
   }
 
-  /** 点地图上的站/车 → 打开卡片；**打开卡片即收起面板**（同 Google Maps，z90 > z70） */
+  /**
+   * 点地图上的站/车 → 打开卡片。
+   * ★ 本批（需求⑥ / AC-47/48）：**导航态点击不中断** —— 导航中（`navActive`）只开卡片浮层，
+   *   **不清空面板**；非导航态保持原行为（同 Google Maps，卡片 z90 > 面板 z70）。
+   */
   const onStationClick = useCallback((s: StationCardStation) => {
     setStation(s);
-    if (rsOpenRef.current) {
+    if (rsOpenRef.current && !navActiveRef.current) {
       setRsOpen(false);
       setStage("map");
     }
   }, []);
   const onMapClick = useCallback(() => setStation(null), []);
 
-  /** 车辆点击：打开车辆卡 + 收起面板 */
+  /** 车辆点击：打开车辆卡 + 收起面板（导航态不清面板） */
   const onVehicleClick = useCallback(
     (v: Parameters<typeof rv.selectVehicle>[0], count: number) => {
       rv.selectVehicle(v, count);
-      if (rsOpenRef.current) {
+      if (rsOpenRef.current && !navActiveRef.current) {
         setRsOpen(false);
         setStage("map");
       }
@@ -310,8 +344,8 @@ export default function NavShell({
           jsKey={jsKey}
           mapStyleId={mapStyleId}
           className="nav-map--full"
-          dest={to ? { lng: to.lng, lat: to.lat, label: to.label } : null}
-          origin={from ? { lng: from.lng, lat: from.lat, label: from.label } : null}
+          dest={destArg}
+          origin={originArg}
           view={view}
           locateTick={locateTick}
           onLocate={onLocate}
@@ -320,16 +354,17 @@ export default function NavShell({
           /* ★ v2.10.0：路线查看模式 + 实时车辆；★ 2026-09-23：detail pane 打开时让位给总览 */
           routeLine={detailActive ? null : rv.picked}
           onRouteDirs={rv.reportDirs}
-          vehicles={detailActive ? ov.vehicles : rv.vehicles}
+          /* ★ 本批（需求⑥ / AC-45/46）：riding 只显示当前班车（12s 轮询驱动）；否则沿用路线查看车辆 */
+          vehicles={detailActive ? (ride.phase === "riding" ? ride.mapVehicles : ov.vehicles) : rv.vehicles}
           onVehicleClick={onVehicleClick}
           /* ★ 2026-09-23：路线总览（灰底线 + 彩段） */
           overview={detailActive ? ov.legs : null}
-          /* ★ 2026-09-25：双标记 —— 车＝VehicleLayer、人＝蓝点（UserDotLayer）。
-             重合（riding 且已锁定车牌）时隐藏独立蓝点；否则显示用户 GPS 实位。 */
-          userFix={
-            !detailActive || (ride.phase === "riding" && ride.plate) ? null : userFixR.fix
-          }
+          /* ★ 本批（需求⑤ / AC-40~42）：单蓝点 —— riding 用 GPS 投影点（`youDot`），
+             否则回落原始 GPS；**取消原 riding 隐藏三元**（乘车中蓝点不再隐藏）。 */
+          userFix={detailActive ? (ride.youDot ?? userFixR.fix) : null}
           traveled={detailActive && ride.phase === "riding" ? ride.traveled : null}
+          /* ★ 本批（需求②）：站点白名单（导航模式仅显示本线路站点） */
+          lineStops={detailActive ? lineStops : null}
         />
 
         {/* 品牌栏（三栏网格）：左=空 · 中=换向键+线路标签 · 右=竖排按钮组 */}

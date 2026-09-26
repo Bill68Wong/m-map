@@ -48,8 +48,18 @@ export function buildStrips(card: RecommendCard, ctx: StripBuildCtx): SegmentStr
     });
 
     const t = card.transfers[i];
+    // ★ B4（需求 7）：透传换乘等待/安全余量（`waitMin`/`slackMin`）⇒ 前端换乘行可显示
+    //   「换乘 X · 步行 N 分 · 等车约 M 分」，并由 `slackMin` 派生观测钩子 H8。
     const transferAfter: TransferView | null = t
-      ? { at: t.at, atLabel: t.atLabel, minutes: t.minutes, estimated: t.estimated, sameField: t.sameField }
+      ? {
+          at: t.at,
+          atLabel: t.atLabel,
+          minutes: t.minutes,
+          estimated: t.estimated,
+          sameField: t.sameField,
+          waitMin: t.waitMin ?? null,
+          slackMin: t.slackMin ?? null,
+        }
       : null;
 
     return {

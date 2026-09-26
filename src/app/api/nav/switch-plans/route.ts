@@ -258,7 +258,13 @@ export async function POST(req: Request) {
     });
 
     // ── ⑧ 逐候选建模；每组收集全部卡片（组内 top-K 在组装段统一处理）──
-    const baseCtx = { ...contextFor(st, nowMs, null, batch.live), destLabel: destName || undefined };
+    //   ★ B4（需求 7）：`headway` 同时注入模型上下文 —— 第 2 段巴士等车按到达时刻查班距（§h.2）。
+    //   ⚠️ **偏好（prefs）不进本端点**：组内排序仍按 `totalMin`（07 §i.3 契约硬约束）。
+    const baseCtx = {
+      ...contextFor(st, nowMs, null, batch.live),
+      destLabel: destName || undefined,
+      headway: headway ?? undefined,
+    };
     const geoOf = new Map<string, { lng: number; lat: number }>();
     for (const s of geo) geoOf.set(s.main, { lng: s.lng, lat: s.lat });
     const walkCache = await loadWalkCacheCached(pool);

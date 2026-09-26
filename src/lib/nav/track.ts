@@ -137,6 +137,23 @@ export function cutAt(poly: LL[], pos: { lng: number; lat: number }): { idx: num
 export const CUT_TOLERANCE_M = 250;
 
 /**
+ * ★ 本批（需求⑤ / AC-43/44）：**段内位置比** `frac ∈ [0,1]`（纯函数，`07 §d.2`）。
+ *
+ * 用途：把「用户沿线里程 `dNow`」在「第 `i0` 站 → 第 `i1` 站」区间内插值 ⇒ 纵条骑线浮标
+ *   `youAt.frac`（**仅视觉插值**，不参与 `passedIdx/atIdx/nextIdx` 判定）。
+ * · `cum` 为 `cumDistM(colored)` 累积里程（与顶点等长）；
+ * · `i0 < 0` / `i1 <= i0` / 区间零长（两站重合）⇒ 恒 0（点贴站）；
+ * · 越界在函数内 clamp（`07 §d.4`）。
+ */
+export function fracBetween(cum: number[], i0: number, i1: number, dNow: number): number {
+  if (i0 < 0 || i1 <= i0) return 0;
+  const a = cum[i0];
+  const b = cum[i1];
+  if (!(b > a)) return 0;
+  return Math.max(0, Math.min(1, (dNow - a) / (b - a)));
+}
+
+/**
  * 「快/慢多少分」文案口径（下车提醒与换乘行共用）：
  * 负 = 更快（「快 N 分」）、正 = 更慢（「慢 N 分」）、0 = 「时长相当」。
  */

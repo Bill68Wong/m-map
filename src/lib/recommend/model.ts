@@ -60,9 +60,10 @@ import { PLACE_SHORT } from "@/lib/home-plans-shared";
 import { hhmmOf } from "@/lib/lrt/eta";
 import type { AmapPlanSeed, WalkResolver } from "@/lib/nav/types";
 import { pickCatchTier, rangeText, tierHintOf, tierTextOf, type TierSpeedOverride } from "./catch-up";
+import { conservativeWaitMin, headwayAt, headwayMedian, type HeadwayIndex } from "./headway";
+import { cmpByPref, PREF_DEFAULTS, TRANSFER_SAFETY_MIN, type Prefs } from "./score";
 import { mainCodeOf, rideOfHops, type SegmentIndex } from "./segment-lookup";
 import {
-  BUS_HEADWAY_FALLBACK_SEC,
   LRT_MIN_PER_HOP,
   LRT_RIDE_SEC_FIXED,
   TRANSFER_FALLBACK_MIN,
@@ -242,6 +243,15 @@ export interface ModelContext {
   destLabel?: string;
   /** route → 实时视图 */
   live: Map<string, RouteLive>;
+  /**
+   * ★ B4（需求 7）：**发车间隔索引**（`route_frequency`，`headway.ts#loadHeadway` 产物）。
+   *
+   * 用途：**第 2 段起巴士等车**按「到达换乘站的时刻」查 `headwayAt` 取偏保守值
+   *   `(lo + 2·hi)/3`（见 §h.1）；未命中 → `headwayMedian`（该线全时段中位数）→ 仍无 ⇒ `null`。
+   * **缺省**（undefined）⇒ 第 2 段巴士等车按「无数据」处理（`waitMin = null`，明示降级）——
+   *   不再回落到写死常量（旧「第 2 段巴士等车恒 180s」已废除，AC-61）。
+   */
+  headway?: HeadwayIndex;
   /** 被排除的线路（无在途车 / 已收车 / 站序缺失）→ 静默剔除计数器 */
   excluded: string[];
   /**
@@ -571,26 +581,59 @@ export function modelOption(seed: OptionSeed, ctx: ModelContext): ModeledOption 
     //   在 push 那一段时一并写入 —— 旧代码在这里直接改 `rides[i + 1]`，而下标 `i+1`
     //   此刻还不存在 → 赋值静默失效 → 第 2 段等车「算了却看不到」。
     //   ⚠️ `cursor` 的推进顺序与旧版完全一致，因此**总用时数值不变**，只是卡面显示补全。
+    // ★ B4（需求 7）：第 2 段等车同时写进**刚 push 的换乘项** `transfers[i]`
+    //   （= `transfers[transfers.length - 1]`），供卡面明细对账（AC-61）。
+    const transferCur = transfers[transfers.length - 1];
     if (next.kind === "lrt") {
       const lv = ctx.live.get(next.route);
       if (!lv || lv.kind !== "lrt" || lv.state !== "running") {
         ctx.excluded.push(next.route);
         return null;
       }
-      const depMs = lv.departures.find((d) => d > cursor);
+      // ★ B4 顺延闸门（§h.3）：取「到达换乘站 + 安全余量」之后**能赶上**的第一班；
+      //   赶不上最近一班 ⇒ 顺延到能赶上的下一班（并计入等待）；
+      //   末班（无后续）→ 剔除该换乘方案。
+      const need = cursor + TRANSFER_SAFETY_MIN * 60_000;
+      const depMs = lv.departures.find((d) => d >= need);
       if (depMs === undefined) {
         ctx.excluded.push(next.route);
         return null;
       }
-      waitNext = Math.max(0, (depMs - cursor) / 60_000);
+      const gapMin = Math.max(0, (depMs - cursor) / 60_000);
+      waitNext = gapMin;
       cursor = depMs;
       // 轻轨第 2 段拿到的是**真实班次时刻** → 文案用绝对时刻（就是你会坐的那一班）
       liveTextNext = `${hhmmOf(((depMs + 8 * 3_600_000) % 86_400_000) / 1000)} 开出`;
+      if (transferCur) {
+        // slackMin = 到站→发车 的余量（恒 ≥ 安全余量，否则上面已顺延/剔除）
+        transferCur.waitMin = Math.round(gapMin * 10) / 10;
+        transferCur.slackMin = Math.round(gapMin * 10) / 10;
+      }
     } else {
-      waitNext = BUS_HEADWAY_FALLBACK_SEC / 2 / 60;
-      cursor += (BUS_HEADWAY_FALLBACK_SEC / 2) * 1000;
-      // 巴士第 2 段没有第二路实时数据源 → 明说是估算（口径见 types.ts 常量注释）
-      liveTextNext = "按班次间隔推算";
+      // ★ B4（需求 7 / AC-61）：巴士第 2 段**无逐车/时刻表** ⇒ 按「到达换乘站的时刻」
+      //   查 `route_frequency`（`headwayAt`），取**偏保守**值 `(lo + 2·hi)/3`；
+      //   未命中 → 该线全时段班距中位数（`headwayMedian`）→ 仍无 ⇒ `null`（**明示降级**）。
+      //   ⚠️ **不再回落写死常量**（旧「第 2 段巴士等车恒 180s」已废除，AC-61）。
+      let waitBusMin: number | null = null;
+      if (ctx.headway) {
+        const hit = headwayAt(ctx.headway, next.route, cursor);
+        if (hit) waitBusMin = conservativeWaitMin(hit);
+        else waitBusMin = headwayMedian(ctx.headway, next.route) ?? headwayMedian(ctx.headway);
+      }
+      if (waitBusMin !== null) {
+        waitNext = waitBusMin;
+        cursor += waitBusMin * 60_000;
+        liveTextNext = "按班次间隔推算";
+      } else {
+        // 数据缺失 ⇒ **不计等待、不拍脑袋设默认值**（卡面明示「等车时间暂无数据」）
+        waitNext = 0;
+        liveTextNext = "等车时间暂无数据";
+      }
+      if (transferCur) {
+        // 巴士无逐车时刻表 ⇒ 无 slack（换乘可行性按 `yes` 计，见观测钩子 H8）
+        transferCur.waitMin = waitBusMin === null ? null : Math.round(waitBusMin * 10) / 10;
+        transferCur.slackMin = null;
+      }
     }
   }
 
@@ -673,9 +716,13 @@ export function modelOption(seed: OptionSeed, ctx: ModelContext): ModeledOption 
   };
 }
 
-/** 方案排序：总耗时升序 → 计划 id 升序（稳定） */
-export function sortCards(cards: RecommendCard[]): RecommendCard[] {
-  return [...cards].sort((a, b) => a.totalMin - b.totalMin || a.planId - b.planId);
+/**
+ * 方案排序（B4 / 需求 8）：按用户偏好三档（`cmpByPref`），缺省 `balanced`（cost 升序）。
+ * 无 `prefs` ⇒ 等价于原来的「综合」档（cost = totalMin + α·换乘 + (β−1)·步行 + 风险）。
+ * ⚠️ 偏好**不进** `switch-plans`（其组内仍按 `totalMin`，见 `switch-plans-shared`）。
+ */
+export function sortCards(cards: RecommendCard[], prefs: Prefs = PREF_DEFAULTS.balanced): RecommendCard[] {
+  return [...cards].sort((a, b) => cmpByPref(a, b, prefs));
 }
 
 /* ══════════════════════════════════════════════════════════════════════════

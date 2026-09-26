@@ -192,3 +192,59 @@ export function headwayAt(
 export function _clearHeadwayCache(): void {
   cache = null;
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   ★ B4（需求 7 / AC-61）：换乘等待的「偏保守」取值 + 数据缺失降级
+   ──────────────────────────────────────────────────────────────────────────
+   背景：换乘后第 2 段的等车原本写死为常量（第 2 段巴士等车恒 180s），
+   导致多段方案总耗时系统性偏乐观（见 02 诊断 §7）。现改为**数据驱动**：
+   按「到达换乘站的时刻」查本表（`headwayAt`），取偏保守值；未命中再降级。
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * 偏保守取值权重（可审计常量）。
+ *
+ * `waitMin = lo + WEIGHT × (hi − lo)`：
+ *   · 当 `freqLo === freqHi`（定班）⇒ 恒等于班距本身；
+ *   · 当 `WEIGHT = 1` ⇒ 取上限（纯最大值，会因粗粒度区间过度膨胀，吓人）；
+ *   · 当 `WEIGHT = 1/2` ⇒ 取中点（偏乐观，与本需求「不系统性低估」相悖）；
+ *   · **取 `2/3`** —— 落在保守侧（约 P67），兼顾「不系统性低估」与「不过度吓人」。
+ *
+ * ⚠️ 与 `06-产品-补充调研-推荐排序机制.md` §4.4「等待不再额外线性惩罚」一致：
+ *    本值只作为「第 2 段等车的耗时估计」计入 `totalMin`，**不叠加**偏好成本惩罚项。
+ */
+export const TRANSFER_WAIT_HI_WEIGHT = 2 / 3;
+
+/** 命中区间 → 偏保守等待分钟：`(lo + 2·hi) / 3 = lo + (2/3)·(hi − lo)`。 */
+export function conservativeWaitMin(hit: Pick<HeadwayHit, "lo" | "hi">): number {
+  return (hit.lo + 2 * hit.hi) / 3;
+}
+
+/**
+ * 班距中位数（分钟）——`headwayAt` 未命中时的**数据驱动降级**。
+ *
+ * 口径：
+ *   · 传 `route` 且该线在本表内 ⇒ 取**该线全部时段行**的 `(freqLo + freqHi) / 2` 中位数；
+ *   · 传 `route` 但该线不在表内 ⇒ `null`（由调用方决定是否再退到全表中位数）；
+ *   · **不传 `route`**（或传空串）⇒ 取**全表**所有行的 `(freqLo + freqHi) / 2` 中位数。
+ *
+ * ⚠️ 表很小（`route_frequency` ≈ 512 行）⇒ 即时计算即可，不另建全表统计缓存
+ *    （07 §6.4 遗留 ③）。返回 `null` ⇒ 调用方明示降级（不得拍脑袋设默认值）。
+ */
+export function headwayMedian(idx: HeadwayIndex, route?: string): number | null {
+  const mids: number[] = [];
+  if (route) {
+    const list = idx.byRoute.get(route);
+    if (!list || !list.length) return null;
+    for (const r of list) mids.push((r.freqLo + r.freqHi) / 2);
+  } else {
+    for (const list of idx.byRoute.values()) {
+      for (const r of list) mids.push((r.freqLo + r.freqHi) / 2);
+    }
+  }
+  if (!mids.length) return null;
+  mids.sort((a, b) => a - b);
+  const n = mids.length;
+  const mid = n >> 1;
+  return n % 2 === 1 ? mids[mid] : (mids[mid - 1] + mids[mid]) / 2;
+}

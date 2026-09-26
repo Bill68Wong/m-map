@@ -24,16 +24,18 @@
  *
  * ⚠️ 挂载位置：必须挂在 `.nav-map-wrap` **之外**（层叠上下文，Spec AC-13 教训）。
  */
-import { useRef } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import Icon from "@/components/ui/Icon";
 import ComplianceBar from "@/components/nav/ComplianceBar";
 import FavoriteButton from "@/components/favorites/FavoriteButton";
 import RouteStack from "@/components/RouteStack";
 import { macauClock } from "@/components/RoutePieces";
 import BottomSheet from "./BottomSheet";
+import NavAlarmOverlay from "./NavAlarmOverlay";
+import NavTrackBar from "./NavTrackBar";
 import RouteDetailPane from "./RouteDetailPane";
 import RouteResultPane from "./RouteResultPane";
-import { useRecommend } from "./useRecommend";
+import { useRecommend, type PrefMode } from "./useRecommend";
 import { useSnapSheet } from "./useSnapSheet";
 import type { DetailBody } from "./useDetailBody";
 import type { RideTrackView } from "./useRideTracking";
@@ -92,8 +94,66 @@ export default function RouteSheet({
   onOpenDetail,
   immersive = false,
 }: RouteSheetProps) {
-  // 推荐列表数据（列表 pane 常驻；同一 query 只自动拉一次）
-  const rec = useRecommend(query, open && pane === "recommend");
+  // 推荐列表数据（列表 pane 常驻；同一 query + prefs 只自动拉一次）
+  /** ★ 本批（需求⑧ / AC-52/53）：三档偏好（默认综合） */
+  const [pref, setPref] = useState<PrefMode>("balanced");
+  const rec = useRecommend(query, open && pane === "recommend", pref);
+
+  /* ── ★ 本批：详情吸底操作条（`.nav-actions` 移出滚动容器 → 挂面板根）所需派生值 ── */
+  const dTrack = detail?.track ?? null;
+  const dStrips = detail?.body?.strips ?? null;
+  const dLegIdx = dTrack?.legIndex ?? 0;
+  const dLegRide = detail?.card.rides[dLegIdx] ?? null;
+  const dFirst = detail?.card.rides[0] ?? null;
+  const dTrackStops = dStrips?.[dLegIdx]?.stops ?? [];
+  const dRouteLabel = dLegRide
+    ? dLegRide.kind === "lrt"
+      ? `轻轨 ${dLegRide.route.replace(/^LRT-/, "")}`
+      : `${dLegRide.route} 路`
+    : "";
+  const dLrt = dLegRide?.kind === "lrt";
+  /** 新鲜度（AC-24）：每秒重算「上次更新：N 秒前」 */
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    if (dTrack?.phase !== "riding") return;
+    const t = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(t);
+  }, [dTrack?.phase]);
+  const dFreshSec =
+    dTrack && dTrack.lastUpdateTs > 0 ? Math.max(0, Math.floor((nowMs - dTrack.lastUpdateTs) / 1000)) : null;
+
+  /** 详情吸底操作条（挂面板根 `.route-sheet__actions-slot`） */
+  const detailActions: ReactNode =
+    pane === "detail" && detail && dTrack ? (
+      <NavTrackBar
+        phase={dTrack.phase}
+        routeLabel={dRouteLabel}
+        boardLabel={dLegRide?.boardLabel ?? dFirst?.boardLabel ?? ""}
+        alightLabel={
+          (dTrackStops.length ? dTrackStops[dTrackStops.length - 1].label : "") ||
+          dLegRide?.alightLabel ||
+          dFirst?.alightLabel ||
+          ""
+        }
+        plate={dTrack.plate}
+        source={dTrack.progressSource === "gps" ? "gps" : dTrack.plate ? "vehicle" : "manual"}
+        alarm={dTrack.alarm}
+        lrt={dLrt}
+        traveling={dTrack.traveling}
+        anomaly={dTrack.anomaly}
+        note={dTrack.note}
+        freshSec={dFreshSec}
+        justAlighted={dTrack.justAlighted}
+        onStart={dTrack.onStart}
+        onBoard={dTrack.onBoard}
+        onAlight={dTrack.onAlight}
+        onRepick={dTrack.onNotThisBus}
+        onRefresh={dTrack.onRefresh}
+        onStop={dTrack.onStop}
+        onNotBoard={dTrack.onNotBoard}
+        onNotArrive={dTrack.onNotArrive}
+      />
+    ) : null;
 
   /**
    * ★ 2026-09-25：`.route-sheet` 根 ref —— 供 `useSnapSheet` 拖动期**命令式**写 `--sheet-y-anim`
@@ -178,6 +238,8 @@ export default function RouteSheet({
       onPeekTap={() => onDetentChange(defaultDetent)}
       peekTapGuard={snap.tapOk}
       onDismiss={onContextClose}
+      pref={pref}
+      actions={detailActions}
       bar={
         <>
           {pane === "detail" && detail && (
@@ -261,6 +323,8 @@ export default function RouteSheet({
       {/* 推荐列表 pane：常驻不卸载（opacity 切换 ⇒ 保滚动位置） */}
       <div className="route-sheet__pane" data-pane="recommend" aria-hidden={pane !== "recommend"}>
         <div className="route-sheet__scroll">
+          {/* ★ 本批（需求⑧ / AC-52/53）：三档偏好（唯一入口 = 推荐列表顶部） */}
+          <PrefSwitch value={pref} onChange={setPref} />
           <RouteResultPane
             phase={rec.phase}
             data={rec.data}
@@ -274,6 +338,8 @@ export default function RouteSheet({
 
       {/* 详情 pane（总览段数观测钩子的归属是**地图 canvas**（NavMap），此处不重复挂 ⇒ 免 QA 选择器歧义） */}
       <div className="route-sheet__pane" data-pane="detail" aria-hidden={pane !== "detail"}>
+        {/* ★ 本批（需求③）：下车横幅 / 自动上车 toast / 自动下车瞬态 —— 浮层（滚动容器之外） */}
+        {detail && <NavAlarmOverlay track={detail.track ?? null} strips={detail.body?.strips ?? null} card={detail.card} />}
         <div className="route-sheet__scroll">
           {detail && (
             <RouteDetailPane
@@ -300,3 +366,80 @@ export default function RouteSheet({
 
 /** 档位列表（供调用方循环/校验；值即 DETENTS） */
 export { DETENTS, detentIndex };
+
+/* ── ★ 本批（需求⑧ / AC-52/53）：三档偏好 segment（唯一入口 = 推荐列表顶部）──
+   图标 = **内联线性 SVG**（16px / stroke 2 / currentColor，与 Tabler 同描边风格；无 emoji）。 */
+const PREF_OPTS: { value: PrefMode; label: string; icon: ReactNode }[] = [
+  {
+    value: "balanced",
+    label: "推荐",
+    icon: (
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M12 3.5l2.6 5.27 5.9.86-4.25 4.14 1 5.86L12 16.9l-5.25 2.73 1-5.86L3.5 9.63l5.9-.86z" />
+      </svg>
+    ),
+  },
+  {
+    value: "fewer_transfers",
+    label: "少换乘",
+    icon: (
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M4 8h13l-3-3" />
+        <path d="M20 16H7l3 3" />
+      </svg>
+    ),
+  },
+  {
+    value: "less_walk",
+    label: "少步行",
+    icon: (
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M13 4.5a1 1 0 1 0 1.4 1.4A1 1 0 0 0 13 4.5z" />
+        <path d="M8 21l2.6-3.6" />
+        <path d="M17 21l-2.3-3.6-2.7-1.9.6-3.5" />
+        <path d="M11 11.6L13 9l2.6.7 2.1 2" />
+        <path d="M13 9l-2.4-2.3H8" />
+      </svg>
+    ),
+  },
+];
+
+const PREF_HINT: Record<PrefMode, ReactNode> = {
+  balanced: (
+    <>
+      排序依据 cost = 总时长 + <b>10 分/次</b>换乘 + <b>0.8 ×</b> 步行分
+    </>
+  ),
+  fewer_transfers: (
+    <>
+      先比<b>换乘次数</b>，再比总时长
+    </>
+  ),
+  less_walk: (
+    <>
+      先比<b>步行总量</b>，再比总时长
+    </>
+  ),
+};
+
+function PrefSwitch({ value, onChange }: { value: PrefMode; onChange: (v: PrefMode) => void }) {
+  return (
+    <div className="pref-switch">
+      <div className="pref-switch__seg" role="group" aria-label="路线偏好">
+        {PREF_OPTS.map((o) => (
+          <button
+            key={o.value}
+            type="button"
+            className={`pref-switch__opt${value === o.value ? " is-on" : ""}`}
+            aria-pressed={value === o.value}
+            onClick={() => onChange(o.value)}
+          >
+            {o.icon}
+            <span>{o.label}</span>
+          </button>
+        ))}
+      </div>
+      <p className="pref-switch__hint">{PREF_HINT[value]}</p>
+    </div>
+  );
+}

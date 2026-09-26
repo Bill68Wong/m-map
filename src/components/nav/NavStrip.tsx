@@ -10,7 +10,9 @@
  *       已过 = 灰 + 行末对勾；当前停靠 = 蓝加粗 + 「停靠中」；
  *       下一站 = 蓝加粗 + 「下一站」胶囊；下车站 = **站名品牌绿**（圆点仍线路色）+「下车」；
  *       到站 = 砖红加粗 + 脉动；
- *   · **「您在这里」 = 骑线节点**（纵条不断线）：锚点 `atIdx` 优先 → `passedIdx` → 首站前。
+ *   · **用户点（★ 本批改造，AC-43/44）**：**删除「您在这里」整行**；改为
+ *     `youAt = { afterIdx, frac }` 驱动 —— 停靠中 ⇒ `is-at` 节点即用户点（纯 CSS）；
+ *     行驶中 ⇒ `.navstrip__youmark` 骑线浮标（`--you-frac` 段内插值）。
  *
  * ── 排版纪律（06 §4.5）────────────────────────────────────────────────
  *   同一信息不折行（nowrap）、禁省略号截断。
@@ -30,7 +32,20 @@ export interface StripNav {
   atIdx: number | null;
   /** 下车提醒级别：none / soon（下一站是下车站）/ now（已到下车站） */
   alarm: "none" | "soon" | "now";
+  /**
+   * ★ 本批（需求⑤ / AC-43/44）：**段内插值用户点**。
+   *   `frac = 0` ⇒ 点贴 `afterIdx` 站节点；`0 < frac < 1` ⇒ 位于 `afterIdx → afterIdx+1` 之间。
+   *   `afterIdx = -1` ⇒ 尚未到上车站（点在上车站之前）。`null` ⇒ 不显示。
+   */
+  youAt?: { afterIdx: number; frac: number } | null;
+  /** ★ 本批：观测钩子 `data-nav-leg` 取值（当前乘车段下标，由宿主透传） */
+  legIndex?: number;
 }
+
+/**
+ * ★ 本批（需求⑦ / AC-49/61）：换乘行「等车约 N 分」—— `TransferView.waitMin`（后端 `model.ts` 落地）；
+ *   暂缺（`null` / `undefined`）⇒ **降级文案**「等车时长待确认」（不得拍脑袋设默认值）。
+ */
 
 export default function NavStrip({
   strip,
@@ -38,6 +53,7 @@ export default function NavStrip({
   last,
   nav = null,
   frozen = false,
+  nextKind = null,
 }: {
   strip: SegmentStrip;
   /** 该线路主题色 */
@@ -48,6 +64,8 @@ export default function NavStrip({
   nav?: StripNav | null;
   /** 冻结态（丢信号：「位置停在上一站」；标签转 muted、停止脉动） */
   frozen?: boolean;
+  /** ★ 本批：下一段载具种类（换乘行「等车」来源徽标用：轻轨=按时刻表 / 巴士=按班距估） */
+  nextKind?: "bus" | "lrt" | null;
 }) {
   const [openManual, setOpenManual] = useState(false);
   const open = openManual || !!nav;
@@ -69,8 +87,10 @@ export default function NavStrip({
     return "";
   };
 
-  /** 「您在这里」锚点：atIdx 优先 → passedIdx → 首站前（-1） */
-  const youAnchor = nav ? (nav.atIdx !== null ? nav.atIdx : nav.passedIdx >= 0 ? nav.passedIdx : -1) : -2;
+  /** 换乘行（本批：披露「等车约 N 分」；数据缺失 ⇒ 降级标注） */
+  const transfer = strip.transferAfter;
+  const waitMin = transfer?.waitMin ?? null;
+  const waitSrc = waitMin != null ? (nextKind === "lrt" ? "按时刻表" : "按班距估") : null;
 
   const row = (k: number, end: boolean) => {
     const s = stops[k];
@@ -103,27 +123,27 @@ export default function NavStrip({
             <Icon name="check" size={16} />
           </span>
         )}
+        {/* ★ 本批：行驶中骑线浮标（挂在 row(afterIdx) 内；--you-frac 由 JS 写 0..1）。
+            停靠中（atIdx !== null）由 CSS 复用 is-at 节点，不渲染本浮标。 */}
+        {nav && nav.youAt && nav.atIdx === null && nav.youAt.afterIdx === k && (
+          <span
+            className="navstrip__youmark"
+            style={{ ["--you-frac" as string]: String(nav.youAt.frac) }}
+            aria-hidden="true"
+          />
+        )}
       </div>
     );
   };
 
-  const youNode = (
-    <div className="navstrip__row is-you" key="you">
-      <span className="navstrip__seg is-passed" />
-      <span className="navstrip__dot" />
-      <span className="navstrip__label">
-        您在这里
-        {frozen && <span className="navstrip__pause"> · 位置停在上一站</span>}
-      </span>
-    </div>
-  );
-
   return (
-    <div className="navstrip" style={{ ["--strip-color" as string]: rail }}>
-      {/* 上车站之前挂「您在这里」（车尚未到上车站） */}
-      {nav && youAnchor === -1 && youNode}
+    <div
+      className={`navstrip${frozen ? " is-frozen" : ""}`}
+      style={{ ["--strip-color" as string]: rail }}
+      /* ★ 本批：观测钩子 H5 —— 仅当前乘车段（有 nav）写 data-nav-leg */
+      data-nav-leg={nav && nav.legIndex != null ? String(nav.legIndex) : undefined}
+    >
       {board && row(0, true)}
-      {nav && youAnchor === 0 && youNode}
 
       {/* 中间站：静态时默认收起；导航中强制展开 */}
       {mids > 0 && !open && (
@@ -142,10 +162,7 @@ export default function NavStrip({
         open &&
         stops.map((s, k) =>
           s.role !== "mid" ? null : (
-            <Fragment key={`m-${s.code}-${k}`}>
-              {row(k, false)}
-              {nav && youAnchor === k && youNode}
-            </Fragment>
+            <Fragment key={`m-${s.code}-${k}`}>{row(k, false)}</Fragment>
           ),
         )}
 
@@ -159,23 +176,27 @@ export default function NavStrip({
       )}
 
       {alight && row(lastK, true)}
-      {nav && youAnchor === lastK && youNode}
 
-      {!last && strip.transferAfter && (
+      {!last && transfer && (
         <div className="rc-strip__transfer">
           <Icon name="expandVertical" size={16} />
-          {strip.transferAfter.sameField ? (
+          {transfer.sameField ? (
             <>同站台换乘 · 无需步行</>
           ) : (
             <>
-              换乘步行{" "}
-              <b className={strip.transferAfter.estimated ? "rc-val--est" : undefined}>
-                {strip.transferAfter.minutes}
-              </b>{" "}
-              分
+              换乘 {transfer.atLabel} · 步行{" "}
+              <b className={transfer.estimated ? "rc-val--est" : undefined}>{transfer.minutes}</b> 分
+              {" · "}
+              {waitMin != null ? (
+                <>
+                  等车约 <b className="rc-strip__wait-n">{Math.round(waitMin)}</b> 分
+                </>
+              ) : (
+                <span className="rc-strip__wait-none">等车时长待确认</span>
+              )}
+              {waitSrc && <span className="nav-actions__src">{waitSrc}</span>}
             </>
           )}
-          <span className="rc-sub">（{strip.transferAfter.atLabel}）</span>
         </div>
       )}
     </div>

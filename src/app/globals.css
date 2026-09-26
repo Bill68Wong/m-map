@@ -712,14 +712,16 @@ button[aria-disabled="true"] {
 /* 样本数小标签（实色底上以半透同色 pill 呈现，颜色随文字对比色） */
 
 
-/* 乘车界面线路徽章（v0.7.0 主题色点缀） */
+/* 乘车界面线路徽章（v0.7.0 主题色点缀）
+   ★ 2026-09-26（AC-38）：全站线路标签统一到 v2.4.1 规范 ⇒ 圆角由胶囊 `--r-pill` 收敛到
+      `--radius-chip`（6px 圆角矩形）；规则**保留**（回滚安全 / 未来复用）。 */
 .route-chip {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   min-height: 22px;
   padding: 0 10px;
-  border-radius: var(--r-pill);
+  border-radius: var(--radius-chip);
   color: #fff;
   font-size: 12px;
   font-weight: 600;
@@ -780,81 +782,10 @@ button[aria-disabled="true"] {
   }
 }
 
-/* v0.19.1：线路名标签组（谷歌地图风格）——每块一个线路色，块间用「右上→左下」斜切留白分隔，
-   不用「/」字符；文字统一白色（轻轨浅色底也是白字） */
-.route-stack {
-  display: inline-flex;
-  align-items: stretch;
-  border-radius: 6px;
-  overflow: hidden;
-  flex-shrink: 0;
-  max-width: 100%;
-}
-.route-stack__seg {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: #fff;
-  font-weight: 700;
-  letter-spacing: 0.2px;
-  /* ★ 【4】line-height 1.15（原 1）：CJK 字形略高于 em 框，1 会把上/下缘切掉一点
-     ⇒ 标签看起来「没有完全包裹文字」。1.15 让字形完整落在实色区内。 */
-  line-height: 1.15;
-  /* 左右 padding 大于斜边宽度（8px）→ 文字始终完整落在实色区内，不被斜边切到 */
-  padding: 4px 14px;
-  white-space: nowrap;
-  /* ⚠️ v1.1.7：原文件此处先后声明了 12px 与 13px（后写生效）→ 删掉死声明，只留 13px */
-  font-size: 13px;
-  /* ★ v1.1.7：深色下让标签与卡片分离（与 .route-chip 同一解法） */
-  box-shadow: var(--hairline-inset);
-  /* 每块都是平行四边形（右倾）：左/右边界皆为「右上→左下」的斜边，
-     相邻块负 margin 重叠 → 斜向留白缝隙（谷歌地图样式），不再是竖直缝 */
-  clip-path: polygon(8px 0, 100% 0, calc(100% - 8px) 100%, 0 100%);
-  margin-right: -5px;
-}
-.route-stack__seg:first-child {
-  /* 首块左端保持竖直（标签起始边），只斜右边界 */
-  clip-path: polygon(0 0, 100% 0, calc(100% - 8px) 100%, 0 100%);
-  padding-left: 10px;
-}
-.route-stack__seg:last-child {
-  /* 尾块只斜左边界、右侧保持竖直 → 右下角不被斜边削掉，保留容器圆角 */
-  margin-right: 0;
-  padding-right: 11px;
-  clip-path: polygon(8px 0, 100% 0, 100% 100%, 0 100%);
-}
-.route-stack--sm .route-stack__seg {
-  font-size: 12px;
-  padding: 3px 12px;
-  clip-path: polygon(6px 0, 100% 0, calc(100% - 6px) 100%, 0 100%);
-  margin-right: -4px;
-}
-.route-stack--sm .route-stack__seg:first-child {
-  clip-path: polygon(0 0, 100% 0, calc(100% - 6px) 100%, 0 100%);
-  padding-left: 9px;
-}
-.route-stack--sm .route-stack__seg:last-child {
-  margin-right: 0;
-  padding-right: 10px;
-  clip-path: polygon(6px 0, 100% 0, 100% 100%, 0 100%);
-}
-.route-stack--sm .route-stack__seg:only-child {
-  clip-path: none;
-  margin-right: 0;
-  padding: 3px 11px;
-  font-size: 12px;
-}
-
-/* v0.20.8：只有一个线路时不做任何斜切——保留完整圆角矩形（此前单块同时命中
-   :first-child/:last-child，被「尾块右侧竖直」规则削掉了左上角）
-   ★ 【4】单块 = 左右都不斜切、左右 padding 对称 ⇒ 文字居中且完整包裹。 */
-.route-stack__seg:only-child {
-  clip-path: none;
-  margin-right: 0;
-  /* 左右对称 padding（原 4px 9px 偏窄）；与线宽/字形匹配，保证完整包裹 + 水平居中。 */
-  padding: 4px 12px;
-  font-size: 13px;
-}
+/* ★ 2026-09-26（迭代-导航优化 B3 / 07 §j.3）：v0.19.1 旧 `.route-stack` 整套（斜切平行四边形 +
+   负 margin 咬合）已**逐选择器删除** —— 现行规范见本文件 L3209-3301 的 B2 段（v2.4.1「斜切 + 等宽空白缝」）。
+   容器仍需要的属性（display:inline-flex / align-items:center / flex-shrink:0 / max-width:100%）
+   已合并进 B2 段 `.route-stack`，此处不再重复定义。 */
 
 /* 图标徽标（小圆圈图标） */
 .icon-badge {
@@ -3206,8 +3137,13 @@ button[aria-disabled="true"] {
   color: var(--muted);
 }
 
-/* ── B2：线路标签「分段 / 并列」（03 §G.2 解法 A + §G.4） ── */
+/* ── B2：线路标签「分段 / 并列」（v2.4.1「斜切 + 等宽空白缝」） ── */
 .route-stack {
+  /* ★ 2026-09-26：由已删除的 v0.19.1 旧段合并而来的**容器属性** */
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  max-width: 100%;
   flex-wrap: wrap;
   row-gap: 4px;
   /* 组胶囊自带圆角，外层不再裁剪（否则多段换行时会被切） */
@@ -4882,18 +4818,21 @@ button[aria-disabled="true"] {
   min-height: 28px;
 }
 
-/* ── 底部「路线查看中」标签（M Map 与定位按钮那一行中间）── */
+/* ── 底部「路线查看中」标签（M Map 与定位按钮那一行中间）──
+   ★ 2026-09-26（AC-38 / 07 §j.2）：由「999px 胶囊」收敛到既有 v2.4.1 规范 ——
+      圆角 `--radius-chip`(6px)、高 32→30px、padding `0 6px 0 10px`、
+      `box-shadow` 改用 `--hairline-inset`（与 RouteStack 同款细描边，辨识一致）。 */
 .nav-linechip {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  height: 32px;
-  padding: 0 4px 0 12px;
-  border-radius: var(--radius-full, 999px);
+  height: 30px;
+  padding: 0 6px 0 10px;
+  border-radius: var(--radius-chip);
   color: #fff;
   font-size: 14px;
   font-weight: 600;
-  box-shadow: var(--shadow-hard-sm);
+  box-shadow: var(--hairline-inset);
   white-space: nowrap;
 }
 .nav-linechip__text {
@@ -4903,12 +4842,13 @@ button[aria-disabled="true"] {
 }
 .nav-linechip__x {
   flex: none;
-  width: 24px;
-  height: 24px;
+  width: 20px;
+  height: 20px;
   display: grid;
   place-items: center;
   border: 0;
-  border-radius: 50%;
+  /* ★ 与外壳圆角对称（20px 盒用 6px 圆角，非圆形） */
+  border-radius: var(--radius-chip);
   background: rgba(255, 255, 255, 0.22);
   color: #fff;
   cursor: pointer;
@@ -5664,9 +5604,15 @@ button[aria-disabled="true"] {
   overscroll-behavior: contain;
   /* ★ R2.1 修正：padding 加在**面板滚动容器**（不是文档 body）——
      文档 body 不滚动，加在 body 无效、列表底部会被推出不可达。
-     --sheet-y-layout 仅档位落定时同步（拖动中不动 ⇒ 零重排）。 */
+     --sheet-y-layout 仅档位落定时同步（拖动中不动 ⇒ 零重排）。
+     ★ 2026-09-26（AC-58）：吸底操作条已移出滚动容器、改由 `.route-sheet__actions-slot`
+       覆盖在面板**可见底边** ⇒ 滚动容器额外让出操作条高度（`--actions-slot-h`），
+       保证列表底部内容不被操作条遮挡。 */
   padding: var(--space-2) var(--space-4)
-    calc(env(safe-area-inset-bottom, 0px) + var(--sheet-y-layout, 0px) + var(--space-4));
+    calc(
+      env(safe-area-inset-bottom, 0px) + var(--sheet-y-layout, 0px) + var(--space-4) +
+        var(--actions-slot-h, 96px)
+    );
 }
 .route-pane {
   position: relative;
@@ -6091,7 +6037,6 @@ body[data-sheet="open"] .nav-searchbar {
   line-height: var(--leading-body);
 }
 .navstrip__row.is-end { min-height: 44px; padding-top: 10px; padding-bottom: 10px; }
-.navstrip__row.is-you { min-height: 26px; padding-top: 3px; padding-bottom: 3px; }
 .navstrip__seg {
   position: absolute;
   left: 9px;
@@ -6148,7 +6093,17 @@ body[data-sheet="open"] .nav-searchbar {
 .navstrip__row.is-passed .navstrip__dot { background: var(--map-line-passed); border-color: var(--map-line-passed); }
 .navstrip__row.is-next .navstrip__label,
 .navstrip__row.is-at .navstrip__label { color: var(--track-current); font-weight: var(--fw-emphasize); }
-.navstrip__row.is-at .navstrip__dot { box-shadow: 0 0 0 3px var(--accent-soft); }
+/* ★ 2026-09-26（AC-43 / 设计 §3.2）：**停靠中 ⇒ 节点即用户点**（纯 CSS，零计算） */
+.navstrip__row.is-at .navstrip__dot {
+  left: 4.5px;
+  top: 8px;
+  width: var(--track-you-dot-w);
+  height: var(--track-you-dot-w);
+  background: var(--track-you);
+  border: 2.5px solid var(--surface);
+  box-shadow: 0 0 0 var(--you-ring-0, 4px) var(--track-you-ring);
+  animation: navYouPulse 1.6s ease-in-out infinite;
+}
 .navstrip__row.is-alight .navstrip__label { color: var(--track-alight); font-weight: var(--fw-emphasize); }
 .navstrip__row.is-alight-now .navstrip__label { color: var(--track-alight-now); font-weight: var(--fw-announce); }
 .navstrip__row.is-alight-now .navstrip__dot {
@@ -6156,25 +6111,28 @@ body[data-sheet="open"] .nav-searchbar {
   border-color: var(--track-alight-now);
   animation: navAlarmPulseFast 1.6s ease-in-out infinite;
 }
-/* 「您在这里」骑线节点（纵条不断线；大一号蓝点 + 光环） */
-.navstrip__row.is-you .navstrip__seg { background: var(--map-line-passed); }
-.navstrip__row.is-you .navstrip__dot {
-  left: 4.5px;
-  top: 8px;
+/* ★ 2026-09-26（AC-43/44）：**行驶中骑线浮标** —— 挂在 `row(afterIdx)` 内，
+   `top = 50% + frac × 100%`（frac=0 → 本行节点中心；frac=1 → 下一行节点中心）；
+   `left` 与纵条对齐（纵条 left:9px + 宽 3px ⇒ 中线 10.5px）。 */
+.navstrip__youmark {
+  position: absolute;
+  left: calc(9px + var(--track-rail-w) / 2);
+  top: calc(50% + var(--you-frac, 0) * 100%);
+  transform: translate(-50%, -50%);
+  z-index: 3;
   width: var(--track-you-dot-w);
   height: var(--track-you-dot-w);
+  border-radius: var(--radius-full);
   background: var(--track-you);
-  border: none;
-  box-shadow: 0 0 0 4px var(--track-you-ring);
+  border: 2.5px solid var(--surface);
+  box-shadow: 0 0 0 var(--you-ring-0, 4px) var(--track-you-ring);
   animation: navYouPulse 1.6s ease-in-out infinite;
 }
-.navstrip__row.is-you .navstrip__label {
-  color: var(--track-you);
-  font-size: var(--text-2xs);
-  font-weight: var(--fw-announce);
-  letter-spacing: 0.06em;
+/* 冻结态（丢信号）：整体转弱，不做额外提示（冻结语义由 is-at/浮标停脉动表达） */
+.navstrip.is-frozen .navstrip__youmark,
+.navstrip.is-frozen .navstrip__row.is-at .navstrip__dot {
+  animation: none;
 }
-.navstrip__pause { color: var(--muted); font-weight: 400; letter-spacing: 0; font-size: var(--text-2xs); }
 @keyframes navAlarmPulseFast {
   0%,
   100% {
@@ -6185,22 +6143,56 @@ body[data-sheet="open"] .nav-searchbar {
   }
 }
 
-/* ── 吸底操作条（NavTrackBar；贴在面板「可见底边」——抵消 sheet 的 translateY）──
-   ★ 2026-09-25 修复「准备出发/开始导航 跳动跑位」：
-   `bottom` 走 `--sheet-y-layout`（档位落定瞬变），而面板位移 `--sheet-y-anim` 走 260ms
-   过渡 ⇒ 换档（full↔half↔peek）时两者**时基不一致**：bar 先瞬跳到新偏移、面板随后才滑到
-   ⇒ 操作条在动画中途「跑位」再归位。给 `bottom` 同款过渡 ⇒ 与面板 transform 同步。
-   （拖动中 `--sheet-y-layout` 不变 ⇒ 不触发过渡，不影响跟手；`prefers-reduced-motion` 下
-   `--sheet-dur-settle: 0ms` ⇒ 瞬切。） */
-.nav-actions {
-  position: sticky;
-  bottom: calc(var(--sheet-y-layout, 0px));
-  transition: bottom var(--sheet-dur-settle) var(--sheet-ease);
+/* ── 吸底操作条（NavTrackBar）──────────────────────────────────────────
+   ★ 2026-09-26（AC-58，设计 §2.5 方案②「换挂载点」）：
+   操作条**移出滚动容器**，改挂 `.route-sheet` 根下的 `.route-sheet__actions-slot`，
+   与面板**同一 `transform` 上下文** ⇒ 拖动/换档期与面板严格同步，**物理上不可能跑位**
+   （旧做法的病根：`bottom` 走布局、面板走 transform，两者时基不一致 ⇒ 中途跳 170→321→591→642）。 */
+.route-sheet__actions-slot {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
   z-index: 20;
-  margin-top: var(--space-3);
-  padding: 10px var(--space-4) max(10px, var(--safe-bottom));
   background: var(--surface);
   border-top: var(--frame-w) solid var(--border);
+  padding: 10px var(--space-4) max(10px, env(safe-area-inset-bottom, 0px));
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  /* 反向抵消面板 translateY（同一 `--sheet-y-anim`）⇒ 恒贴在**可见底边**（视口底），
+     与面板 transform 逐帧同源（拖动跟手 / 落定同缓动）⇒ 相对面板上缘距离恒定。 */
+  transform: translateY(calc(-1 * var(--sheet-y-anim, 0px)));
+  transition: transform var(--sheet-dur-settle) var(--sheet-ease);
+}
+/* 拖动中：0ms 跟手（与面板 data-dragging 同步） */
+.route-sheet[data-dragging="on"] .route-sheet__actions-slot {
+  transition: none;
+}
+/* 关闭（推出视口）⇒ 不显示（否则反向抵消会让它贴到视口底而"露"出来） */
+.route-sheet[data-open="off"] .route-sheet__actions-slot {
+  display: none;
+}
+/* peek 档（面板 80% 收起）⇒ 操作条不显示（与 panes 一致；AC-58「peek 视口外属预期」） */
+.route-sheet[data-detent="peek"] .route-sheet__actions-slot {
+  display: none;
+}
+/* 桌面（≥1024）：面板 transform:none ⇒ 反向抵消须一并取消，bottom:0 即面板底 */
+@media (min-width: 1024px) {
+  .route-sheet__actions-slot {
+    transform: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .route-sheet__actions-slot {
+    transition: none;
+  }
+}
+
+/* 操作条本体：容器样式已由 `.route-sheet__actions-slot` 承担 ⇒ 此处只留内容布局 */
+.nav-actions {
+  position: static;
+  z-index: 20;
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
@@ -6245,7 +6237,28 @@ body[data-sheet="open"] .nav-searchbar {
 .nav-actions__iconbtn[disabled] { opacity: 0.5; }
 .nav-actions__hint { text-align: center; color: var(--muted); font-size: var(--text-2xs); }
 
-/* ── 提醒横幅（AlightBanner：soon=警告色 / now=危险色 + 脉动；绿只标记站名）── */
+/* ── 提醒横幅 / 浮层（AlightBanner：soon=警告色 / now=危险色 + 脉动；绿只标记站名）──
+   ★ 2026-09-26（AC-35/36，设计 §2.3「横幅浮层化」）：横幅单行式 + 挂 `.nav-alarm-layer`
+     浮层（面板内容层、滚动容器之外）⇒ 不参与滚动、出现/消失不推挤内容。 */
+.nav-alarm-layer {
+  position: absolute;
+  left: var(--space-4);
+  right: var(--space-4);
+  top: 44px; /* 面板把手(≈22px) 之下 */
+  z-index: var(--alarm-z, 15); /* > 滚动内容，< 吸底操作条 20 */
+  pointer-events: none; /* 纯提示，不挡下方可点内容 */
+  animation: navAlarmIn 200ms var(--ease-standard);
+}
+@keyframes navAlarmIn {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
 .nav-alarm {
   display: flex;
   align-items: center;
@@ -6257,23 +6270,71 @@ body[data-sheet="open"] .nav-searchbar {
   font-weight: var(--fw-emphasize);
   font-size: var(--text-sm);
   white-space: nowrap;
+  min-width: 0;
+  box-shadow: var(--shadow-card, var(--shadow-sheet));
 }
-.nav-alarm__dest { color: var(--track-alight); font-weight: var(--fw-announce); }
+.nav-alarm__lead { flex: none; }
+.nav-alarm__dest {
+  color: var(--track-alight);
+  font-weight: var(--fw-announce);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .nav-alarm__icon { flex: none; display: inline-flex; }
-.nav-alarm__hint {
-  margin-left: auto;
-  flex: none;
-  font-weight: 400;
-  font-size: var(--text-2xs);
-  color: var(--muted);
-  opacity: 0.9;
-}
 .nav-alarm.is-now {
   background: var(--danger-soft);
   color: var(--danger);
   font-weight: var(--fw-announce);
   animation: navAlarmPulse 1.2s ease-in-out infinite;
 }
+
+/* 自动上车 toast 浮层 + 自动下车瞬态浮层（同为内容层浮层，不推挤内容） */
+.nav-toast-layer {
+  position: absolute;
+  left: var(--space-4);
+  right: var(--space-4);
+  top: 44px;
+  z-index: var(--alarm-z, 15);
+  pointer-events: none;
+}
+.nav-toast-layer .nav-toast {
+  pointer-events: auto;
+}
+.nav-alight-layer {
+  position: absolute;
+  left: var(--space-4);
+  right: var(--space-4);
+  top: 44px;
+  z-index: var(--alarm-z, 15);
+  pointer-events: none;
+}
+.nav-alight-done {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  border: var(--frame-w) solid var(--border-strong);
+  box-shadow: var(--hairline);
+  animation: navToastIn var(--dur-base) var(--ease-standard);
+}
+.nav-alight-done__text { flex: 1; min-width: 0; font-size: var(--text-sm); font-weight: var(--fw-emphasize); color: var(--fg); }
+.nav-alight-done__undo {
+  flex: none;
+  min-height: 36px;
+  padding: 0 var(--space-3);
+  border: var(--frame-w) solid var(--border-2);
+  border-radius: var(--radius-btn);
+  background: var(--surface);
+  color: var(--accent);
+  font-size: var(--text-xs);
+  font-weight: var(--fw-emphasize);
+  cursor: pointer;
+}
+.nav-alight-done__undo:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 
 /* ── 自动上车瞬态反馈（toast）── */
 .nav-toast {
@@ -6422,7 +6483,9 @@ body[data-sheet="open"] .nav-searchbar {
 }
 .nav-fold-lrow__live { flex: 1; min-width: 0; color: var(--muted); white-space: nowrap; }
 
-/* ── 地图蓝点（UserDotLayer 原生 marker 的 DOM content）── */
+/* ── 地图蓝点（UserDotLayer 原生 marker 的 DOM content）──
+   ★ 2026-09-26（AC-40/41）：**删除 `.user-dot__label`**（「您」字）—— 全屏唯一蓝点。
+   光圈起点接 Token `--you-ring-0`（呼吸终点 `--you-ring-1` 由 navYouPulse 使用）。 */
 .user-dot { position: relative; width: 16px; height: 16px; }
 .user-dot__core {
   position: absolute;
@@ -6433,21 +6496,8 @@ body[data-sheet="open"] .nav-searchbar {
   border-radius: var(--radius-full);
   background: var(--track-you);
   border: 2.5px solid var(--surface);
-  box-shadow: 0 0 0 5px var(--track-you-ring);
+  box-shadow: 0 0 0 var(--you-ring-0, 4px) var(--track-you-ring);
   animation: navYouPulse 1.6s ease-in-out infinite;
-}
-.user-dot__label {
-  position: absolute;
-  left: 20px;
-  top: 50%;
-  transform: translateY(-50%);
-  white-space: nowrap;
-  padding: 1px 6px;
-  border-radius: var(--radius-chip);
-  background: var(--accent);
-  color: var(--accent-on);
-  font-size: var(--text-2xs);
-  font-weight: var(--fw-announce);
 }
 
 /* ── 全屏化：导航中隐藏底导（body[data-nav="riding"]）── */
@@ -6457,13 +6507,16 @@ body[data-nav="riding"] .bottom-nav { display: none; }
   .nav-track__alarm.is-now,
   .rc-strip__you-dot,
   .nav-you__dot,
-  .navstrip__row.is-you .navstrip__dot,
+  .navstrip__youmark,
+  .navstrip__row.is-at .navstrip__dot,
   .navstrip__row.is-alight-now .navstrip__dot,
   .nav-alarm.is-now,
+  .nav-alarm-layer,
   .user-dot__core {
     animation: none;
   }
-  .nav-toast {
+  .nav-toast,
+  .nav-alight-done {
     animation: none;
   }
 }
@@ -6550,4 +6603,172 @@ body[data-nav="riding"] .bottom-nav { display: none; }
 }
 .brand-mark__pin {
   fill: var(--brand-pin);
+}
+
+/* ============================================================================
+   ══ v2.16 追加 Token + 本批新增样式（迭代-导航优化-20260926 · B1/B2/B3 前端）══
+   原则：**只增不改**；不引入新形态；不新增标签相关 Token（标签回归既有 v2.4.1）。
+   权威：Spec §8 + 设计 08 §5（6 个登记型 Token）+ 07 §a~j 组件规格。
+   ============================================================================ */
+:root {
+  /* ── 蓝点呼吸（登记型）── */
+  --you-ring-0: 4px; /* 呼吸起点（= 既有光圈值） */
+  --you-ring-1: 10px; /* 呼吸终点（新增） */
+  --you-snap-max: 60px; /* 乘车中「吸附到线路投影」的最大距离 */
+  /* ── 头部（别名，取代原灰框 `--stroke` 四边框）── */
+  --dhead-rule: var(--border);
+  /* ── 横幅 / 浮层（层级；最终值以架构师 07 层级表为准：< 吸底条 20、> 内容层）── */
+  --alarm-z: 15;
+  /* ── 吸底操作条高度预留（滚动容器 padding-bottom 用）── */
+  --actions-slot-h: 96px;
+}
+
+/* ── ★ B1：让位锁恢复按钮（`.nav-map` 内浮层；free 态显示）────────────────
+   定位：地图右下、底部导航之上；右移以避让品牌栏右侧竖排按钮组（≈44px 宽）。
+   z-index 高于地图容器、低于面板与卡浮层（面板 z70 覆盖时不可见，符合 07 §a.4）。 */
+.nav-map__recenter {
+  position: absolute;
+  /* ★ 2026-09-26（P1-② 收尾）：由「右下」改「**左下**」——
+     品牌栏（`.nav-brandbar`）是三栏网格「左=空 · 中=换向键/线路标签 · 右=竖排按钮组」，
+     右列（`.nav-brandbar__acts`）在 peek 档会与本按钮重叠（center 被遮）⇒ 移到**地图左侧空白区**：
+     四态水平方向均无重叠元素。bottom 公式与联动逻辑不变。 */
+  left: var(--space-3);
+  right: auto;
+  /* ★ 2026-09-26（P1-②）：**动态贴「可见地图区」下沿** ——
+     `--sheet-y-anim` = 面板 translateY（由 `useSnapSheet` 镜像到 `<html>`）：
+       · 面板打开 ⇒ 按钮落在地图可见区底部（面板顶边上方 12px）；
+       · 面板关闭（`= 100dvh`）⇒ 回落 `12px`（原行为，且仍在底部导航之上）。
+     `.nav-map` 的底边 = 视口底 − (tabbar + safe) ⇒ 用 `100dvh − tabbar − safe − sheetY + 12px`；
+     `max(..., 12px)` 保证在面板关闭/低档时不越过底导。 */
+  bottom: max(
+    calc(100dvh - var(--tabbar-h) - var(--safe-bottom) - var(--sheet-y-anim, 100dvh) + 12px),
+    12px
+  );
+  z-index: 24;
+  /* ★ 与面板**同缓动**：档位落定时面板走 `transform` 260ms，本按钮走 `bottom` 同步缓动
+     ⇒ 二者始终贴合（无跑位/无反向）。拖动期由 `html[data-sheet-dragging=on]` 置 0ms 跟手。 */
+  transition: bottom var(--sheet-dur-settle) var(--sheet-ease);
+  pointer-events: auto;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: var(--radius-btn);
+  background: var(--surface);
+  color: var(--accent);
+  border: var(--frame-w) solid var(--border-strong);
+  box-shadow: var(--hairline);
+  font-size: var(--text-xs);
+  font-weight: var(--fw-emphasize);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.nav-map__recenter:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+/* 拖动期：0ms 跟手（与面板 `data-dragging` 同源；由 useSnapSheet 镜像到 <html>） */
+html[data-sheet-dragging="on"] .nav-map__recenter {
+  transition: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .nav-map__recenter {
+    transition: none;
+  }
+}
+
+/* ── ★ B3：导航头部 `.rc-dhead`（去灰框 + 总用时/线路标签同行；AC-32 / D-1 / D-2）── */
+.rc-dhead {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--dhead-rule, var(--border));
+}
+.rc-dhead__l {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.rc-dhead__total {
+  display: flex;
+  align-items: baseline;
+  gap: 2px;
+}
+.rc-dhead__arrive {
+  font-size: var(--text-xs);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.rc-dhead__arrive b {
+  color: var(--fg);
+  font-weight: var(--fw-emphasize);
+  font-variant-numeric: tabular-nums;
+}
+.rc-dhead__r {
+  margin-left: auto; /* 必须处于 flex 容器内才生效 ← 本次修复关键 */
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  max-width: 56%; /* 防多段换乘标签把左列挤窄 */
+}
+
+/* ── ★ B3：换乘行「等车约 N 分」（AC-49/61；数据缺 ⇒ 降级文案）── */
+.rc-strip__wait-n {
+  color: var(--fg-2);
+  font-weight: var(--fw-emphasize);
+  font-variant-numeric: tabular-nums;
+}
+.rc-strip__wait-none {
+  color: var(--muted);
+}
+
+/* ── ★ B3：三档偏好 segment（推荐列表顶部；AC-52/53，设计 §4.1）── */
+.pref-switch {
+  margin-bottom: var(--space-3);
+}
+.pref-switch__seg {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border: var(--frame-w) solid var(--border-2);
+  border-radius: var(--radius-card);
+}
+.pref-switch__opt {
+  flex: 1;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 0;
+  border-radius: var(--radius-btn);
+  background: transparent;
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+  font-weight: var(--fw-emphasize);
+  cursor: pointer;
+}
+.pref-switch__opt svg {
+  flex: none;
+}
+.pref-switch__opt.is-on {
+  background: var(--accent);
+  color: var(--accent-on);
+}
+.pref-switch__opt:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.pref-switch__hint {
+  margin: 6px 2px 0;
+  font-size: var(--text-2xs);
+  color: var(--muted);
+  line-height: var(--leading-body);
+}
+.pref-switch__hint b {
+  color: var(--fg-2);
+  font-weight: var(--fw-emphasize);
 }

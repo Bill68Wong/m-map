@@ -200,11 +200,11 @@ export const WALK_FALLBACK_MIN = 3.0;
 /** 换乘步行兜底（分钟）：LRT-LOT 蓮花 无样本 → 暂用 3 分并在 UI 标「估算」 */
 export const TRANSFER_FALLBACK_MIN = 3.0;
 
-/**
- * 巴士「第 2 段起」等车兜底：班次间隔均值（秒）。
- * 首段用实时 DSAT；换乘后的第 2 段起没有实时数据，按间隔 ÷ 2 估。
- */
-export const BUS_HEADWAY_FALLBACK_SEC = 360;
+// ★ B4（需求 7 / AC-61）：**已废除**旧常量「第 2 段巴士等车恒 180s」（原 `= 360s ÷ 2`）。
+//   换乘后第 2 段的等车改为**数据驱动**：按「到达换乘站的时刻」查 `route_frequency`
+//   （`headway.ts#headwayAt`）取偏保守值 `(lo + 2·hi) / 3`；未命中 → 该线全时段班距中位数
+//   （`headwayMedian`）→ 仍无 ⇒ 该段 `waitMin = null`（明示降级，禁止常量默认值）。
+//   见 `model.ts` 第 2 段等车分支 与 `docs/迭代-导航优化-20260926/07-技术-接口与组件规格.md` §h。
 
 /** 同场换乘（前后站在同一物理车站，如 T355/1 ↔ T355/2）→ 步行 0 */
 export const SAME_FIELD_TRANSFER_MIN = 0;
@@ -509,6 +509,21 @@ export interface TransferView {
   estimated: boolean;
   /** 同站台/同场 → 文案「同站台 · 无需步行」 */
   sameField: boolean;
+  /**
+   * ★ B4（需求 7）：**该换乘之后第 2 段的等车分钟**（＝下一段 `RideLegView.waitMin` 同值）。
+   *
+   * 口径：按「到达换乘站的时刻」查 `route_frequency`（`headwayAt`），取**偏保守**值
+   *   `(lo + 2·hi) / 3`（见 `headway.ts#conservativeWaitMin`）；
+   *   未命中 → 该线全时段班距中位数（`headwayMedian`）→ 仍无 ⇒ `null`（**明示降级，不得拍脑袋**）。
+   * 缺省（`undefined`）＝ 该字段未参与本轮计算；`null` ＝ 数据缺失。
+   */
+  waitMin?: number | null;
+  /**
+   * ★ B4（需求 7）：换乘安全余量（分钟）＝「下一班发车时刻 − 到达换乘站时刻」。
+   *   · 轻轨第 2 段有真实时刻表 ⇒ 给出该值（恒 ≥ `TRANSFER_SAFETY_MIN`，否则顺延下一班）；
+   *   · 巴士第 2 段无逐车/时刻表 ⇒ `null`（换乘可行性按 `yes` 计，见观测钩子 H8）。
+   */
+  slackMin?: number | null;
 }
 
 /**

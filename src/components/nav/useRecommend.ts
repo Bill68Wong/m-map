@@ -8,6 +8,10 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { RecommendCard } from "@/lib/recommend/types";
+import type { PrefMode } from "@/lib/recommend/score";
+
+/** ★ 本批（需求⑧ / AC-52/53）：偏好档类型沿用后端 `score.ts`（唯一真源；避免跨层重复定义）。 */
+export type { PrefMode };
 
 export interface RecommendData {
   cards: RecommendCard[];
@@ -42,14 +46,17 @@ export interface UseRecommend {
   reload: () => void;
 }
 
-export function useRecommend(query: string, open: boolean): UseRecommend {
+export function useRecommend(query: string, open: boolean, prefs: PrefMode = "balanced"): UseRecommend {
   const [phase, setPhase] = useState<"idle" | "loading" | "ready" | "failed">("idle");
   const [data, setData] = useState<RecommendData | null>(null);
   const [err, setErr] = useState("");
-  /** 已发起过加载的 query（防同一 query 反复自动重拉；失败由「重试」手动触发） */
+  /** 已发起过加载的 query+prefs（防同一组合反复自动重拉；失败由「重试」手动触发） */
   const loadedQueryRef = useRef<string | null>(null);
   /** 并发保护：只认最后一次请求的结果 */
   const reqIdRef = useRef(0);
+
+  /** ★ 本批：query + `prefs` 组合键（偏好切换 ⇒ 重新拉取并重排） */
+  const fullQuery = query ? `${query}&prefs=${prefs}` : query;
 
   const load = useCallback(async (q: string) => {
     const id = ++reqIdRef.current;
@@ -80,12 +87,12 @@ export function useRecommend(query: string, open: boolean): UseRecommend {
     }
   }, []);
 
-  // 打开时（含首次）拉取；同一 query 只自动拉一次（关闭再开 = 秒显上次结果）
+  // 打开时（含首次）拉取；同一 query+prefs 只自动拉一次（关闭再开 = 秒显上次结果）
   useEffect(() => {
-    if (!open || !query) return;
-    if (loadedQueryRef.current === query) return;
-    void load(query);
-  }, [open, query, load]);
+    if (!open || !fullQuery) return;
+    if (loadedQueryRef.current === fullQuery) return;
+    void load(fullQuery);
+  }, [open, fullQuery, load]);
 
-  return { phase, data, err, reload: () => void load(query) };
+  return { phase, data, err, reload: () => void load(fullQuery) };
 }

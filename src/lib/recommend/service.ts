@@ -20,8 +20,10 @@
  */
 import type { Pool } from "pg";
 import { fetchLive, type LiveBatch } from "./live";
+import { loadHeadway } from "./headway";
 import { modelOption, sortCards, type ModeledOption } from "./model";
 import { contextFor, loadStatics, optionsFor, type RecStatic } from "./query";
+import { PREF_DEFAULTS, type Prefs } from "./score";
 import type { RecommendCard, SchoolZone } from "./types";
 
 const CACHE_TTL_MS = 10_000;
@@ -87,6 +89,11 @@ export interface RecommendInput {
    *  深夜跑探针时巴士仍按真实无车剔除，属预期）。
    */
   nowMs?: number;
+  /**
+   * ★ B4（需求 8）：**用户偏好三档**（缺省 `balanced`）。影响**排序**（`sortCards`），
+   *   不影响 `totalMin` 数值；并已纳入 10s 缓存键（不同偏好不互相污染）。
+   */
+  prefs?: Prefs;
 }
 
 /**
@@ -99,7 +106,9 @@ export async function recommend(
 ): Promise<RecommendResult> {
   const zone = input.zone ?? null;
   const limit = Math.max(1, Math.min(20, input.limit ?? 5));
-  const key = `${input.fromSlug}|${input.toSlug}|${zone ?? ""}|${limit}`;
+  // ★ B4（需求 8）：偏好在**缓存键内**（不同档排序不同 ⇒ 不可共用同一条缓存）
+  const prefs = input.prefs ?? PREF_DEFAULTS.balanced;
+  const key = `${input.fromSlug}|${input.toSlug}|${zone ?? ""}|${limit}|${prefs.mode}`;
   const cached = g.__recCache!.get(key);
   if (!input.force && cached && Date.now() - cached.ts < CACHE_TTL_MS) {
     return { ...cached.data, cached: true };
@@ -118,23 +127,26 @@ export async function recommend(
 
   // ③ 实时
   const tLive = Date.now();
+  // ★ B4（需求 7）：发车间隔索引注入实时层（未发车估算）与模型上下文（第 2 段巴士等车）
+  const headway = await loadHeadway(pool);
   const batch = await fetchLive(pool, seeds, st.routeIdx, st.segIdx, {
     todayWeekday: new Date(nowMs + 8 * 3_600_000).getUTCDay(),
     nowMs: input.nowMs,
     lrtPre: st.lrtPre,
+    headway,
   });
   const liveMs = Date.now() - tLive;
 
   // ④ 逐条建模
   const tModel = Date.now();
-  const ctx = contextFor(st, nowMs, zone, batch.live);
+  const ctx = { ...contextFor(st, nowMs, zone, batch.live), headway };
   const modeled: ModeledOption[] = [];
   for (const seed of seeds) {
     const m = modelOption(seed, ctx);
     if (m) modeled.push(m);
   }
   // ⑤ 排序取前 N
-  const top = sortCards(modeled.map((m) => m.card)).slice(0, limit);
+  const top = sortCards(modeled.map((m) => m.card), prefs).slice(0, limit);
 
   // ★ v1.1.5：回填「本班之外的后续班次」——阈值是**第 N 张卡的总时长**，
   //   所以必须在排完序取完前 N 之后才能算（`modelOption` 无法预知阈值）。

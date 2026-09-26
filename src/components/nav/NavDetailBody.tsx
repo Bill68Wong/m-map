@@ -1,25 +1,29 @@
 "use client";
 
 /**
- * 导航界面主体（src/components/nav/NavDetailBody.tsx，2026-09-25 · v2.14）
+ * 导航界面主体（src/components/nav/NavDetailBody.tsx，2026-09-25 · v2.14；★ 2026-09-26 修订）
  *
  * 取代 `RouteDetailBody`（Spec §7）；由 `RouteDetailPane` 渲染，两个消费方共用：
  *   · 主页链（`RouteSheet` → detail pane，注入 `track`）；
  *   · 收藏薄壳（`RouteDetailSheet`，`track=null` ⇒ 静态详情，行为同 v2.13）。
  *
- * 结构（自上而下）：下车横幅 → 自动上车 toast → 头部 → 步行/等车行 → 进度纵条（NavStrip）
- *   → 下车步行行 → 折叠区（StationReachFold）→ 来源脚注 → 吸底操作条（NavTrackBar）。
+ * ── ★ 2026-09-26 修订（需求③ / AC-32~36）────────────────────────────
+ *   · 头部改 `.rc-dhead`（flex：左=总用时+到达，右=`RouteStack` **同行**；**去 `.card` 灰框**、
+ *     仅保留下分割线）；**删除「估算」span**；
+ *   · 下车横幅 / 自动上车 toast / 自动下车瞬态**迁至浮层**（`NavAlarmOverlay`，
+ *     挂 `.route-sheet__pane` 内容层，滚动容器之外 ⇒ 不参与滚动、不推挤内容）；
+ *   · 吸底操作条（`NavTrackBar`）**迁至面板根**（`.route-sheet__actions-slot`，见 `RouteSheet`）；
+ *   · 换乘行「等车约 N 分」由 `NavStrip` 承担（数据缺 ⇒ 降级文案）。
+ *
+ * 结构（自上而下）：头部 → 步行/等车行 → 进度纵条（NavStrip）→ 下车步行行
+ *   → 折叠区（StationReachFold）→ 来源脚注。
  */
-import { useEffect, useState } from "react";
 import NavStrip from "./NavStrip";
-import AlightBanner from "./AlightBanner";
-import NavTrackBar from "./NavTrackBar";
 import StationReachFold from "./StationReachFold";
 import FavoriteButton from "@/components/favorites/FavoriteButton";
 import RouteStack from "@/components/RouteStack";
 import { LrtEtaInline } from "@/components/LrtEta";
 import { EtaText, Row, TierBadge, macauClock } from "@/components/RoutePieces";
-import Icon from "@/components/ui/Icon";
 import type { FavoriteEndpoint, PlanSnapshot, RouteSeg } from "@/lib/favorites/types";
 import type { RecommendCard, SegmentStrip } from "@/lib/recommend/types";
 import type { RideTrackView } from "./useRideTracking";
@@ -77,91 +81,40 @@ export default function NavDetailBody({
   const colorOf = (c: string) => colors[c] ?? null;
   const first = card.rides[0];
   const legIdx = track ? track.legIndex : 0;
-  const legRide = card.rides[legIdx];
   const trackStops = track && track.phase !== "off" ? (strips[legIdx]?.stops ?? []) : [];
   const stopLabel = (k: number | null): string =>
     k !== null && k >= 0 && k < trackStops.length ? trackStops[k].label : "";
-  const alightLabel =
-    stopLabel(trackStops.length - 1) || legRide?.alightLabel || first?.alightLabel || "";
-
-  /** 自动上车瞬态反馈（2.5s 自动消失；可关闭） */
-  const [toastDismissed, setToastDismissed] = useState(false);
-  useEffect(() => {
-    if (track?.phase === "riding" && track.autoSwitched && track.autoNote) {
-      setToastDismissed(false);
-      const t = window.setTimeout(() => setToastDismissed(true), 2500);
-      return () => window.clearTimeout(t);
-    }
-    return undefined;
-  }, [track?.phase, track?.autoSwitched, track?.autoNote]);
-  const showToast = !!track && track.phase === "riding" && track.autoSwitched && !!track.autoNote && !toastDismissed;
-
-  /** 新鲜度（AC-24）：每秒重算「上次更新：N 秒前」 */
-  const [nowMs, setNowMs] = useState(() => Date.now());
-  useEffect(() => {
-    if (track?.phase !== "riding") return;
-    const t = window.setInterval(() => setNowMs(Date.now()), 1000);
-    return () => window.clearInterval(t);
-  }, [track?.phase]);
-  const freshSec =
-    track && track.lastUpdateTs > 0 ? Math.max(0, Math.floor((nowMs - track.lastUpdateTs) / 1000)) : null;
-
-  const lrt = legRide?.kind === "lrt";
-  const routeLabel = legRide ? (lrt ? `轻轨 ${legRide.route.replace(/^LRT-/, "")}` : `${legRide.route} 路`) : "";
 
   return (
     <>
-      {/* 下车提醒横幅（警告色；绿只标记站名） */}
-      {track && track.phase === "riding" && track.alarm !== "none" && (
-        <AlightBanner alarm={track.alarm} destLabel={alightLabel} />
-      )}
-
-      {/* 自动上车瞬态反馈（非模态，role=status） */}
-      {showToast && track && (
-        <div className="nav-toast" role="status" style={{ marginTop: "var(--space-3)" }}>
-          <span className="nav-toast__icon" aria-hidden="true">
-            <Icon name="locate" size={20} />
+      {/* 头部：总用时 / 到达 + 线路标签**同行**（★ 去灰框、仅下分割线；删「估算」） */}
+      <div className="rc-dhead">
+        <div className="rc-dhead__l">
+          <div className="rc-dhead__total">
+            <span className="rc-total">{Math.round(card.totalMin)}</span>
+            <span className="rc-total__unit">分</span>
+          </div>
+          <span className="rc-dhead__arrive">
+            预计 <b>{macauClock(card.arriveAt)}</b> 到达
+            {card.crossBorder && <span className="rc-warn"> · 不含通关</span>}
           </span>
-          <span className="nav-toast__text">{track.autoNote}</span>
-          <button type="button" className="nav-toast__fix" onClick={track.onNotThisBus}>
-            不是这辆
-          </button>
-          <button
-            type="button"
-            className="nav-toast__close"
-            aria-label="关闭提示"
-            onClick={() => setToastDismissed(true)}
-          >
-            <Icon name="close" size={16} />
-          </button>
         </div>
-      )}
-
-      {/* 头部：总用时 / 到达 / 线路标签 / 收藏 */}
-      <div className="card rc-detail__head">
-        <div className="rc-head__main">
-          <span className="rc-total">{Math.round(card.totalMin)}</span>
-          <span className="rc-total__unit">分</span>
+        <div className="rc-dhead__r">
+          <RouteStack codes={card.rides.map((r) => r.route)} colors={colors} size="sm" />
+          {fav && (
+            <FavoriteButton
+              kind="plan"
+              entry="detail"
+              from={fav.from}
+              to={fav.to}
+              query={fav.query}
+              fingerprint={fav.fingerprint}
+              snapshot={fav.snapshot}
+              route={fav.route}
+              withLabel
+            />
+          )}
         </div>
-        <span className="rc-arrive">
-          预计 <b>{macauClock(card.arriveAt)}</b> 到达
-          {card.crossBorder && <span className="rc-warn"> · 不含通关</span>}
-        </span>
-        <RouteStack codes={card.rides.map((r) => r.route)} colors={colors} size="sm" />
-        {degraded && <span className="nav-degraded nav-degraded--inline t-label">估算</span>}
-        {fav && (
-          <FavoriteButton
-            kind="plan"
-            entry="detail"
-            from={fav.from}
-            to={fav.to}
-            query={fav.query}
-            fingerprint={fav.fingerprint}
-            snapshot={fav.snapshot}
-            route={fav.route}
-            withLabel
-          />
-        )}
       </div>
 
       {/* 步行 → 上车站；首段等车 */}
@@ -222,9 +175,13 @@ export default function NavDetailBody({
                     nextIdx: track.prog.nextIdx,
                     atIdx: track.prog.atIdx,
                     alarm: track.alarm,
+                    /* ★ 本批：段内插值用户点（AC-43/44）+ 观测钩子 data-nav-leg */
+                    youAt: track.youAt,
+                    legIndex: track.legIndex,
                   }
                 : null
             }
+            nextKind={strips[i + 1]?.kind ?? null}
             frozen={!!track && track.phase === "riding" && !!track.note}
           />
         ))}
@@ -264,33 +221,6 @@ export default function NavDetailBody({
       <div className="rc-foot">
         <span className="rc-hint t-muted">数据来源：澳门交通事务局（DSAT）· 高德地图</span>
       </div>
-
-      {/* 吸底操作条（全屏化：导航中隐藏底导由宿主承担） */}
-      {track && (
-        <NavTrackBar
-          phase={track.phase}
-          routeLabel={routeLabel}
-          boardLabel={legRide?.boardLabel ?? first?.boardLabel ?? ""}
-          nextLabel={track.prog?.nextIdx != null ? stopLabel(track.prog.nextIdx) : ""}
-          alightLabel={alightLabel}
-          plate={track.plate}
-          source={track.progressSource === "gps" ? "gps" : track.plate ? "vehicle" : "manual"}
-          alarm={track.alarm}
-          lrt={lrt}
-          traveling={track.traveling}
-          anomaly={track.anomaly}
-          note={track.note}
-          freshSec={freshSec}
-          onStart={track.onStart}
-          onBoard={track.onBoard}
-          onAlight={track.onAlight}
-          onRepick={track.onNotThisBus}
-          onRefresh={track.onRefresh}
-          onStop={track.onStop}
-          onNotBoard={track.onNotBoard}
-          onNotArrive={track.onNotArrive}
-        />
-      )}
     </>
   );
 }
