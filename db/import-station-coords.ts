@@ -141,7 +141,6 @@ async function main() {
 
   // ── ④ 待更新清单 ──
   const updates: { code: string; lat: number; lng: number; src: string; name: string }[] = [];
-  const missing: string[] = [];
 
   const existing = (await q(`SELECT code, name_tc, lat, lng FROM stations`)) as {
     code: string; name_tc: string; lat: number | null; lng: number | null;

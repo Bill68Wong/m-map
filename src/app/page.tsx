@@ -51,7 +51,23 @@ export default async function Home({
   const sp = await searchParams;
   const parsed = parseNavParams(sp);
   const initialFrom: NavPoint | null = parsed?.origin ?? null;
-  const initialTo: NavPoint | null = parsed?.dest ?? null;
+  let initialTo: NavPoint | null = parsed?.dest ?? null;
+  /**
+   * ★ v3.3.0（AC-116 · 收藏地点回放）：**仅 `to…`** 的 URL（起点留空 ⇒ 首页默认「我的位置」）。
+   * `parseNavParams` 要求 from/to 同时存在 ⇒ 这里单独解析「只有终点」的形态，
+   * 让「点地点卡 = 首页式选点（目的地已设、不自动规划）」成立。
+   */
+  if (!initialTo) {
+    const first = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v) ?? "";
+    const toLng = Number(first(sp.toLng));
+    const toLat = Number(first(sp.toLat));
+    if (Number.isFinite(toLng) && Number.isFinite(toLat) && toLng !== 0 && toLat !== 0) {
+      const kindRaw = first(sp.toKind);
+      const kind = (["gps", "poi", "station", "place"].includes(kindRaw) ? kindRaw : "poi") as NavPoint["kind"];
+      const code = first(sp.toCode) || undefined;
+      initialTo = { kind, label: first(sp.toLabel) || "终点", lng: toLng, lat: toLat, code };
+    }
+  }
 
   return (
     <>

@@ -7071,3 +7071,362 @@ body[data-nav-phase]:not([data-nav-phase="off"]) .nav-brandbar__acts { display: 
   color: var(--fg-2);
   font-weight: var(--fw-emphasize);
 }
+
+/* ══════════════════════════════════════════════════════════════════════
+   ★ v3.3.0 收藏大改（ADR-104 / 03 §3）—— 新增样式，**全部沿用既有 Token**
+   · 搜索条「收藏地点」入口（AC-114）
+   · 收藏页：56px 扁卡片 + 分组 + 空态 + 编辑弹层 + 分区间距
+   · 推荐弹窗顶部「收藏组合」chip（AC-115）
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* ── 搜索条内部主按钮（v3.3.0 结构变更：`<div.nav-searchbar>` + 内部主按钮）── */
+.nav-searchbar__main {
+  flex: 1;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.nav-searchbar__main:focus-visible {
+  outline: none;
+  border-radius: var(--radius-btn);
+  box-shadow: var(--focus-ring);
+}
+
+/* ── 「收藏地点」入口（AC-114；两态 + 44×44 热区）── */
+.nav-searchbar__fav {
+  position: relative;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 32px;
+  padding: 0 10px;
+  border: 0;
+  cursor: pointer;
+  border-radius: var(--radius-chip);
+  background: var(--accent-soft);
+  color: var(--accent-deep);
+  font-size: var(--text-2xs);
+  font-weight: var(--fw-emphasize);
+  white-space: nowrap;
+}
+.nav-searchbar__fav::after {
+  /* 44×44 热区扩展（不改变视觉） */
+  content: "";
+  position: absolute;
+  inset: -6px -4px;
+}
+.nav-searchbar__fav[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--accent-on);
+}
+.nav-searchbar__fav:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* ── 推荐弹窗顶部「收藏组合」chip（AC-115）── */
+.route-sheet__fav {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 32px;
+  padding: 0 10px;
+  border: var(--frame-w) solid var(--border-2);
+  border-radius: var(--radius-btn);
+  background: var(--surface);
+  color: var(--accent);
+  font-size: var(--text-2xs);
+  font-weight: var(--fw-emphasize);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.route-sheet__fav.is-on {
+  background: var(--accent-soft);
+  border-color: var(--accent-soft);
+  color: var(--accent-deep);
+}
+.route-sheet__fav:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.route-sheet__fav:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ── 收藏页容器 / 分组 ── */
+.fav-page {
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.fav-sec {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.fav-sec__title {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: 600;
+  letter-spacing: var(--tracking-title);
+  color: var(--fg);
+}
+.fav-sec__empty {
+  margin: 0;
+  line-height: var(--leading-body);
+}
+.fav-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2); /* 卡与卡 8px */
+}
+
+/* ── 扁卡片（56px；组合卡 / 地点卡同构）── */
+.fav-flat {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  min-height: 56px;
+  /* ⚠️ v3.3.0（P1-ε · AC-112 + AC-113/121 联立求解）：
+     · 本项目**无全局 `box-sizing` 重置** ⇒ 必须显式 `border-box`，否则 `min-height:56px`
+       作用在内容盒（56 + 纵向 padding + 边框）⇒ **实测卡高 ~70~83px**，与「扁卡 56px」不符。
+     · `border-box` 下：56 = 边框 3 + 纵向 padding 2p + 内容 ⇒ 内容 = 53 − 2p；
+       卡内工具须 **44×44** ⇒ 内容 ≥ 44 ⇒ p ≤ 4.5 ⇒ 取 **p = 4px**（内容 45 ≥ 44）。
+     ⇒ 卡高**精确 56px** 且工具 **44×44** 同时成立。横向仍 `--space-4`(16px)（视觉未变）。 */
+  box-sizing: border-box;
+  padding: 4px var(--space-4);
+  border: 1.5px solid var(--border-strong);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  box-shadow: var(--shadow-hard-sm);
+  transition: border-color var(--dur-instant) var(--ease-standard);
+}
+/* hover **只换边色**（不叠投影 ⇒ 避「幽灵卡」反模式） */
+.fav-flat:hover {
+  border-color: var(--accent);
+}
+.fav-flat.is-ro {
+  opacity: 0.6;
+}
+.fav-flat__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.fav-flat__main:active {
+  background: var(--surface-2);
+}
+.fav-flat__main:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-btn);
+}
+.fav-flat__pin,
+.fav-flat__lead {
+  flex: none;
+  display: inline-flex;
+  color: var(--accent);
+}
+.fav-flat__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-md);
+  font-weight: 600;
+  color: var(--fg);
+}
+.fav-flat.is-off .fav-flat__name {
+  color: var(--meta);
+}
+.fav-flat__off {
+  flex: none;
+  font-size: var(--text-2xs);
+  color: var(--meta);
+}
+/* 卡右工具（编辑 / ⋯）：44×44 命中区 */
+.fav-flat__tool {
+  flex: none;
+  /* ★ v3.3.0（P1-ε · AC-113/121）：**须显式 44×44** —— 只给 width 时，`align-items:stretch`
+     会把高度交给卡的内容带（原 32px）⇒ 真机命中区 44×30，低于触摸目标下限。 */
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--radius-btn);
+  background: none;
+  color: var(--accent);
+  cursor: pointer;
+}
+.fav-flat__mwrap .fav-flat__tool {
+  color: var(--fg-2);
+}
+.fav-flat__tool:hover {
+  background: var(--accent-soft);
+}
+.fav-flat__tool:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.fav-flat__tool:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.fav-flat__mwrap {
+  position: relative;
+  flex: none;
+  display: inline-flex;
+}
+.fav-flat__menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 40;
+  min-width: 132px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  border: var(--frame-w) solid var(--border-2);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  box-shadow: var(--shadow-card, var(--shadow-sheet));
+}
+.fav-flat__mitem {
+  min-height: 40px;
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: var(--radius-btn);
+  background: none;
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.fav-flat__mitem:hover {
+  background: var(--accent-soft);
+  color: var(--accent-deep);
+}
+
+/* ── 整体空态 ── */
+.fav-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-8) var(--space-4);
+  text-align: center;
+}
+.fav-empty__icon {
+  display: inline-flex;
+  color: var(--meta);
+}
+
+/* ── 编辑弹层（组合改名/互换；地点改名）── */
+.fav-sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 95;
+  display: flex;
+  align-items: flex-end;
+}
+.fav-sheet__scrim {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.32);
+}
+.fav-sheet__panel {
+  position: relative;
+  width: 100%;
+  /* ⚠️ 必须 border-box：本项目**无全局 box-sizing 重置** ⇒ 否则 padding 会额外撑宽 32px 溢出视口 */
+  box-sizing: border-box;
+  padding: var(--space-4) var(--space-4) max(var(--space-4), env(safe-area-inset-bottom, 0px));
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  background: var(--surface);
+  border-top-left-radius: var(--radius-sheet);
+  border-top-right-radius: var(--radius-sheet);
+  box-shadow: var(--shadow-sheet);
+}
+.fav-sheet__od {
+  margin: 0;
+  color: var(--fg-2);
+}
+.fav-sheet__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.fav-sheet__field input {
+  height: 44px;
+  padding: 0 var(--space-3);
+  border: var(--frame-w) solid var(--border-2);
+  border-radius: var(--radius-btn);
+  background: var(--surface);
+  color: var(--fg);
+  font-size: var(--text-md);
+}
+.fav-sheet__field input:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.fav-sheet__acts {
+  display: flex;
+  gap: var(--space-2);
+  justify-content: flex-end;
+}
+/* 可编辑端点行（03 §3.2：`起点 [当前值 ▸ 改]` / `终点 [当前值 ▸ 改]`）—— 行高 ≥44 保触摸目标 */
+.fav-sheet__tip {
+  margin: 0;
+  line-height: var(--leading-body);
+}
+.fav-sheet__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 44px;
+  padding: var(--space-1) 0;
+  border-bottom: 1px solid var(--border);
+}
+.fav-sheet__k {
+  flex: none;
+  width: 32px;
+  color: var(--muted);
+}
+.fav-sheet__v {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-md);
+  color: var(--fg);
+}
+.fav-sheet__swap {
+  align-self: flex-start;
+}

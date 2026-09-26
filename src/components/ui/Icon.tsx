@@ -47,7 +47,6 @@ import {
   IconGauge,
   IconHome,
   IconHomeFilled,
-  IconInfoCircleFilled,
   IconListDetails,
   IconLock,
   IconMapPin,
@@ -70,7 +69,50 @@ import {
 /** ★ 仅此三档，不得混用（§8） */
 export type IconSize = 16 | 20 | 24;
 
-/** 语义名 → Tabler 图标组件（唯一映射表） */
+/**
+ * ★ v3.3.0（AC-109 · 设计师裁决「方案 B」）：**修正版线性 info**。
+ *
+ * 与 Tabler `IconInfoCircle` **逐字同几何**（外圈 + i 的竖笔 + i 的点），**唯一差异**：
+ * 把 Tabler 的**零长度段**点（`M12 9h.01`）改为 `<circle r=1 fill="currentColor">`。
+ *
+ * 为什么不用 `strokeLinecap="round"` 修那条 path：本项目图标门禁
+ * `.verify/audit-icon-dots.mjs` 的判据正是「**零长度段**」（butt cap 下不渲染 ⇒ 点丢失）。
+ * 用 `<circle>` 实现圆点 ⇒ 该图标**天然零长度段 = 0**，门禁**无需为它开特例**（门禁强度不被削弱），
+ * 视觉上与 Tabler 的 round-cap 圆点**完全一致**（半径 = strokeWidth / 2 = 1）。
+ */
+function IconInfoCircleLinear({
+  size = 20,
+  stroke = 2,
+  className,
+  ...rest
+}: {
+  size?: number;
+  stroke?: number;
+  className?: string;
+  [k: string]: unknown;
+}) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={stroke}
+      strokeLinecap="butt"
+      strokeLinejoin="miter"
+      className={`mm-icon${className ? ` ${className}` : ""}`}
+      {...rest}
+    >
+      <path d="M3 12a9 9 0 1 0 18 0a9 9 0 0 0 -18 0" />
+      <path d="M11 12h1v4h1" />
+      <circle cx="12" cy="9" r="1" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+/** 语义名 → 图标组件（唯一映射表；★ v3.3.0 起含 1 个项目内联件 `IconInfoCircleLinear`） */
 const REGISTRY: Record<string, any> = {
   /* 导航 / 主流程 */
   search: IconSearch,
@@ -130,12 +172,12 @@ const REGISTRY: Record<string, any> = {
   "route-2": IconRoute2,
   /* ★ v3.3.0（AC-109）· 零长度段根治（butt cap 下「点」不渲染）：
      · `help-circle`（帮助页分区图标）→ `IconBook`（与底导 help 语义统一；零长度段 0）
-     · `info-circle`（到站横幅「i」· **安全级元素，图标须完整**）→ `IconInfoCircleFilled`
-       （原 `IconInfoCircle` 的 i 点 = 零长度段 `h.01`；实心版以**镂空**呈现 i ⇒ 完整可见）
+     · `info-circle`（到站横幅「i」· **安全级元素，图标须完整**）→ `IconInfoCircleLinear`
+       （**项目内联 · 方案 B**：保持全站**线性**语汇，仅把零长度段的点改为 `<circle>` ⇒ 完整可见）
      · `list` → `IconListDetails`（原 `IconList` 的项目符号 = 零长度段 ×3）
-     ⚠️ 所有选择：Tabler **同库 3.47.0**（不混库），size/stroke 风格不变。 */
+     ⚠️ 除内联件外均为 Tabler **同库 3.47.0**（不混库），size/stroke 风格不变。 */
   "help-circle": IconBook,
-  "info-circle": IconInfoCircleFilled,
+  "info-circle": IconInfoCircleLinear,
   list: IconListDetails,
 };
 

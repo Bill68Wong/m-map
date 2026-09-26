@@ -88,7 +88,8 @@ export default function NavBrandBar({
             title="公共交通路线"
             onClick={onOpenLines}
           >
-            <Icon name="records" size={20} />
+            {/* ★ v3.3.0（设计师裁决）：本键语义 = 「全部线路」⇒ 改 `route-2`（比 `records` 更贴切） */}
+            <Icon name="route-2" size={20} />
           </button>
         )}
         {/* ★ v3.3.0（AC-100）：**首页定位按钮 = 品牌栏右列原位**（「查看路线」下方）。

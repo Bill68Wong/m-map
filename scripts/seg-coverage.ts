@@ -41,7 +41,6 @@ const PLACE_SHORT: Record<string, string> = {
   hengqin: "橫琴口岸",
   gate: "關閘（拱北口岸）",
 };
-const PAIR_ORDER = ["school", "hengqin", "gate"];
 
 const mainCode = (c: string) => /^[A-Za-z]+\d+/.exec(c)?.[0] ?? c;
 const stripCode = (s: string) => s.replace(/^[A-Za-z]+\d+(?:\/\d+)?\s+/, "");

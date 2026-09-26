@@ -1,6 +1,6 @@
 {
   "name": "must-dengxiao",
-  "version": "3.2.0",
+  "version": "3.3.0",
   "private": true,
   "description": "M Map · 澳门巴士 / 轻轨全澳导航：全屏地图、路线收藏与实时报站（数据来源：澳门交通事务局 DSAT）",
   "scripts": {
@@ -22,6 +22,7 @@
     "test:overview": "tsx scripts/test-route-overview.ts",
     "test:altbuses": "tsx scripts/test-altbuses.ts",
     "test:siblings": "tsx scripts/test-siblings.ts",
+    "test:favorites-v3": "tsx scripts/test-favorites-v3.ts",
     "db:migrate-v071": "tsx scripts/db-guard.ts run db/migrate-v071.ts",
     "db:migrate-v090": "tsx scripts/db-guard.ts run db/migrate-v090.ts",
     "db:migrate-v100": "tsx scripts/db-guard.ts run db/migrate-v100.ts",

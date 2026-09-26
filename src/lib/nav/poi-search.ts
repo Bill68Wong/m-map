@@ -93,7 +93,12 @@ function cacheSet(key: string, results: PoiSearchResult[]): void {
   if (amapCache.size >= CACHE_MAX) {
     let oldestKey: string | null = null;
     let oldestAt = Infinity;
-    for (const [k, v] of amapCache) if (v.at < oldestAt) ((oldestAt = v.at), (oldestKey = k));
+    for (const [k, v] of amapCache) {
+      if (v.at < oldestAt) {
+        oldestAt = v.at;
+        oldestKey = k;
+      }
+    }
     if (oldestKey) amapCache.delete(oldestKey);
   }
   amapCache.set(key, { at: Date.now(), results });

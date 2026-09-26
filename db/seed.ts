@@ -183,11 +183,6 @@ async function main() {
       const firstVehicleSeq = p.legs.find((l) => l.kind === "bus" || l.kind === "lrt")?.seq ?? null;
 
       for (const leg of p.legs) {
-        const ref = (v?: string): string | null => {
-          if (!v) return null;
-          if (v.startsWith("station:")) return v.slice(8); // 已是编号（含 X- 前缀按名称查）
-          return null;
-        };
         // 站点引用可能是真实编号（C653）也可能是名称（路氹東/新濠天地）
         const resolveStation = (v?: string): string | null => {
           if (!v) return null;

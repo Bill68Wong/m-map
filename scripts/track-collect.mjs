@@ -957,7 +957,6 @@ async function main() {
   const RECOVER_HOLD_MS = Math.max(30, CFG.recoverHoldSec) * 1000; // 恢复期每档需稳定停留的时长
   let exemptTotal = 0;                //   累计「同秒突发豁免」的失败数（仅豁免降档判定，总数照记）
   let aborted = null;
-  let lastSignalTs = "";
 
   // ── v1.1.0 位置采样状态（**独立于 health**，见文件头「位置采样」）──
   const loc = {

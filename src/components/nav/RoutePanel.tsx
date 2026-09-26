@@ -46,7 +46,7 @@ export default function RoutePanel({
   userPos,
   canGo,
   going,
-  query,
+  /* `query` 仍为可选 prop（兼容调用方）；v3.3.0 起收藏按钮不再需要它（只收组合 OD） */
   onGo,
   onTapFrom,
   onTapDest,
@@ -155,13 +155,11 @@ export default function RoutePanel({
           >
             {going ? "正在规划…" : "出发"}
           </button>
+          {/* ★ v3.3.0（AC-115）：v3 起 = 只收藏「组合」（OD） */}
           {effectiveFrom && dest && (
             <FavoriteButton
-              kind="place"
-              entry="home"
               from={endpointOf(effectiveFrom)}
               to={endpointOf(dest)}
-              query={query}
               withLabel
               className="fav-btn--block"
             />

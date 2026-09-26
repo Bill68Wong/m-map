@@ -272,9 +272,8 @@ export default function RouteSheet({
           </button>
           <span className="route-sheet__od t-label">{odLabel}</span>
           {/* 收藏（仅 recommend 栏；位于刷新按钮左侧） */}
-          {pane === "recommend" && fav && (
-            <FavoriteButton kind="place" entry="odbar" from={fav.from} to={fav.to} query={query} />
-          )}
+          {/* ★ v3.3.0（AC-115）：推荐弹窗顶部「收藏组合」chip（图标 + 文字，与起终点页**同一常量**） */}
+          {pane === "recommend" && fav && <FavoriteButton from={fav.from} to={fav.to} />}
           {/* 右上：情境化刷新（AC-87）——recommend 重查推荐 / detail·riding 刷新巴士数据；busy 自旋 */}
           <button
             type="button"
