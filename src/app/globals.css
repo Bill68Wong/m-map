@@ -95,12 +95,12 @@
   /* 圆角 Radius（上限 10px；按钮不用 pill） */
   --radius-chip: 6px;
   /**
-   * ★ v3.1.1 恢复（回归 v2.4.0 标签形态）：
-   *   · `--radius-group-pad`：**多码组容器**圆角（7px）。
-   *   · `--radius-chip-inner`：**相邻内侧**圆角（3px）—— 并列块相邻的左右内角收小，拼缝不硌手；
-   *     两端外角仍是 `--radius-chip`(6px)。
-   *   ⚠️ 这两个 Token 曾于 v2.4.1 被误删（当时注释写「已无使用者」——因为那一版把并列改成了
-   *     「斜切 + 空白缝」、每块圆角一起没了）。v3.1.1 随形态回归一并**恢复**。
+   * ⚠️ v3.2.0 起：线路标签回归 **v0.19.1「谷歌地图风格」**（组级圆角 + 块平行四边形切角 +
+   *   「/」形**负空间留白缝**，详见本文件下方 `route-stack` 段）。
+   *   该形态不再需要「组容器内边距圆角」与「相邻内侧小圆角」两个 Token ⇒ 二者**当前无引用**；
+   *   按「Token 只增不改」纪律**保留定义**（不删），仅更新此注释。未来形态若再变，可直接复用。
+   *   · `--radius-group-pad`：多码组容器圆角（7px）—— 现无引用。
+   *   · `--radius-chip-inner`：相邻内侧圆角（3px）—— 现无引用。
    */
   --radius-group-pad: 7px;
   --radius-chip-inner: 3px;
@@ -788,10 +788,8 @@ button[aria-disabled="true"] {
   }
 }
 
-/* ★ 2026-09-26（迭代-导航优化 B3 / 07 §j.3）：v0.19.1 旧 `.route-stack` 整套（斜切平行四边形 +
-   负 margin 咬合）已**逐选择器删除** —— 现行规范见本文件 L3209-3301 的 B2 段（v2.4.1「斜切 + 等宽空白缝」）。
-   容器仍需要的属性（display:inline-flex / align-items:center / flex-shrink:0 / max-width:100%）
-   已合并进 B2 段 `.route-stack`，此处不再重复定义。 */
+/* ★ v3.2.0（需求 13）：v0.19.1「谷歌地图风格」线路标签**回归** —— 现行规范见本文件下方
+   B2 段（组级裁剪 + 块平行四边形切角 + 「/」形负空间留白缝 + 白字）。此处不再重复定义。 */
 
 /* 图标徽标（小圆圈图标） */
 .icon-badge {
@@ -967,6 +965,22 @@ button[aria-disabled="true"] {
   /* ★ v1.1.7：原先 `infinite` 无限脉动 —— 主读数（倒计时大字）会**持续闪动抢注意力**，
      且长时间看容易累。改为「有限次数」：只闪 3 次就停住。 */
   animation: eta-pulse 1.2s ease-in-out 3;
+}
+/* ── ★ v3.2.0（需求 2 / AC-68）：站台卡「现正到达 · X 分 Y 秒」一行式 ──
+   lead 不参与 34px 放大（0.5em ≈ 17px）；数值槽 `tabular-nums` 消除读秒数字宽度抖动。 */
+.eta-big__lead {
+  font-size: 0.5em;
+  font-weight: var(--fw-announce);
+  color: var(--track-current);
+  letter-spacing: 0;
+}
+.eta-big__sep {
+  font-size: 0.45em;
+  color: var(--meta);
+  margin: 0 var(--space-1);
+}
+.eta-big__num {
+  font-variant-numeric: tabular-nums;
 }
 
 .t-center {
@@ -1388,6 +1402,39 @@ button[aria-disabled="true"] {
   color: var(--on-surface-var);
 }
 
+/* ── ★ v3.2.0（需求 2 / AC-66/68）：推荐卡行内「现正到达 · X 分 Y 秒」+「推算」角标 ── */
+.rc-live__lead {
+  color: var(--track-current);
+  font-weight: var(--fw-announce);
+}
+.rc-live__time {
+  font-variant-numeric: tabular-nums;
+}
+/* 紧凑处「推算」小角标（灰 = 系统推算，与实色读数区分；合规可区分，AC-66） */
+.rc-est-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 16px;
+  padding: 0 5px;
+  margin-left: var(--space-1);
+  border-radius: var(--radius-chip);
+  background: var(--surface-2);
+  color: var(--meta);
+  font-size: var(--text-2xs);
+  font-weight: var(--fw-emphasize);
+  letter-spacing: 0;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+/* 站台卡底部完整备注句（小字 · 不换行 · AC-66） */
+.eta-note {
+  margin-top: var(--space-2);
+  font-size: var(--text-2xs);
+  line-height: 1.5;
+  color: var(--meta);
+  white-space: nowrap; /* AC-66：不换行 */
+}
+
 /* ── 赶车分档徽章 ── */
 .rc-tier {
   flex-shrink: 0;
@@ -1428,6 +1475,22 @@ button[aria-disabled="true"] {
 .rc-tier--5 {
   background: var(--tier-5);
   color: var(--on-surface-var);
+}
+
+/* ── ★ v3.3.0（AC-105）：被「轻轨优先」置顶的方案卡 · 头部角标 ──
+   与既有角标同槽位（`cardAction`）；**不加阴影、不用红色**（不制造焦虑）。 */
+.rc-lrtbadge {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 8px;
+  border-radius: var(--radius-chip);
+  background: var(--accent-soft);
+  color: var(--accent-deep);
+  font-size: var(--text-2xs);
+  font-weight: var(--fw-emphasize);
+  white-space: nowrap;
 }
 
 /* ── ★ v1.1.5：本班之外的后续班次（卡内列出，不另开卡）── */
@@ -1500,6 +1563,22 @@ button[aria-disabled="true"] {
 /* ── 空状态 ── */
 .rc-empty {
   padding: 20px 16px;
+}
+/* ★ v3.3.0（AC-108）：中性空态（0 卡）—— 图标中性灰 + 上下留白；**无红色**（空 ≠ 错误） */
+.rc-empty--neutral {
+  text-align: center;
+  padding: var(--space-6) var(--space-4);
+}
+.rc-empty__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: var(--space-2);
+  color: var(--meta);
+}
+.rc-empty--neutral .btn {
+  margin-inline: auto;
+  display: inline-flex;
 }
 
 /* ── 页脚 ── */
@@ -2064,12 +2143,18 @@ button[aria-disabled="true"] {
          —— 本文件所有 marker 均沿用「offset 自左上角偏移」的高德默认锚点约定，故此钉
          只靠 offset 定位，**不再叠加 CSS transform**（否则双重偏移）。
        · 投影改由 drop-shadow 施加，永远朝正下方、不再随容器旋转。
-     几何 Token（--destpin-w/-h/-shadow）见文件末尾 v2.15 追加段。 */
+     几何 Token（--destpin-w/-h/-shadow）见文件末尾 v2.15 追加段。
+   ★ v3.3.0（AC-92 · ADR-102）：改**内联 SVG**（`src/lib/nav/pin-svg.ts`，由 marker content 注入）
+     ⇒ **删除 `background: url(...)`**（不再依赖外链文件 + CSS background 合成）。
+     `filter: drop-shadow(...)` **降为可选增强**（不得成为可见性的必要条件 —— SVG 自带白色描边外圈）。 */
 .nav-map__destpin {
   width: var(--destpin-w);
   height: var(--destpin-h);
-  background: url("/pin-destination.svg") center / contain no-repeat;
-  filter: drop-shadow(var(--destpin-shadow));
+  filter: drop-shadow(var(--destpin-shadow)); /* 可选增强（去掉不影响可见性） */
+}
+.nav-map__destpin svg,
+.nav-map__originpin svg {
+  display: block; /* 消 inline SVG 基线留白，与 20×26 外框精确贴合 */
 }
 
 /* ── ★ v2.1.0：巴士站点图层 + 站点信息卡 ── */
@@ -2502,6 +2587,48 @@ button[aria-disabled="true"] {
   border: var(--frame-w) solid var(--border-strong);
   border-radius: var(--radius-full);
   box-shadow: var(--shadow-hard-sm);
+}
+
+/* ── ★ v3.2.0（需求 9/11 / AC-83/85）：**页面级定位浮层** `.nav-locate-fab`
+   （版 A：挂 `.route-sheet` 同级、`position:fixed`，不受 `.nav-map` 层叠上下文影响）。
+   职责：统一承担「回到我的位置」（替代已删的 `.nav-map__recenter`）+ 承担需求 11「随弹窗避让」。
+   ◆ 与面板**同一时基**：面板 `transform` 260ms，本按钮 `bottom` 同步缓动 ⇒ 恒贴合、无跑位。 */
+.nav-locate-fab {
+  position: fixed;
+  right: var(--space-3);
+  /* 面板顶边 y（视口）= --sheet-y-anim（面板 = top:0 + translateY(sheetY)）
+     ⇒ 按钮**底边** = 面板顶边上方 12px：bottom = 100dvh − sheetY + 12px。
+     面板关闭（sheetY 回落 100dvh）时 max() 兜到「底导 + safe + 12px」，仍在拇指区。 */
+  bottom: max(
+    calc(100dvh - var(--sheet-y-anim, 100dvh) + var(--space-3)),
+    calc(var(--tabbar-h) + var(--safe-bottom) + var(--space-3))
+  );
+  z-index: 24; /* 高于地图/品牌栏，低于面板 70（面板覆盖时不可见＝合理） */
+  width: 44px; /* 触摸目标 ≥44×44 */
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface);
+  color: var(--accent);
+  border: var(--frame-w) solid var(--border-strong);
+  border-radius: var(--radius-full);
+  box-shadow: var(--shadow-hard-sm); /* 站牌式硬投影，浮在地图上 */
+  pointer-events: auto;
+  transition: bottom var(--sheet-dur-settle) var(--sheet-ease);
+}
+.nav-locate-fab:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+/* 拖动期 0ms 跟手（与面板 data-dragging 同源；useSnapSheet 已镜像到 <html>） */
+html[data-sheet-dragging="on"] .nav-locate-fab {
+  transition: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .nav-locate-fab {
+    transition: none;
+  }
 }
 
 /* ── 顶置目的地搜索条（★ 标牌式；白底 + 蓝框 + 硬投影） ── */
@@ -3143,95 +3270,112 @@ button[aria-disabled="true"] {
   color: var(--muted);
 }
 
-/* ── B2：线路标签「分段 / 并列」（v2.4.1「斜切 + 等宽空白缝」） ── */
-/* ── B2：线路标签「分段 / 并列」（★ v3.1.1 裁定回归 v2.4.0 形态） ── */
+/* ══ B2：线路标签 · v0.19.1「谷歌地图风格」（◆ v3.2.0 现代实现 · 需求 13）══════════════
+   形态：整组圆角外框 + 块间「右上→左下」斜切**留白缝**（「/」形负空间，**非** `/` 字符、不铺黑底）
+        + 白字居中。
+   现代方案（根治 v2.2.1「容器圆角碎裂」）：把「圆角 + 裁剪」从顶层容器**下沉**到每个 `__group`
+        （逐组独立裁剪）⇒ 多段换行互不切角。
+   演进史：v0.19.1（本批目标）→ v2.2.1 墨底胶囊（有黑块 bug）→ v2.4.0 白斜杠 + 每块圆角
+        → v2.4.1 斜切直角（白字丢失）→ v3.1.1 回 v2.4.0（形态错）→ ★ v3.2.0 回归 v0.19.1。
+   参数锁定：md 斜切 8px + 咬合 -5px（缝 3px）· sm 斜切 6px + 咬合 -4px（缝 2px）。
+   ⚠️ 缝 = **负空间**（露父级卡片底色）⇒ 浅色露白卡、深色露深卡，**一份 CSS 通吃**。 */
+
+/* ① 顶层容器：只换行/段间距，**不裁剪、无圆角** */
 .route-stack {
-  /* 容器 = v2.4.0 两段声明的**净效果**（设计师已确认验收只看块/组计算值、不比容器字面）：
-     ① inline-flex / flex-shrink / max-width；① 的 `overflow:hidden` 与 `border-radius:6px` **弃用**
-        （会被换行裁边）；② `flex-wrap:wrap` / `row-gap:4px` / `overflow:visible` 生效。 */
-  display: inline-flex;
-  align-items: center; /* 覆盖 ① 的 stretch（实测 v2.4.0 布局为居中） */
-  flex-shrink: 0;
-  max-width: 100%;
-  flex-wrap: wrap;
-  row-gap: 4px;
-  overflow: visible; /* 圆角交块本体 / 组容器承担 ⇒ 容器不裁剪，多段换行不被切边 */
-}
-.route-stack__group {
   display: inline-flex;
   align-items: center;
+  flex-wrap: wrap;
+  row-gap: var(--space-1);
   flex-shrink: 0;
+  max-width: 100%;
+  overflow: visible; /* ◆ 关键：容器不裁剪 ⇒ 换行不被切边 */
 }
-/*
- * ★★ v3.1.1 裁定：**回归 v2.4.0 形态**（用户真机反馈「标签没统一到那个正确的旧版本」）。
- *
- * ── 形态演进史（每一步都由真浏览器实测驱动）───────────────────────────
- *   v0.19.1：斜切平行四边形 + 负 margin 咬合 ⇒ 斜缝
- *   v2.2.1 ：独立圆角块 + 白斜杠 + **墨色胶囊底**（§G.2 解法 A）—— 有「两码之间夹一整块黑」的 bug
- *   v2.4.0 ：「用户诉求 = **两块彩色码 + 一个白色斜杠**，**不要任何黑块**」
- *            ⇒ 去掉墨底、斜杠自身加四向黑描边；**每块保圆角**（外 6 / 相邻内侧 3）
- *   ✗ v2.4.1：把「不要墨底」误读成「不要斜杠」⇒ 删掉斜杠字符，改「斜切 + 等宽空隙」，
- *            并连带把每块圆角一起改没了（同组件内 6px / 0px 混排 = 用户投诉的「部分没做圆角」）
- *   ★ v3.1.1：**回到 v2.4.0**（白斜杠 + 每块圆角）；证据见
- *     `docs/迭代-导航优化-20260926/12-真机反馈-设计规格.md` §A（像素级两版对照实测）
- *
- * ── 实现要点 ───────────────────────────────────────────────────────────
- *   · 块间 = `.route-stack__slash`（白 `/` + 四向黑 `text-shadow`，`background: transparent`）；
- *   · 每块 `clip-path: none` + `border-radius`（首/末外角 6px、相邻内侧 3px）⇒ 圆角一致；
- *   · `+N` 用实色 `--muted`（v2.4.0 原写 `#fff` 会落白卡上「看不见」，这里保留修正版）。
- */
-.route-stack__group--multi {
-  /* 不铺任何底色（零黑块）；组容器圆角 = 「墨底」时代的视觉残留，保留以贴合 v2.4.0 实测值 */
-  background: transparent;
-  border-radius: var(--radius-group-pad);
-  padding: 0;
+
+/* ② 每「段」（组）= 一个自足「圆角外框」，逐组裁剪 */
+.route-stack__group {
+  display: inline-flex;
+  align-items: stretch; /* 块等高 */
+  flex-shrink: 0;
+  border-radius: var(--radius-chip); /* 6px · 与全站 chip 同值 */
+  overflow: hidden; /* ◆ 只裁本组 ⇒ 单一圆角外框；组与组互不影响 */
 }
-/* 单码组：纯净圆角矩形（不加任何底） */
-.route-stack__group:not(.route-stack__group--multi) {
-  border-radius: var(--radius-chip);
-  overflow: hidden;
-}
-/* 组内通用：字号与 padding 统一（单码 / 多码都一样）—— `clip-path: none` 是「每块保圆角」的关键 */
+
+/* ③ 块（右倾平行四边形） */
 .route-stack__group .route-stack__seg {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff; /* 白字（P0 例外色） */
+  font-weight: var(--fw-announce);
+  font-size: var(--text-xs); /* 13px */
+  line-height: var(--leading-tight); /* 1.15 */
+  letter-spacing: 0.2px;
+  padding: 4px 14px; /* 14 ≥ 斜切 8 ⇒ 文字不被斜边切 */
+  white-space: nowrap;
+  box-shadow: var(--hairline-inset);
+  clip-path: polygon(8px 0, 100% 0, calc(100% - 8px) 100%, 0 100%);
+  margin-right: -5px; /* 咬合 ⇒ 缝宽 = 8 − 5 = 3px */
+}
+.route-stack__group .route-stack__seg:first-child {
+  clip-path: polygon(0 0, 100% 0, calc(100% - 8px) 100%, 0 100%);
+  padding-left: 10px;
+}
+.route-stack__group .route-stack__seg:last-child {
+  margin-right: 0;
+  padding-right: 11px;
+  clip-path: polygon(8px 0, 100% 0, 100% 100%, 0 100%);
+}
+/* 单块：左右都不斜切 + 对称内边距（避免 first/last 同时命中削角） */
+.route-stack__group .route-stack__seg:only-child {
   clip-path: none;
   margin-right: 0;
-  border-radius: var(--radius-chip);
-  padding: 3px 8px;
+  padding: 4px 12px;
+}
+
+/* ④ `+N` 中性尾块（组内；左斜切延续节奏、右竖直收角） */
+.route-stack__group .route-stack__more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-weight: var(--fw-announce);
+  font-size: var(--text-xs);
+  line-height: var(--leading-tight);
+  padding: 4px 10px;
+  margin-right: 0;
+  box-shadow: var(--hairline-inset);
+  clip-path: polygon(8px 0, 100% 0, 100% 100%, 0 100%);
+}
+
+/* ⑤ sm —— 尺寸类覆盖；⚠️ 特异性比基础规则高一档（0,4,0 vs 0,3,0）防顺序风险 */
+.route-stack--sm .route-stack__group .route-stack__seg {
   font-size: 12px;
+  padding: 3px 12px;
+  clip-path: polygon(6px 0, 100% 0, calc(100% - 6px) 100%, 0 100%);
+  margin-right: -4px;
 }
-/* ★ 相邻内侧圆角收小到 3px（拼缝处不硌手；两端外角仍是 6px）—— 恢复 v2.4.0 的 `--radius-chip-inner` */
-.route-stack__group .route-stack__seg:not(:first-child) {
-  border-top-left-radius: var(--radius-chip-inner);
-  border-bottom-left-radius: var(--radius-chip-inner);
+.route-stack--sm .route-stack__group .route-stack__seg:first-child {
+  clip-path: polygon(0 0, 100% 0, calc(100% - 6px) 100%, 0 100%);
+  padding-left: 9px;
 }
-.route-stack__group .route-stack__seg:not(:last-child) {
-  border-top-right-radius: var(--radius-chip-inner);
-  border-bottom-right-radius: var(--radius-chip-inner);
+.route-stack--sm .route-stack__group .route-stack__seg:last-child {
+  margin-right: 0;
+  padding-right: 10px;
+  clip-path: polygon(6px 0, 100% 0, 100% 100%, 0 100%);
 }
-/* ★ 块间白斜杠（v2.4.0）：白字 + 四向黑描边 ⇒ 白卡 / 灰底 / 彩码旁都看得见；**组底与斜杠底都透明**（零黑块）。
-   深色主题共用一份规则（不另写变体）。 */
-.route-stack__slash {
-  color: #fff;
-  opacity: 1;
-  font-weight: 700;
-  font-size: 12px;
-  line-height: 1;
-  padding: 0 3px;
-  background: transparent;
-  text-shadow:
-    0 1px 2px rgba(0, 0, 0, 0.85),
-    -1px 0 1px rgba(0, 0, 0, 0.7),
-    1px 0 1px rgba(0, 0, 0, 0.7),
-    0 -1px 1px rgba(0, 0, 0, 0.7);
-}
-/* ★ v3.1.1（sm 修正版）：只保留**尺寸类**属性 —— `clip-path` 一律 `none`。
-   ⚠️ 不照抄 v2.4.0 的 `--sm` 规则（那 4 条与新并列规则特异性相同 0,3,0，靠文件顺序决出 ⇒
-     会把 `clip-path` 又带回来，重现「同组件内圆角不一致」bug）。 */
-.route-stack--sm .route-stack__seg {
+.route-stack--sm .route-stack__group .route-stack__seg:only-child {
   clip-path: none;
+  margin-right: 0;
   padding: 3px 11px;
-  font-size: 12px;
 }
+.route-stack--sm .route-stack__group .route-stack__more {
+  font-size: 12px;
+  padding: 3px 9px;
+  clip-path: polygon(6px 0, 100% 0, 100% 100%, 0 100%);
+}
+
 /* 段间「换乘箭头」：粗一档 + muted，两侧留 --space-2(8px)（§G.4） */
 .route-stack__arrow {
   color: var(--muted);
@@ -3239,16 +3383,6 @@ button[aria-disabled="true"] {
   font-size: 13px;
   line-height: 1;
   padding: 0 var(--space-2);
-}
-/* 单段并列 >3 条 → 第 3 条起折叠为 `+N`（§G.4）
-   ★ v2.4.1：墨底已移除 ⇒ 原来的**白字会看不见**，改用实色 `--muted`
-   （它排在最后一个色块之后，底色是卡片背景） */
-.route-stack__more {
-  color: var(--muted);
-  font-weight: 700;
-  font-size: 12px;
-  line-height: 1;
-  padding: 0 4px;
 }
 
 /* ── B4：多台站分组（站点卡；08 §D.2） ── */
@@ -3996,12 +4130,12 @@ button[aria-disabled="true"] {
    ★ v3.1.1 #4：由「18px 绿圆点」改为**红钉**（与终点钉同款钉形，仅换色/形状）——
      修正「起点/终点语义色反了」：起点 = 红钉 `#B4342A`、终点 = 绿钉 `#0B6E4F`。
      几何 Token（`--destpin-w/-h/-shadow`）与终点钉共用；位置由 marker 的 `offset(-10,-26)`
-     令**钉尖**锚定坐标点（同终点钉约定）。 */
+     令**钉尖**锚定坐标点（同终点钉约定）。
+   ★ v3.3.0（AC-92 · ADR-102）：改**内联 SVG 红钉**（删 `background: url(...)`；`filter` 降为可选增强）。 */
 .nav-map__originpin {
   width: var(--destpin-w);
   height: var(--destpin-h);
-  background: url("/pin-origin.svg") center / contain no-repeat;
-  filter: drop-shadow(var(--destpin-shadow));
+  filter: drop-shadow(var(--destpin-shadow)); /* 可选增强（去掉不影响可见性） */
 }
 
 /* ══ 全屏搜索层 ══ */
@@ -5595,6 +5729,26 @@ button[aria-disabled="true"] {
   border-radius: var(--radius-full);
   box-shadow: var(--focus-ring);
 }
+/* ★ v3.2.0（需求 12 / AC-87）：右上情境化刷新按钮 —— loading 自旋 + 冷却禁用口径。
+   ⚠️ 用 `aria-disabled` 而非原生 `disabled`：本栏是**拖动把手**，原生 disabled 按钮会吞掉
+   `pointerdown` ⇒ 形成拖拽死区；`aria-disabled` + JS 守卫同样能防重复点击且保留语义。 */
+.route-sheet__iconbtn.is-spin .mm-icon {
+  animation: navSpin 900ms linear infinite;
+}
+@keyframes navSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.route-sheet__iconbtn[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: default;
+}
+@media (prefers-reduced-motion: reduce) {
+  .route-sheet__iconbtn.is-spin .mm-icon {
+    animation: none; /* 改为静态 + aria-busy 传达 */
+  }
+}
 
 /* ── 内容区（两个 pane 叠加；列表 pane 常驻不卸载 ⇒ 保滚动位置）── */
 .route-sheet__panes {
@@ -6043,7 +6197,15 @@ body[data-sheet="open"] .nav-searchbar {
    ══════════════════════════════════════════════════════════════════════ */
 
 /* ── 进度纵条（NavStrip · 四态 + 「您在这里」骑线节点）── */
-.navstrip { position: relative; display: flex; flex-direction: column; padding: 2px 0; }
+.navstrip {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  padding: 2px 0;
+  /* ★ v3.2.0（需求 6 / AC-78）：纵条用户点「瞬移」时长（组件局部变量，非全局 Token）。
+     默认 0ms = 严格瞬移；若真机观感过硬，改 150ms（A/B 真机二选一，见 07 §4）。 */
+  --you-jump-dur: 0ms;
+}
 .navstrip__row {
   position: relative;
   display: flex;
@@ -6094,6 +6256,16 @@ body[data-sheet="open"] .nav-searchbar {
 }
 .navstrip__hop { font-size: var(--text-xs); color: var(--meta); white-space: nowrap; }
 .navstrip__sub { font-size: var(--text-xs); color: var(--muted); white-space: nowrap; }
+/* ★ v3.3.0（AC-103）：轻轨段方向（`{終點}方向`）—— 上车行右侧，右对齐不抢站名位（03 §2.3） */
+.navstrip__dir {
+  margin-left: auto;
+  flex: none;
+  font-size: var(--text-2xs);
+  line-height: 1;
+  color: var(--meta);
+  white-space: nowrap;
+  letter-spacing: 0;
+}
 .navstrip__check { margin-left: auto; flex: none; color: var(--track-passed); display: inline-flex; }
 .navstrip__badge {
   display: inline-flex;
@@ -6145,6 +6317,8 @@ body[data-sheet="open"] .nav-searchbar {
   border: 2.5px solid var(--surface);
   box-shadow: 0 0 0 var(--you-ring-0, 4px) var(--track-you-ring);
   animation: navYouPulse 1.6s ease-in-out infinite;
+  /* ★ v3.2.0（AC-78）：位置更新是**事件驱动**（整趟仅数次，非逐帧）⇒ 作用在 `top` 零性能顾虑 */
+  transition: top var(--you-jump-dur, 0ms) var(--ease-standard);
 }
 /* 冻结态（丢信号）：整体转弱，不做额外提示（冻结语义由 is-at/浮标停脉动表达） */
 .navstrip.is-frozen .navstrip__youmark,
@@ -6255,22 +6429,38 @@ body[data-sheet="open"] .nav-searchbar {
 .nav-actions__iconbtn[disabled] { opacity: 0.5; }
 .nav-actions__hint { text-align: center; color: var(--muted); font-size: var(--text-2xs); }
 
-/* ── 提醒横幅 / 浮层（AlightBanner：soon=警告色 / now=危险色 + 脉动；绿只标记站名）──
-   ★ 2026-09-26（AC-35/36，设计 §2.3「横幅浮层化」）：横幅单行式 + 挂 `.nav-alarm-layer`
-     浮层（面板内容层、滚动容器之外）⇒ 不参与滚动、出现/消失不推挤内容。 */
-.nav-alarm-layer {
-  position: absolute;
+/* ── 下车提醒横幅（AlightBanner：soon=警告色 / now=危险色 + 脉动；绿只标记站名）──
+   ★ v3.2.0（需求 8 / AC-81/82，07 §3.4）：由「面板内 absolute」改 **页面级顶部 fixed** ——
+     挂 `.nav-map-wrap` 外、与 `.route-sheet` 同级，独立于面板；安全级告警永不被面板/车卡遮。
+   ★ 落位公式（**07 §3.4 修正版**，替代 03 §2.2 朴素公式）：刘海机型 × full 档下，朴素
+     `top = safe-top + 8px` 会与面板顶边重叠 ~8px（压住按钮命中区，违反 AC-82）。
+     取「理想位（安全区下 8px）」与「兜底位（不越过面板 full 顶边，留 2px）」的**较小值**，
+     再与安全区取**较大值** ⇒ 全机型 0 重叠；不用「推面板」（瞬态告警忌布局抖动）。
+   ★ 高度**精确 44px**（`--topbanner-h` + `min-height` + `line-height:1.2`）—— 公式依赖它，
+     若未来改多行必须同步上调变量与 min-height，否则证明失效。 */
+.nav-alarm--top {
+  --topbanner-h: 44px;
+  --topbanner-gap: 8px;
+  position: fixed;
   left: var(--space-4);
   right: var(--space-4);
-  top: 44px; /* 面板把手(≈22px) 之下 */
-  z-index: var(--alarm-z, 15); /* > 滚动内容，< 吸底操作条 20 */
-  pointer-events: none; /* 纯提示，不挡下方可点内容 */
-  animation: navAlarmIn 200ms var(--ease-standard);
+  min-height: var(--topbanner-h);
+  line-height: 1.2;
+  top: max(
+    var(--safe-top),
+    min(
+      calc(var(--safe-top) + var(--topbanner-gap)),
+      calc(var(--sheet-top-full) - var(--topbanner-h) - 2px)
+    )
+  );
+  z-index: 94; /* > 车卡浮层 90 > 面板 70 > 品牌栏 20（安全级最上） */
+  pointer-events: none; /* 纯提示，即使覆盖也不阻断下层交互（含地图手势） */
+  animation: navAlarmInDown var(--dur-base) var(--ease-standard);
 }
-@keyframes navAlarmIn {
+@keyframes navAlarmInDown {
   from {
     opacity: 0;
-    transform: translateY(-6px);
+    transform: translateY(-8px);
   }
   to {
     opacity: 1;
@@ -6553,8 +6743,15 @@ body[data-sheet="open"] .nav-searchbar {
   }
 }
 
-/* ── 全屏化：导航中隐藏底导（body[data-nav="riding"]）── */
-body[data-nav="riding"] .bottom-nav { display: none; }
+/* ── 全屏化：导航中隐藏底导（★ v3.2.0：钩子由 `body[data-nav="riding"]` 迁移到
+   `body[data-nav-phase="riding"]`；旧布尔属性废弃，见 NavShell 的 effect）── */
+body[data-nav-phase="riding"] .bottom-nav { display: none; }
+
+/* ── ★ v3.2.0（需求 10 / AC-84）：导航模式右侧栏精简 ──
+   适用面 = `data-nav-phase != "off"`（架构师 §3 裁定：离开首页默认地图即隐藏，
+   覆盖「选路线 → 查看详情 → 导航全程」）。备选（一行可切）：收紧为
+   `body[data-nav-phase="detail"], body[data-nav-phase="riding"]` 可保留 recommend 态 logo。 */
+body[data-nav-phase]:not([data-nav-phase="off"]) .nav-brandbar__acts { display: none; }
 
 @media (prefers-reduced-motion: reduce) {
   .nav-track__alarm.is-now,
@@ -6563,8 +6760,15 @@ body[data-nav="riding"] .bottom-nav { display: none; }
   .navstrip__youmark,
   .navstrip__row.is-at .navstrip__dot,
   .navstrip__row.is-alight-now .navstrip__dot,
-  .nav-alarm.is-now,
-  .nav-alarm-layer {
+  .nav-alarm.is-now {
+    animation: none;
+  }
+  /* ★ v3.2.0（AC-78）：减动效下纵条用户点强制瞬移（不依赖 --you-jump-dur） */
+  .navstrip__youmark {
+    transition: none;
+  }
+  /* ★ v3.2.0（AC-81）：顶部下车横幅减动效 ⇒ 不做下滑/淡入动画（直接呈现） */
+  .nav-alarm--top {
     animation: none;
   }
   /* ★ v3.1.1 #4：蓝点 ping 层直接隐藏（仅留静态核心点 + 4px 光圈） */
@@ -6684,62 +6888,10 @@ body[data-nav="riding"] .bottom-nav { display: none; }
   --actions-slot-h: 96px;
 }
 
-/* ── ★ B1：让位锁恢复按钮（`.nav-map` 内浮层；free 态显示）────────────────
-   定位：地图右下、底部导航之上；右移以避让品牌栏右侧竖排按钮组（≈44px 宽）。
-   z-index 高于地图容器、低于面板与卡浮层（面板 z70 覆盖时不可见，符合 07 §a.4）。 */
-.nav-map__recenter {
-  position: absolute;
-  /* ★ 2026-09-26（P1-② 收尾）：由「右下」改「**左下**」——
-     品牌栏（`.nav-brandbar`）是三栏网格「左=空 · 中=换向键/线路标签 · 右=竖排按钮组」，
-     右列（`.nav-brandbar__acts`）在 peek 档会与本按钮重叠（center 被遮）⇒ 移到**地图左侧空白区**：
-     四态水平方向均无重叠元素。bottom 公式与联动逻辑不变。 */
-  left: var(--space-3);
-  right: auto;
-  /* ★ 2026-09-26（P1-②）：**动态贴「可见地图区」下沿** ——
-     `--sheet-y-anim` = 面板 translateY（由 `useSnapSheet` 镜像到 `<html>`）：
-       · 面板打开 ⇒ 按钮落在地图可见区底部（面板顶边上方 12px）；
-       · 面板关闭（`= 100dvh`）⇒ 回落 `12px`（原行为，且仍在底部导航之上）。
-     `.nav-map` 的底边 = 视口底 − (tabbar + safe) ⇒ 用 `100dvh − tabbar − safe − sheetY + 12px`；
-     `max(..., 12px)` 保证在面板关闭/低档时不越过底导。 */
-  bottom: max(
-    calc(100dvh - var(--tabbar-h) - var(--safe-bottom) - var(--sheet-y-anim, 100dvh) + 12px),
-    12px
-  );
-  z-index: 24;
-  /* ★ 与面板**同缓动**：档位落定时面板走 `transform` 260ms，本按钮走 `bottom` 同步缓动
-     ⇒ 二者始终贴合（无跑位/无反向）。拖动期由 `html[data-sheet-dragging=on]` 置 0ms 跟手。 */
-  transition: bottom var(--sheet-dur-settle) var(--sheet-ease);
-  pointer-events: auto;
-  /* 图标 + 文案（v3.1.1 #2：定位靶心 + 「回到我的位置」） */
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  max-width: 46vw;
-  height: 32px;
-  padding: 0 12px;
-  border-radius: var(--radius-btn);
-  background: var(--surface);
-  color: var(--accent);
-  border: var(--frame-w) solid var(--border-strong);
-  box-shadow: var(--hairline);
-  font-size: var(--text-xs);
-  font-weight: var(--fw-emphasize);
-  white-space: nowrap;
-  cursor: pointer;
-}
-.nav-map__recenter:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-/* 拖动期：0ms 跟手（与面板 `data-dragging` 同源；由 useSnapSheet 镜像到 <html>） */
-html[data-sheet-dragging="on"] .nav-map__recenter {
-  transition: none;
-}
-@media (prefers-reduced-motion: reduce) {
-  .nav-map__recenter {
-    transition: none;
-  }
-}
+/* ── ★ B1：让位锁恢复按钮 —— ◆ v3.2.0（需求 9 / AC-83）**整块删除** ──────────
+   左下「回到我的位置」按钮已彻底移除；`bottom` 公式与同缓动手感**原样由页面级 `.nav-locate-fab` 继承**
+   （见上方 `.nav-locate-fab` 规则）。让位锁（`.nav-map[data-map-follow=free]` 跳过自动取景）与
+   双击地图 `restore()` 恢复逻辑**保留不变**。 */
 
 /* ── ★ B3：导航头部 `.rc-dhead`（去灰框 + 总用时/线路标签同行；AC-32 / D-1 / D-2）── */
 .rc-dhead {
@@ -6795,7 +6947,15 @@ html[data-sheet-dragging="on"] .nav-map__recenter {
 .pref-switch {
   margin-bottom: var(--space-3);
 }
+/* ★ v3.3.0（AC-105 · 03 §5 修订 4）：三档 + 轻轨开关 **同一行**（三档 flex:1、开关 flex:none） */
+.pref-switch__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
 .pref-switch__seg {
+  flex: 1 1 0;
+  min-width: 0;
   display: flex;
   gap: 4px;
   padding: 4px;
@@ -6804,6 +6964,7 @@ html[data-sheet-dragging="on"] .nav-map__recenter {
 }
 .pref-switch__opt {
   flex: 1;
+  min-width: 0;
   height: 36px;
   display: inline-flex;
   align-items: center;
@@ -6815,7 +6976,79 @@ html[data-sheet-dragging="on"] .nav-map__recenter {
   color: var(--fg-2);
   font-size: var(--text-sm);
   font-weight: var(--fw-emphasize);
+  white-space: nowrap; /* ★ 三档文字不换行（修订 4） */
+  letter-spacing: 0;
   cursor: pointer;
+}
+/* 轻轨优先开关（switch · 非第四档）：轨道 44×24 / 旋钮 20×20 / 命中区 ≥44×44 */
+.lrt-switch {
+  position: relative;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+.lrt-switch::after {
+  /* 命中区 ≥44 高：仅**纵向**扩展（横向本就有 label+track ≈102px ≥44）
+     ⇒ 不横向外溢（避免给面板滚动容器添一个 8px 的隐形横向滚动） */
+  content: "";
+  position: absolute;
+  inset: -10px 0;
+}
+.lrt-switch__label {
+  font-size: var(--text-sm);
+  font-weight: var(--fw-emphasize);
+  color: var(--fg-2);
+  white-space: nowrap;
+  letter-spacing: 0;
+}
+.lrt-switch__track {
+  position: relative;
+  flex: none;
+  width: 44px;
+  height: 24px;
+  border-radius: var(--radius-full);
+  background: var(--border-2);
+  transition: background-color var(--dur-base) var(--ease-standard);
+}
+.lrt-switch__knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-full);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  transition: transform var(--dur-base) var(--ease-standard);
+}
+.lrt-switch[aria-checked="true"] .lrt-switch__track {
+  background: var(--accent);
+}
+.lrt-switch[aria-checked="true"] .lrt-switch__knob {
+  transform: translateX(20px);
+}
+.lrt-switch:focus-visible {
+  outline: none;
+}
+.lrt-switch:focus-visible .lrt-switch__track {
+  box-shadow: var(--focus-ring);
+}
+@media (prefers-reduced-motion: reduce) {
+  .lrt-switch__track,
+  .lrt-switch__knob {
+    transition: none;
+  }
+}
+/* 极窄屏兜底：隐藏档位**图标**只留文字，保「三档不换行」 */
+@media (max-width: 360px) {
+  .pref-switch__opt svg {
+    display: none;
+  }
 }
 .pref-switch__opt svg {
   flex: none;

@@ -92,6 +92,10 @@ interface StaticRows {
   lrtApi: { db_code: string; api_id: string; name_tc: string | null }[];
   lrtHol: { d: string }[];
   lrtTt: LrtTtRow[];
+  /** ★ v3.2.0：轻轨逐站/逐模式偏差（读秒唯一真源）；新表不存在时为空 */
+  lrtBias: { route_code: string; direction: string; pattern: string; api_station: string; dep_bias_sec: number | string | null }[];
+  /** ★ v3.2.0：轻轨线路级偏差（石排湾/横琴兜底） */
+  lrtLineParams: { route_code: string; dep_bias_sec: number | string | null }[];
 }
 
 /** 全部静态查询**并行发出**（一个 RTT 窗口），返回可序列化的原始行 */
@@ -109,6 +113,8 @@ async function fetchStaticRowsUncached(pool: Pool): Promise<StaticRows> {
     lrtApiRes,
     lrtHolRes,
     lrtTtRes,
+    lrtBiasRes,
+    lrtLineParamRes,
   ] = await Promise.all([
     queryRouteIndexRows(pool),
     pool.query(
@@ -153,6 +159,17 @@ async function fetchStaticRowsUncached(pool: Pool): Promise<StaticRows> {
       `SELECT api_station, route_no, direction, day_type, first_min, last_min, minutes
          FROM lrt_timetables`,
     ),
+    // ★ v3.2.0：轻轨偏差两件套折进**同一并行窗口**（小表；**零额外串行往返**，守住 230ms 红线）。
+    //   `lrt_station_biases` 为 v3.2.0 新表 —— 尚未建时容错为空（回落分钟级，不阻塞推荐）。
+    pool
+      .query(
+        `SELECT route_code, direction, pattern, api_station, dep_bias_sec
+           FROM lrt_station_biases`,
+      )
+      .catch(() => ({ rows: [] as unknown[] })),
+    pool
+      .query(`SELECT route_code, dep_bias_sec FROM lrt_route_params`)
+      .catch(() => ({ rows: [] as unknown[] })),
   ]);
 
   const [routeStops, stations] = routeIdxRows;
@@ -170,6 +187,8 @@ async function fetchStaticRowsUncached(pool: Pool): Promise<StaticRows> {
     lrtApi: lrtApiRes.rows as { db_code: string; api_id: string; name_tc: string | null }[],
     lrtHol: lrtHolRes.rows as { d: string }[],
     lrtTt: lrtTtRes.rows as unknown as LrtTtRow[],
+    lrtBias: lrtBiasRes.rows as StaticRows["lrtBias"],
+    lrtLineParams: lrtLineParamRes.rows as StaticRows["lrtLineParams"],
   };
 }
 
@@ -258,6 +277,8 @@ async function loadStaticsUncached(): Promise<RecStatic> {
       holidayRows: rows.lrtHol,
       ttRows: rows.lrtTt,
       dirStopsAll: routeIdx.dirStops,
+      biasRows: rows.lrtBias,
+      lineParamRows: rows.lrtLineParams,
     }),
     placeIds,
     planRows,

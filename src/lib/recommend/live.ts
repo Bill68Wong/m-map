@@ -418,7 +418,23 @@ export async function fetchLive(
     const prev = seenRoute.get(route);
     if (prev !== undefined && prev !== station) {
       // route 是 model.ts 的取用键 → 同线多站只能保一个（同方向实测不会发生，留告警以备数据变化）
-      conflicts.push(`${route}: ${prev} 与 ${station}（取 ${prev}）`);
+      //
+      // ★ v3.3.0（AC-97）：**「可用者优先」** —— 旧口径「首个桶为准」是**顺序相关**的：
+      //   实测「石排灣→科大」时，`LRT-石排湾线` 先被一个**非营运**的上车站视图占用
+      //   （`state=no_data`）⇒ 后到的**可用**视图（本地链上车站 `LRT-SPW`，`running`）被丢弃
+      //   ⇒ 本地跨线换乘候选在建模期即被 `excluded`（先于质量闸门）⇒ AC-97 假绿。
+      //   现：**已存视图不可用（轻轨非 running）而后到者可用 ⇒ 覆盖**；否则维持首个（行为不变）。
+      //   ⚠️ 仅对**轻轨**生效（巴士 `BusLive` 无 running 语义 ⇒ 恒视为可用 ⇒ 行为零变化）。
+      const prevLv = live.get(route);
+      const prevUsable = prevLv?.kind === "lrt" ? prevLv.state === "running" : true;
+      const nextUsable = lv.kind === "lrt" ? lv.state === "running" : true;
+      if (!prevUsable && nextUsable) {
+        seenRoute.set(route, station);
+        live.set(route, lv);
+        conflicts.push(`${route}: ${prev} 与 ${station}（改取可用者 ${station}）`);
+      } else {
+        conflicts.push(`${route}: ${prev} 与 ${station}（取 ${prev}）`);
+      }
       return;
     }
     seenRoute.set(route, station);
@@ -477,6 +493,8 @@ export async function fetchLive(
                   state: res.state,
                   departures: res.departures.map((d) => d.depMs),
                   clocks: res.departures.map((d) => d.clock),
+                  // ★ v3.2.0：与 departures 一一对应的秒级精准标记（缺省 → false）
+                  precise: res.departures.map((d) => d.secPrecise ?? false),
                   directionName: res.directionName,
                   lineCode: res.lineCode,
                 }

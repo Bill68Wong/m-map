@@ -30,6 +30,15 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { getPool } from "@/lib/db";
+import {
+  type BiasIndex,
+  type BiasLineRow,
+  type BiasStationRow,
+  buildBiasIndex,
+  emptyBiasIndex,
+  fixDeparture,
+} from "@/lib/lrt/apply-bias";
+import { LRT_PATTERN_ROUTE_NO } from "@/lib/lrt/pattern";
 import { loadStatics } from "@/lib/recommend/query";
 import { fetchStationLive } from "@/lib/recommend/live";
 import { mainCodeOf } from "@/lib/recommend/segment-lookup";
@@ -86,6 +95,13 @@ interface StationEtaItem {
   depMs?: number | null;
   /** ★ v2.10.1 轻轨专用：该线实测偏差（秒），供透明披露/诊断 */
   biasSec?: number;
+  /**
+   * ★ v3.2.0 轻轨专用：**是否有秒级偏差数据**（氹仔线模式命中 / 石排湾·横琴线路级）。
+   *   缺省/undefined **必须安全回落 false**（分钟级）—— 前端窗口判定据此（AC-68/69）。
+   */
+  secPrecise?: boolean;
+  /** ★ v3.2.0 轻轨专用：氹仔线命中的站间模式串（未命中/非氹仔线 = null） */
+  pattern?: string | null;
 }
 
 interface StationEtaResponse {
@@ -147,24 +163,65 @@ const LRT_ROUTE_NAME: Record<string, string> = {
 };
 
 /**
- * ★ v2.10.1：**线路级实测偏差**（来自 `lrt_route_params.dep_bias_sec`，单位秒）。
+ * ★ v3.2.0：**偏差索引**（逐站/逐模式 + 线路级兜底）。
  *
- * 为什么需要：官方时刻表是**表定**时间，实测与表定有固定偏差——
- *   · 石排湾线 `-5s`（表定 15:00 发车，**实际 14:59:55**）
- *   · 横琴线 `+40s`（表定 15:00 发车，**实际 15:00:40**）
- * ⇒ 报站必须**按修正后的时刻**报，否则用户按表定时间去等会错。
+ * 轻轨读秒「唯一真源」= `lrt_station_biases`（逐站/逐模式）；`lrt_route_params.dep_bias_sec`
+ * 保留为石排湾/横琴**线路级兜底**（两线单模式）。取用一律经 `fixDeparture`（与 `/api/lrt/eta` 同源）。
  *
- * ⚠️ 读库失败时不抛错 —— 回落为「全 0 偏差」（等于用表定值，行为同旧版）。
+ * ⚠️ 表尚未建 / 查询失败 → 返回**空索引** ⇒ 全量回落分钟级（行为同旧版），**不抛错**
+ *    （保证代码与数据可分先后上线）。
  */
-async function loadLrtBias(pool: ReturnType<typeof getPool>): Promise<Map<string, number>> {
+async function loadLrtBiasIndex(
+  pool: ReturnType<typeof getPool>,
+  apiStation: string,
+): Promise<BiasIndex> {
+  const empty = Promise.resolve({ rows: [] as unknown[] });
   try {
-    const rows = (
-      await pool.query(`SELECT route_code, dep_bias_sec FROM lrt_route_params`)
-    ).rows as { route_code: string; dep_bias_sec: number | string }[];
-    return new Map(rows.map((r) => [r.route_code, Number(r.dep_bias_sec) || 0]));
+    const [bs, lp] = await Promise.all([
+      pool
+        .query(
+          `SELECT route_code, direction, pattern, api_station, dep_bias_sec
+             FROM lrt_station_biases WHERE api_station = $1`,
+          [apiStation],
+        )
+        .catch(() => empty),
+      pool.query(`SELECT route_code, dep_bias_sec FROM lrt_route_params`).catch(() => empty),
+    ]);
+    if (!bs.rows.length && !lp.rows.length) return emptyBiasIndex();
+    return buildBiasIndex(bs.rows as BiasStationRow[], lp.rows as BiasLineRow[]);
   } catch {
-    return new Map();
+    return emptyBiasIndex();
   }
+}
+
+/**
+ * ★ v3.2.0：该站氹仔线的模式映射（`${direction}|${day_type}|${dep_min}` → 模式）。
+ *
+ * ⚠️ 键**必须含 direction**：同一站同一 (day_type, dep_min) 在**两个方向**上可能分属不同模式
+ *    （QA 实测 `AIR fri dep_min=451` → dir=BAR 为 `13222222222`、dir=TFT 为 `42322213132`；
+ *     全表 984 个跨方向不同模式的键）⇒ 缺 direction 会把两个方向折叠，取到「后写入方向」的模式，
+ *     使另一方向的班次命中错模式 → `secPrecise=false` 静默降级（AC-63 违反）。
+ *     ⚠️ 与 `next-departures.ts#loadBiasAndPatterns`（`AND direction=$3`）语义同源。
+ * ⚠️ 表未建 → 空映射 ⇒ 模式判定全回落（分钟级），不抛错。
+ */
+async function loadLrtPatterns(
+  pool: ReturnType<typeof getPool>,
+  apiStation: string,
+): Promise<Map<string, string>> {
+  const patterns = new Map<string, string>();
+  try {
+    const pr = await pool.query(
+      `SELECT direction, day_type, dep_min, pattern FROM lrt_station_patterns
+        WHERE api_station = $1 AND route_no = $2`,
+      [apiStation, LRT_PATTERN_ROUTE_NO],
+    );
+    for (const r of pr.rows as { direction: string; day_type: string; dep_min: number; pattern: string }[]) {
+      patterns.set(`${r.direction}|${r.day_type}|${r.dep_min}`, r.pattern);
+    }
+  } catch {
+    /* 表不存在 → 空映射 */
+  }
+  return patterns;
 }
 
 /** 秒级偏移（自当日 00:00 起）→ `HH:MM`（跨午夜按次日显示为 24+ 会溢出，这里取模 24h） */
@@ -213,36 +270,10 @@ async function lrtItems(
   ).rows as { api_id: string; name_tc: string }[];
   const nameOfApi = new Map(nameRows.map((r) => [r.api_id, lrtStationName(r.name_tc)]));
 
-  /**
-   * 取某个 (线路×方向) 在**当日类型**下的下一班（★ 2026-09-24 改**秒级**判定）。
-   *
-   * 旧口径 `v >= nowMin` 是分钟级：偏差为负（如石排湾 -5s）时，会把「该分钟内实际已开出」的
-   * 班次继续报为下一班（etaSec 夹到 0 显示「即将开出」却迟迟不滚动）⇒ 改为按
-   * **修正后发车秒** `v*60 + biasSec` 与当前秒 `nowSec` 比较，只取仍在未来的最近一班。
-   * @returns 表定发车「当日分钟偏移」（调用方再叠 `biasSec` 得绝对秒）
-   */
-  function nextDeparture(
-    minutes: unknown,
-    firstMin: number,
-    lastMin: number,
-    biasSec: number,
-    nowSec: number,
-  ): number | null {
-    let blocks: { hour: number; minutes: number[] }[] = [];
-    try {
-      blocks = typeof minutes === "string" ? JSON.parse(minutes) : ((minutes as typeof blocks) ?? []);
-    } catch {
-      return null;
-    }
-    const all: number[] = [];
-    for (const b of blocks ?? []) {
-      for (const m of b.minutes ?? []) all.push(b.hour * 60 + m);
-    }
-    all.sort((a, b) => a - b);
-    if (!all.length) return null;
-    if (nowMin > lastMin) return null; // 已收班
-    return all.find((v) => v * 60 + biasSec > nowSec) ?? null;
-  }
+  // ★ v3.2.0：偏差索引（逐站/逐模式 + 线路级兜底）+ 氹仔线模式映射。
+  //   新表不存在 → 空 ⇒ 全量回落分钟级（不抛错）。
+  const biasIndex = await loadLrtBiasIndex(pool, apiStation);
+  const patterns = await loadLrtPatterns(pool, apiStation);
 
   const byKey = new Map<string, { route_no: string; direction: string; minutes: unknown; first_min: number; last_min: number }>();
   for (const r of rows) {
@@ -251,8 +282,6 @@ async function lrtItems(
   }
 
   const items: StationEtaItem[] = [];
-  // ★ v2.10.1：读线路级实测偏差（石排湾 -5s / 横琴 +40s）—— 报站必须按**修正后**的时刻报
-  const biasOf = await loadLrtBias(pool);
   /** 当日**秒级**偏移（偏差是秒级，故不能只用分钟） */
   const nowSec = nowMin * 60 + macau.getUTCSeconds();
   /**
@@ -264,21 +293,59 @@ async function lrtItems(
   for (const [key, r] of byKey) {
     const [routeNo, direction] = key.split("|");
     const route = LRT_ROUTE_NAME[routeNo] ?? routeNo;
-    const biasSec = biasOf.get(route) ?? 0;
-    // ★ 2026-09-24：秒级选班（偏差为负时，该分钟内实际已开出的班次不再被错报为「下一班」）
-    const next = nextDeparture(r.minutes, r.first_min, r.last_min, biasSec, nowSec);
+
+    let blocks: { hour: number; minutes: number[] }[] = [];
+    try {
+      blocks = typeof r.minutes === "string" ? JSON.parse(r.minutes) : ((r.minutes as typeof blocks) ?? []);
+    } catch {
+      blocks = [];
+    }
+
     /**
-     * ★ v2.10.1：**表定发车秒 + 实测偏差 = 实际发车秒**。
-     *   例：石排湾线表定 15:00 发车、偏差 -5s ⇒ 实际 14:59:55 ⇒ `nextAt` 报 `14:59`、
-     *   倒计时以 14:59:55 为 0 点。
-     * ★ 2026-09-24：另下发 `depMs`（绝对时刻）—— 前端用设备时钟直接倒计时，不受缓存/延迟影响。
+     * ★ v3.2.0：**逐班**经 `fixDeparture`（与 `/api/lrt/eta` 同一唯一出口）叠加偏差，
+     *   取「（叠加后）仍在未来」的最近一班 —— 未命中模式/线路级偏差缺失 → 回落表定秒。
+     *   偏差为负（石排湾 -5s）时，「该分钟内实际已开出」的班次不再被错报为下一班。
      */
-    const nextSec = next === null ? null : next * 60 + biasSec;
-    const etaSec = nextSec === null ? null : Math.max(0, nextSec - nowSec);
-    // ★ 2026-09-24：绝对发车时刻（含偏差）；前端读秒的唯一依据（设备时钟倒计时）
-    const depMs = nextSec === null ? null : dayStartMs + nextSec * 1000;
+    let best: { depMs: number; biasSec: number; secPrecise: boolean; pattern: string | null; tableSec: number } | null = null;
+    if (nowMin <= r.last_min) {
+      for (const b of blocks ?? []) {
+        for (const m of b.minutes ?? []) {
+          const depMin = b.hour * 60 + m;
+          const pattern =
+            routeNo === LRT_PATTERN_ROUTE_NO
+              ? (patterns.get(`${direction}|${dayType}|${depMin}`) ?? null)
+              : null;
+          const fix = fixDeparture({
+            lineCode: route,
+            routeNo,
+            directionApi: direction,
+            apiStation,
+            dayType,
+            tableMin: depMin,
+            dayStartMs,
+            pattern,
+            biasIndex,
+          });
+          if (fix.depMs <= nowMs) continue;
+          if (!best || fix.depMs < best.depMs) {
+            best = {
+              depMs: fix.depMs,
+              biasSec: fix.biasSec,
+              secPrecise: fix.secPrecise,
+              pattern: fix.pattern,
+              tableSec: depMin * 60,
+            };
+          }
+        }
+      }
+    }
+
+    const nextSec = best ? best.tableSec + best.biasSec : null;
+    const etaSec = best && nextSec !== null ? Math.max(0, nextSec - nowSec) : null;
     // 分钟级（向后兼容旧前端）：向上取整，避免「还有 0 分」却还没发车
     const etaMin = etaSec === null ? null : Math.ceil(etaSec / 60);
+    // ★ 绝对发车时刻（含偏差，由 fixDeparture 产出）；前端读秒的唯一依据（设备时钟倒计时）
+    const depMs = best ? best.depMs : null;
 
     items.push({
       route,
@@ -288,12 +355,16 @@ async function lrtItems(
       // 轻轨没有「还有几站」概念（时刻表制）⇒ 恒 null，前端据 `kind` 切文案
       stopsAway: null,
       etaMin,
-      /** ★ 新增：秒级剩余（前端读秒用；氹仔线只显示分钟、横琴/石排湾显示到秒） */
+      /** 秒级剩余（前端读秒用；氹仔线只显示分钟、横琴/石排湾显示到秒） */
       etaSec,
-      /** ★ 2026-09-24：绝对发车时刻（UTC 毫秒）——设备时钟倒计时用 */
+      /** 绝对发车时刻（UTC 毫秒）——设备时钟倒计时用 */
       depMs,
-      /** ★ 新增：该线实测偏差（秒），供诊断与透明披露 */
-      biasSec,
+      /** 实际叠加偏差（秒）；未命中 = 0 */
+      biasSec: best ? best.biasSec : 0,
+      /** ★ v3.2.0：本班是否有秒级偏差数据（前端窗口/文案判定；缺省安全回落 false） */
+      secPrecise: best ? best.secPrecise : false,
+      /** ★ v3.2.0：氹仔线命中的站间模式串（未命中/非氹仔线 = null） */
+      pattern: best ? best.pattern : null,
       ok: true,
       kind: "lrt",
       nextAt: nextSec === null ? null : fmtHm(nextSec),

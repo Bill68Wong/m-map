@@ -46,7 +46,16 @@ export interface UseRecommend {
   reload: () => void;
 }
 
-export function useRecommend(query: string, open: boolean, prefs: PrefMode = "balanced"): UseRecommend {
+export function useRecommend(
+  query: string,
+  open: boolean,
+  prefs: PrefMode = "balanced",
+  /**
+   * ★ v3.3.0（AC-105）：**轻轨优先**开关 —— 透传 `/api/nav?lrtFirst=1`（后端在 `rankItems` 之后、
+   * `slice(limit)` 之前重排；未触发时静默、只重排不增删）。
+   */
+  lrtFirst = false,
+): UseRecommend {
   const [phase, setPhase] = useState<"idle" | "loading" | "ready" | "failed">("idle");
   const [data, setData] = useState<RecommendData | null>(null);
   const [err, setErr] = useState("");
@@ -55,8 +64,9 @@ export function useRecommend(query: string, open: boolean, prefs: PrefMode = "ba
   /** 并发保护：只认最后一次请求的结果 */
   const reqIdRef = useRef(0);
 
-  /** ★ 本批：query + `prefs` 组合键（偏好切换 ⇒ 重新拉取并重排） */
-  const fullQuery = query ? `${query}&prefs=${prefs}` : query;
+  /** ★ 本批：query + `prefs` 组合键（偏好切换 ⇒ 重新拉取并重排）；
+   *  ★ v3.3.0：并入 `lrtFirst`（开关切换 ⇒ 同样重拉重排）。 */
+  const fullQuery = query ? `${query}&prefs=${prefs}&lrtFirst=${lrtFirst ? 1 : 0}` : query;
 
   const load = useCallback(async (q: string) => {
     const id = ++reqIdRef.current;

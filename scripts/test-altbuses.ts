@@ -123,5 +123,59 @@ console.log("altBuses 回填口径 · 回归断言\n");
   assert(!(c1.altBuses ?? []).some((a) => a.totalMin === 99), "sibling：超阈值（99）仍被滤");
 }
 
+// ── ⑥ v3.3.0（AC-120）：组合内**每条线**均有后续班车（主干 + 多并行线） ──
+{
+  const c1 = mkCard(1, 20);
+  const c2 = mkCard(2, 40);
+  (c1.rides[0] as { parallelRoutes?: string[] }).parallelRoutes = ["51A", "51B"];
+  backfillAltBuses(
+    [c1, c2],
+    modeledOf(c1, [mkAlt("51", 25)]),
+    [
+      { parentPlanId: 1, route: "51A", alts: [mkAlt("51A", 26)] },
+      { parentPlanId: 1, route: "51B", alts: [mkAlt("51B", 27)] },
+    ],
+  );
+  const routes = (c1.altBuses ?? []).map((a) => a.route).sort();
+  assert(routes.join(",") === "51,51A,51B", "v3.3.0：组合内每条线（主干 + 2 并行）各自出后续班车");
+}
+
+// ── ⑦ v3.3.0（AC-120）：空实时池的并行线不列，但不影响他线 ──
+{
+  const c1 = mkCard(1, 20);
+  const c2 = mkCard(2, 40);
+  (c1.rides[0] as { parallelRoutes?: string[] }).parallelRoutes = ["51A"];
+  backfillAltBuses([c1, c2], modeledOf(c1, [mkAlt("51", 25)]), [{ parentPlanId: 1, route: "51A", alts: [] }]);
+  assert((c1.altBuses ?? []).map((a) => a.route).join(",") === "51", "v3.3.0：空实时池的并行线不列，主干线（51）仍在");
+}
+
+// ── ⑧ v3.3.0（AC-120）：去重（键 route + totalMin）──
+{
+  const c1 = mkCard(1, 20);
+  const c2 = mkCard(2, 40);
+  (c1.rides[0] as { parallelRoutes?: string[] }).parallelRoutes = ["51A"];
+  backfillAltBuses(
+    [c1, c2],
+    modeledOf(c1, [mkAlt("51", 25)]),
+    [{ parentPlanId: 1, route: "51A", alts: [mkAlt("51", 25), mkAlt("51A", 26)] }],
+  );
+  const keys = (c1.altBuses ?? []).map((a) => `${a.route}|${a.totalMin}`);
+  assert(new Set(keys).size === keys.length, "v3.3.0：去重后 route+totalMin 无重复");
+  assert(keys.includes("51|25") && keys.includes("51A|26"), "v3.3.0：去重保留主干与并行各一条");
+}
+
+// ── ⑨ v3.3.0（AC-120）：**幂等** —— 重复调用结果一致（先清空再重建） ──
+{
+  const c1 = mkCard(1, 20);
+  const c2 = mkCard(2, 33);
+  const modeled = modeledOf(c1, [mkAlt("51", 24), mkAlt("51", 40)]);
+  backfillAltBuses([c1, c2], modeled);
+  const first = JSON.stringify(c1.altBuses);
+  backfillAltBuses([c1, c2], modeled); // 重复调用（模拟重放 / 二次回填）
+  const second = JSON.stringify(c1.altBuses);
+  assert(first === second, "v3.3.0：幂等 —— 重复调用 altBuses 逐字一致");
+  assert((c1.altBuses?.length ?? 0) === 1, "v3.3.0：幂等不重复堆叠（仍为 1 条）");
+}
+
 console.log("\n" + (fail === 0 ? "✅ 全部通过" : "❌ 有失败") + "：pass=" + pass + " fail=" + fail);
 process.exit(fail === 0 ? 0 : 1);

@@ -13,6 +13,7 @@
  *   `fromCode` `toCode`（选填，如 place slug：home/school/hengqin/gate）
  *   `zone`（B/C|N/O|R）· `limit`（默认 5）· `nocache=1`（绕过 `transit_cache`）
  *   `prefs`（可选：`balanced` 默认 | `fewer_transfers` | `less_walk`；**非法值回落 `balanced`**）
+ *   `lrtFirst`（可选：`1`/`true` ⇒ **轻轨优先**置顶；**非法值回落 false**，不 400 —— v3.3.0 · AC-105）
  *
  * ★ v2.3.0（07 §2.1 / 05-Spec §5 修订）：追加**可选**参数 `chain` / `walk` / `tiers`
  *   （编码一律 `encodeURIComponent(JSON.stringify(<结构>))`）—— 承载用户自定义站链与步行参数。
@@ -104,8 +105,13 @@ export async function GET(req: NextRequest) {
   //   ⚠️ 与 `chain/walk/tiers` 不同：**非法值回落 `balanced`**（不 400）—— 见 07 §i.4。
   const prefs = parsePrefs(sp.get("prefs"));
 
+  // ★ v3.3.0（AC-105）：可选参数 `lrtFirst`（`=1` 或 `=true`）—— **轻轨优先**置顶开关。
+  //   ⚠️ 与 `chain/walk/tiers` 不同：**非法值回落 false**（不 400）—— fail-safe，不确定不置顶。
+  const lrtFirstRaw = (sp.get("lrtFirst") ?? "").trim().toLowerCase();
+  const lrtFirst = lrtFirstRaw === "1" || lrtFirstRaw === "true";
+
   try {
-    const r = await planNav(getPool(), { origin, dest, zone, limit, noCache, chain, walk, tiers, prefs });
+    const r = await planNav(getPool(), { origin, dest, zone, limit, noCache, chain, walk, tiers, prefs, lrtFirst });
     return NextResponse.json(
       {
         ok: true,

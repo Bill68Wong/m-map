@@ -232,8 +232,9 @@ export default function PoiSearchBox({
               {/* ★ 【7①】类型徽章：公交站 / 轻轨站 / 地点 */}
               <span className={`nav-sbox__type nav-sbox__type--${r.kind}`}>{TYPE_LABEL[r.kind] ?? "地点"}</span>
               <span className="nav-sbox__name">{displayName(r)}</span>
-              {r.source !== "local" && <span className="nav-sbox__badge">来自高德</span>}
-              {(r.district || r.address) && <span className="nav-sbox__meta t-muted">{r.district || r.address}</span>}
+              {/* ★ v3.3.0（AC-104）：来源字串去「来自」→ 仅「高德」；搜索结果**不显示区名**（district 不渲染） */}
+              {r.source !== "local" && <span className="nav-sbox__badge">高德</span>}
+              {r.address && <span className="nav-sbox__meta t-muted">{r.address}</span>}
               {typeof r.distM === "number" && <span className="nav-sbox__meta t-muted">{r.distM} m</span>}
             </button>
           ))}

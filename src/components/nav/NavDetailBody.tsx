@@ -20,10 +20,9 @@
  */
 import NavStrip from "./NavStrip";
 import StationReachFold from "./StationReachFold";
-import FavoriteButton from "@/components/favorites/FavoriteButton";
 import RouteStack from "@/components/RouteStack";
 import { LrtEtaInline } from "@/components/LrtEta";
-import { EtaText, Row, TierBadge, macauClock } from "@/components/RoutePieces";
+import { catchHintOf, directionNameOf, EtaText, Row, TierBadge, macauClock } from "@/components/RoutePieces";
 import type { FavoriteEndpoint, PlanSnapshot, RouteSeg } from "@/lib/favorites/types";
 import type { RecommendCard, SegmentStrip } from "@/lib/recommend/types";
 import type { RideTrackView } from "./useRideTracking";
@@ -42,7 +41,10 @@ export interface NavDetailBodyProps {
   colors: Record<string, string>;
   /** 目的地展示名 */
   destLabel: string;
-  /** 收藏入口数据 */
+  /**
+   * ★ v3.3.0（AC-115）：导航弹窗内**不设任何收藏入口** —— 原「收藏键」数据（`fav`）已随按钮一并移除。
+   *   保留为可选仅作**向后兼容**（调用方仍在传），`NavDetailBody` 不再消费。
+   */
   fav?: {
     from: FavoriteEndpoint;
     to: FavoriteEndpoint;
@@ -71,7 +73,7 @@ export default function NavDetailBody({
   stationLabel,
   colors,
   destLabel,
-  fav = null,
+  /* ★ v3.3.0（AC-115）：`fav` 不再消费（导航弹窗内无收藏入口）—— 保留 prop 以兼容调用方 */
   degraded = false,
   track = null,
   destCoord = null,
@@ -80,6 +82,10 @@ export default function NavDetailBody({
 }: NavDetailBodyProps) {
   const colorOf = (c: string) => colors[c] ?? null;
   const first = card.rides[0];
+  /** ★ v3.3.0（AC-107）：赶车提示（合并式）—— 后端 `catchHint` 优先、回落 `tierText` */
+  const firstHint = first ? catchHintOf(first) : { text: "", isHint: false };
+  /** ★ v3.3.0（AC-102）：总览栏线路标签 = 与推荐卡同构的分段结构（含段内并行线） */
+  const routeSegments = card.rides.map((r) => ({ codes: [r.route, ...(r.parallelRoutes ?? [])] }));
   const legIdx = track ? track.legIndex : 0;
   const trackStops = track && track.phase !== "off" ? (strips[legIdx]?.stops ?? []) : [];
   const stopLabel = (k: number | null): string =>
@@ -100,20 +106,13 @@ export default function NavDetailBody({
           </span>
         </div>
         <div className="rc-dhead__r">
-          <RouteStack codes={card.rides.map((r) => r.route)} colors={colors} size="sm" />
-          {fav && (
-            <FavoriteButton
-              kind="plan"
-              entry="detail"
-              from={fav.from}
-              to={fav.to}
-              query={fav.query}
-              fingerprint={fav.fingerprint}
-              snapshot={fav.snapshot}
-              route={fav.route}
-              withLabel
-            />
-          )}
+          {/* ★ v3.3.0（AC-102）：与推荐卡**逐字同构** —— 每段 = 主干线 + 段内并行线（`parallelRoutes`）
+              （改前只给主干线 ⇒ 推荐卡显示 `25/26`、进导航变 `25`，两处不一致）。 */}
+          <RouteStack segments={routeSegments} colors={colors} size="sm" />
+          {/* ★ v3.3.0（AC-115）：**导航弹窗内不设收藏入口**（用户明确）——
+              原「收藏键」`<FavoriteButton kind="plan" entry="detail" …/>` 已删除。
+              删除后 detail 头部右区仅剩线路标签（本总览栏）。收藏入口只在：
+              ① 起终点页「收藏组合」；② 推荐弹窗顶部「收藏组合」；③ 搜索框右上角「收藏地点」。 */}
         </div>
       </div>
 
@@ -139,14 +138,22 @@ export default function NavDetailBody({
                   lineCode={first.route}
                   departuresMs={first.liveDepartures}
                   clocks={first.liveClocks}
+                  /* ★ v3.2.0（AC-68/69）：逐班 secPrecise（`RideLegView.livePrecise`） */
+                  precise={first.livePrecise}
                   state="running"
-                  directionName={null}
+                  /* ★ v3.3.0（AC-103）：接通轻轨方向（改前恒传 null） */
+                  directionName={directionNameOf(first)}
                 />
               ) : (
                 <EtaText text={first.liveText || `等 ${first.waitMin} 分`} />
               )
             }
-            aside={first.tierText ? <TierBadge tier={first.tier} tierText={first.tierText} /> : null}
+            /* ★ v3.3.0（AC-107）：赶车提示（合并式 TierBadge，同推荐卡槽位） */
+            aside={
+              firstHint.text ? (
+                <TierBadge tier={first.tier} tierText={firstHint.text} catchHint={firstHint.isHint} />
+              ) : null
+            }
           />
         )}
       </div>

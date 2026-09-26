@@ -174,6 +174,9 @@ export const TIER_TEXT: Record<CatchTier, string> = {
  * 轻轨表定逐跳时长（分钟）。
  * 来源：氹仔线表定「逐跳间隔」恒 2.0 分钟（5 对邻站 11 次实测 → 119~121 秒）。
  * ⚠️ 合规：这是派生值，UI 必须注明算法（见 /about）。
+ *
+ * ★ v3.2.0：**已降级为「未收录跳段」的兜底**（120 s/跳）—— 氹仔线乘车时长改由
+ *   `LRT_HOP_SEC` 逐段求和（见 `model.ts`）；石排湾/横琴仍走 `LRT_RIDE_SEC_FIXED`。
  */
 export const LRT_MIN_PER_HOP = 2.0;
 
@@ -193,6 +196,90 @@ export const LRT_RIDE_SEC_FIXED: Record<string, number> = {
   "LRT-石排湾线": 100, // 1 分 40 秒
   "LRT-横琴线": 135, // 2 分 15 秒
 };
+
+/**
+ * ★ v3.2.0（需求 3 / AC-71/72）：**氹仔线逐段乘车秒表**（站对索引）。
+ *
+ * ── key 域（★ 实施前已核对 `route_stations` / `lrt_api_stations.db_code`）──────────
+ *   key = `${from}|${to}`，站码取 **本库 db_code**（`LRT-BAR` / `LRT-OCH` / …）——
+ *   与 `RideSegment.hops`（来自 `RouteIndex.dirStops` = `route_stations.station_code`）**同域**。
+ *   ⚠️ 注意：`lrt_station_biases.api_station` 用的是 motransportinfo **api 码**（`BAR`/`OCE`…），
+ *      两者**不可混用**；本表刻意用 db_code：
+ *      `OCE→LRT-OCH` · `JOC→LRT-JCK` · `STA→LRT-STD` · `COW→LRT-CWE` · `COE→LRT-LDE` ·
+ *      `MUS→LRT-MUST` · `AIR→LRT-AP`。
+ *
+ * ── 值来源（`15-号 §三`「发→发」区间用时，主用多数模式列；P3 拍板三值已落定）──────
+ *   正向（媽閣→氹仔碼頭）12 段合计 **1605 s**；反向（氹仔碼頭→媽閣）合计 **1570 s**。
+ *   石排湾/横琴**不进本表**（走 `LRT_RIDE_SEC_FIXED`）。
+ *   ⚠️ 合规：派生值（区间用时由实测反算），UI 注明算法（见 /about）。
+ */
+export const LRT_HOP_SEC: Record<string, number> = {
+  // ── 正向（媽閣→氹仔碼頭，dir=api TFT）──
+  "LRT-BAR|LRT-OCH": 285, // 媽閣→海洋（跨海段；旧口径按 120，本批主要修正来源）
+  "LRT-OCH|LRT-JCK": 115, // 海洋→馬會
+  "LRT-JCK|LRT-STD": 145, // 馬會→運動場
+  "LRT-STD|LRT-PAK": 115, // 運動場→排角
+  "LRT-PAK|LRT-CWE": 120, // 排角→路氹西
+  "LRT-CWE|LRT-LOT": 135, // 路氹西→蓮花
+  "LRT-LOT|LRT-UH": 100, // 蓮花→協和醫院
+  "LRT-UH|LRT-EAG": 130, // 協和醫院→東亞運（打点 128·128·132·138 吻合）
+  "LRT-EAG|LRT-LDE": 110, // 東亞運→路氹東（P3 拍板；打点 76·80·80·82 未采用）
+  "LRT-LDE|LRT-MUST": 125, // 路氹東→科大（手记 522；另一记 130）
+  "LRT-MUST|LRT-AP": 145, // 科大→機場
+  "LRT-AP|LRT-TFT": 80, // 機場→氹仔碼頭（末段、无停站）
+  // ── 反向（氹仔碼頭→媽閣，dir=api BAR）──
+  "LRT-TFT|LRT-AP": 110, // 氹仔碼頭→機場
+  "LRT-AP|LRT-MUST": 135, // 機場→科大
+  "LRT-MUST|LRT-LDE": 140, // 科大→路氹東（P3 拍板；132 勘误后值；打点 138·139 吻合）
+  "LRT-LDE|LRT-EAG": 100, // 路氹東→東亞運（打点 96·97·100 吻合）
+  "LRT-EAG|LRT-UH": 130, // 東亞運→協和醫院（P3 拍板；打点 102·107·111 未采用）
+  "LRT-UH|LRT-LOT": 105, // 協和醫院→蓮花
+  "LRT-LOT|LRT-CWE": 125, // 蓮花→路氹西
+  "LRT-CWE|LRT-PAK": 120, // 路氹西→排角
+  "LRT-PAK|LRT-STD": 105, // 排角→運動場
+  "LRT-STD|LRT-JCK": 130, // 運動場→馬會
+  "LRT-JCK|LRT-OCH": 120, // 馬會→海洋
+  "LRT-OCH|LRT-BAR": 250, // 海洋→媽閣（末段；跨海段）
+};
+
+/** ★ v3.2.0：氹仔线未收录跳段的兜底（秒）—— 对 AC-72 */
+export const LRT_HOP_FALLBACK_SEC = 120;
+
+/**
+ * ★ v3.3.0（需求 5 / AC-106）：**轻轨站内步行距离常量**（米）。
+ *
+ * ── 为什么距离化 ──────────────────────────────────────────────────────
+ *   轻轨的「进站→站台」「站台→出站」「站内换乘」此前或走实测均值 / 几何估算（本地链路无几何），
+ *   或写死分钟 ⇒ 不同链路口径不一、且随速度档缩放时易**双重缩档**。改为**距离常量 ÷ 基准速度**
+ *   （`WALK_BASE_M_PER_MIN = 84`）统一折算，缩放交给 `catch-up.ts#requiredSec` **单一负责**。
+ *
+ * ── 取值依据（2026-09-26 现场步测口径 · 官方站内动线）────────────────────
+ *   · `inM` / `outM` = 168m（≈2min × 84）；
+ *   · `transferByStation`：協和醫院 `LRT-UH` 336m（≈4min）· 蓮花 `LRT-LOT` 420m（≈5min）。
+ *
+ * ⚠️ **表化预留**：取值一律经 `lrtStationWalkM()` / `lrtTransferWalkM()`；
+ *   日后改表（DB/配置）只改这两个函数体，调用方零改动。
+ * ⚠️ 这是**派生值**（距离→分钟），合规须可溯源（UI 注明算法）。
+ */
+export const LRT_STATION_WALK = {
+  /** 进站 → 站台（米） */
+  inM: 168,
+  /** 站台 → 出站（米） */
+  outM: 168,
+  /** 站内换乘（按本库站主码，米） */
+  transferByStation: { "LRT-UH": 336, "LRT-LOT": 420 } as Record<string, number>,
+} as const;
+
+/** 轻轨进出站步行距离（米）—— 表化预留接口（改表只改此函数体） */
+export function lrtStationWalkM(kind: "in" | "out"): number {
+  return kind === "in" ? LRT_STATION_WALK.inM : LRT_STATION_WALK.outM;
+}
+
+/** 轻轨站内换乘步行距离（米）；未收录该站 ⇒ null（调用方沿用原几何 / `transfer_walks`） */
+export function lrtTransferWalkM(stationMain: string): number | null {
+  const m = LRT_STATION_WALK.transferByStation[stationMain];
+  return typeof m === "number" && m > 0 ? m : null;
+}
 
 /** 步行数据全落空时的常数兜底（分钟，1~2 站台距离） */
 export const WALK_FALLBACK_MIN = 3.0;
@@ -406,6 +493,12 @@ export interface LrtLive {
   departures: number[];
   /** 发车时刻 'HH:MM'（与 departures 一一对应，供展示） */
   clocks: string[];
+  /**
+   * ★ v3.2.0：与 `departures` **一一对应**的「是否秒级精准」标记
+   *   （氹仔线模式命中 / 石排湾·横琴线路级 → true；回落分钟级 → false）。
+   *   缺省/长度不足时按 false 处理（分钟级窗口）。
+   */
+  precise?: boolean[];
   directionName: string | null;
   lineCode: string;
 }
@@ -440,6 +533,11 @@ export interface RideLegView {
   alight: string;
   boardLabel: string;
   alightLabel: string;
+  /**
+   * ★ v3.3.0（AC-103）：**轻轨段方向名**（终点站展示名，如 `氹仔碼頭`；前端渲染为 `{終點}方向`）。
+   *   来源 = 该段线路的 `LrtLive.directionName`（`live.ts` 已下发）；巴士段为 `null`。
+   */
+  directionName?: string | null;
   /** 车上用时（分钟） */
   minutes: number;
   /**
@@ -486,6 +584,14 @@ export interface RideLegView {
    */
   liveDepartures?: number[];
   liveClocks?: string[];
+  /**
+   * ★ v3.2.0：与 `liveDepartures` 一一对应的「是否秒级精准」（仅**首段轻轨**下发）。
+   *   供 `<LrtEtaInline>` 统一窗口/文案（AC-68/69/70）：`secPrecise` →
+   *   到站阈值逐线（氹仔 30s / 石排湾 120s / 横琴 60s）、归零保持 10s；
+   *   否则按分钟级（窗口 30s、归零保持 30s）。
+   *   缺省/长度不足 → 全部按 false（分钟级）安全回落。
+   */
+  livePrecise?: boolean[];
   /** 赶车档（仅首段有；第 2 段起恒 null） */
   tier: CatchTier | null;
   /** 档位文案（仅首段非空；第 2 段起为 ""） */
@@ -499,6 +605,14 @@ export interface RideLegView {
    * ⚠️ 字段挂在 `rides[0]`（档位属于首段载具），但**渲染在卡面第一行「步行」上**。
    */
   tierHint: string;
+  /**
+   * ★ v3.3.0（需求 5 / AC-107）：**赶车提示**（保守措辞）。
+   *
+   * 触发（`model.ts`）：**轻轨首段**且 `tier ∈ {1,2}`（正常档赶不上、提速档可赶上）且**有该班真实时刻**。
+   * 文案：`走快一点可赶上 ${clock} 那班`（**禁「一定」**；无真实时刻不产出 ⇒ `undefined`）。
+   * 渲染：`RecommendCard` 以 `<TierBadge>` 呈现（`rc-tier--1/2`）；**只在方案卡**（不进导航站条）。
+   */
+  catchHint?: string;
 }
 
 /** 换乘视图 */
@@ -578,6 +692,11 @@ export interface RecommendCard {
    *    `modelOption` 只能算出候选，无法知道阈值。
    */
   altBuses?: AltBusView[];
+  /**
+   * ★ v3.3.0（AC-105）：**轻轨优先已置顶**标记 —— 仅当 `/api/nav?lrtFirst=1` 生效
+   *   且该卡为「命中并被置顶」的候选时为 `true`（前端据此显示「轻轨优先」角标；未触发不标）。
+   */
+  lrtPromoted?: boolean;
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -607,6 +726,18 @@ export interface SegmentStrip {
   alight: string;
   boardLabel: string;
   alightLabel: string;
+  /**
+   * ★ v3.3.0（AC-103）：**本段方向名**（终点站展示名，如 `氹仔碼頭`；前端渲染 `{dirLabel}方向`）。
+   *   仅轻轨段非空（取自 `RideLegView.directionName`）；巴士段 `null`。
+   */
+  dirLabel?: string | null;
+  /**
+   * ★ v3.3.0（AC-102）：**上车站实际可乘班车**（本库线码）。
+   *   四规则（保守，宁回落主干不显错线）：① 主干**常速**可赶 → 主干；② 需提速才赶得上（`tier<3`）
+   *   且 `altBuses` 有可赶并行线 → 取其中最早者；③ 无法判定 / 无并行线 / 数据缺失 → **回落主干**。
+   *   前端 `boardRoute ?? strip.route` 消费。仅**首段**（上车站语义）有意义。
+   */
+  boardRoute?: string;
   /** 上车站 → 下车站的有序节点（含两端） */
   stops: StripStop[];
   /** 车上时长（**与 `card.rides[i].minutes` 同源同值** —— 同一串 hops + 同一个 lookupHop） */
@@ -632,6 +763,11 @@ export interface ReachReport {
   /** 轻轨读秒用（与卡片首段同口径，只含「走到站台之后」的班次） */
   liveDepartures?: number[];
   liveClocks?: string[];
+  /**
+   * ★ v3.2.0：与 `liveDepartures` 一一对应的「是否秒级精准」（折叠栏同口径，AC-70）。
+   *   供折叠栏读秒与站台卡窗口/文案**同源**；缺省/长度不足 → 全部按 false（分钟级）。
+   */
+  livePrecise?: boolean[];
   /** 该线在本站台的全部可行下车点 */
   alightCandidates: string[];
   /**

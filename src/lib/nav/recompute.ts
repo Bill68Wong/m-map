@@ -243,18 +243,29 @@ export function patchAmapFallback(
 
 /**
  * 「用我们实测（L1~L4）的分钟数」占**门到门总时长**的比例。
- * 口径：轻轨段（表定）计为我们的数据；巴士段仅当**全部跳层级 ≤4** 才计入；
- *       换乘仅当 `estimated=false` 才计入。**保守近似**（宁低不高）✓
+ *
+ * ★ v3.3.0（AC-96 / ADR-105）：口径修正 —— 旧口径的分子**只含「乘车段 + 非估算换乘」**，
+ *   漏掉**轻轨等待**与**有依据的首末步行**，而分母（`totalMin`）含它们 ⇒ 班次稀疏的
+ *   轻轨/等待型方案被**系统性低估**（实测：全轻轨方案覆盖度 ≈0.4 < 0.5 ⇒ 被闸门误杀）。
+ *   现纳入：
+ *   · 轻轨段 `minutes + waitMin`（等待由**时刻表推导**，是我们的数据，非估算）；
+ *   · 首末步行中 `level ≤ 2`（有实测/几何依据）者。
+ *   巴士段仍仅当**全部跳层级 ≤4** 才计入；换乘仍仅当 `estimated=false`（保守近似，宁低不高）。
  */
 export function ourDataCoverage(card: RecommendCard): number {
   let ours = 0;
   for (const r of card.rides) {
     if (r.kind === "lrt") {
-      ours += r.minutes;
+      // ★ 轻轨：乘车 + 等待（时刻表推导 = 我们的数据）
+      ours += r.minutes + (r.waitMin ?? 0);
     } else if (r.levels.length && r.levels.every((l) => l <= 4)) {
       ours += r.minutes;
     }
   }
   for (const t of card.transfers) if (!t.estimated) ours += t.minutes;
-  return card.totalMin > 0 ? ours / card.totalMin : 0;
+  // ★ 首末步行：有实测/几何依据（level ≤ 2）者计入
+  for (const w of [card.walkOut, card.walkIn]) {
+    if (typeof w.level === "number" && w.level <= 2) ours += w.minutes;
+  }
+  return card.totalMin > 0 ? Math.min(1, ours / card.totalMin) : 0;
 }

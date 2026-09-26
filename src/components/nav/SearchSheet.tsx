@@ -348,8 +348,9 @@ export default function SearchSheet({
               <button key={`${r.name}-${i}`} type="button" className="ssheet__item" onClick={() => pick(r)}>
                 <span className={`ssheet__type ssheet__type--${r.kind}`}>{TYPE_LABEL[r.kind] ?? "地点"}</span>
                 <span className="ssheet__name">{displayName(r)}</span>
-                {r.source !== "local" && <span className="ssheet__badge">来自高德</span>}
-                {(r.district || r.address) && <span className="ssheet__meta t-muted">{r.district || r.address}</span>}
+                {/* ★ v3.3.0（AC-104）：来源字串去「来自」→ 仅「高德」；搜索结果**不显示区名**（district 不渲染） */}
+                {r.source !== "local" && <span className="ssheet__badge">高德</span>}
+                {r.address && <span className="ssheet__meta t-muted">{r.address}</span>}
                 {typeof r.distM === "number" && <span className="ssheet__meta t-muted">{r.distM} m</span>}
               </button>
             ))}

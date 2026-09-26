@@ -20,7 +20,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CUT_TOLERANCE_M,
   cutAt,
-  fracBetween,
   mainOf,
   progressOf,
   rankBoardingVehicles,
@@ -28,7 +27,7 @@ import {
   type TrackVehicle,
 } from "@/lib/nav/track";
 import { advanceLrt, buildLrtLadder, type LrtLadder } from "@/lib/nav/lrt-progress";
-import { cumDistM, nearestOnPath } from "@/lib/nav/route-overview";
+import { nearestOnPath } from "@/lib/nav/route-overview";
 import { autoAlightOf } from "@/lib/nav/alight-detect";
 import {
   ANOMALY_CONFIRM,
@@ -79,7 +78,11 @@ export interface RideYouDot {
   /** 水平精度（米；投影点沿用最近一帧 GPS，供 `UserDotLayer` 复用 `UserFix` 形状） */
   accuracy: number;
 }
-/** ★ 本批（需求⑤）：纵条用户点（段内插值：`frac=0` 贴 `afterIdx` 站，`∈(0,1)` 位于区间内） */
+/**
+ * ★ 本批（需求⑤）：纵条用户点。
+ * ★ v3.2.0（需求 6 / AC-78）：改为**事件驱动二值 + 驻留** —— `frac` 只有 `0`（停靠：贴 `afterIdx` 站）
+ *   与 `0.5`（行驶中：锁 `afterIdx → afterIdx+1` **两站正中间**，不随进度微动）。移除连续插值。
+ */
 export interface RideYouAt {
   afterIdx: number;
   frac: number;
@@ -623,7 +626,7 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
   /**
    * ★ 本批（需求⑤ / AC-40~44）：**蓝点 + 纵条用户点**（视觉层 = GPS 投影；逻辑层不动）。
    *   · 蓝点：`nearestOnPath` 吸附（≤60m）；投影失败 / accuracy>150 / 无信号 ⇒ **冻结不跳**；
-   *   · 纵条：`youAt`（段内插值 `frac`）—— 停靠中贴在节点、行驶中骑线插值。
+   *   · 纵条：`youAt`（★ v3.2.0 二值 + 驻留）—— 停靠中贴节点（frac 0）/ 行驶中锁两站正中间（frac 0.5）。
    *   ⚠️ 两者**只作视觉**，不参与 `passedIdx/atIdx/nextIdx` 判定（避免两套口径打架）。
    */
   useEffect(() => {
@@ -656,35 +659,27 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
     if (!dot && lastGoodDotRef.current) dot = { ...lastGoodDotRef.current, frozen: true };
     setYouDot(dot);
 
-    // ── 纵条 youAt（段内插值）──
+    // ── 纵条 youAt（★ v3.2.0 需求 6 / AC-78：**二值 + 驻留**，移除连续插值）──
     const lastIdx = stopMains.length - 1;
     if (!prog || lastIdx < 1) {
       setYouAt(null);
       return;
     }
     if (prog.atIdx !== null) {
-      setYouAt({ afterIdx: prog.atIdx, frac: 0 }); // 停靠中：点贴节点
+      // 停靠中：点贴该站节点（frac = 0）
+      setYouAt({ afterIdx: prog.atIdx, frac: 0 });
       return;
     }
     const i0 = prog.passedIdx;
     if (i0 < 0) {
-      setYouAt({ afterIdx: -1, frac: 0 }); // 尚未到上车站
+      // 尚未到上车站
+      setYouAt({ afterIdx: -1, frac: 0 });
       return;
     }
-    const cum = ladderRef.current && ladderRef.current.ladder.length ? ladderRef.current.ladder : null;
-    let dNow: number | null = null;
-    if (progressSource === "gps") {
-      dNow = lrtStateRef.current.dist > 0 ? lrtStateRef.current.dist : null;
-    } else {
-      const v = vehicleRef.current;
-      if (v) {
-        const c = cumDistM(leg.colored);
-        dNow = c[nearestOnPath(leg.colored, { lng: v.lng, lat: v.lat }).idx];
-      }
-    }
-    const frac = cum && dNow != null ? fracBetween(cum, i0, i0 + 1, dNow) : 0;
-    setYouAt({ afterIdx: i0, frac });
-  }, [phase, active, userFix, legs, legIndex, prog, progressSource, stopMains, listTick, ladderTick]);
+    // 行驶中：锁「两站正中间」（frac = 0.5）并**驻留** —— 不再随进度微动，
+    //   ⇒ 数学上恒与两端节点等距，永不与之重叠（到站/新帧才更新以贴合节点）。
+    setYouAt({ afterIdx: i0, frac: 0.5 });
+  }, [phase, active, userFix, legs, legIndex, prog, stopMains, listTick, ladderTick]);
 
   /* ── 操作 ── */
   const start = useCallback(() => {

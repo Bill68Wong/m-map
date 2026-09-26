@@ -1,22 +1,25 @@
 "use client";
 /**
- * 线路名标签组（src/components/RouteStack.tsx，v0.19.1；★ 修复包 v2.2.1-B2 增「分段 / 并列」）
+ * 线路名标签组（src/components/RouteStack.tsx，★ v3.2.0 回归 **v0.19.1「谷歌地图风格」**）
  *
- * ── 形态规范（★ v2.4.1 定案，用户直接定义；权威 = `globals.css` L3209-3301）────────
- *   · **单码** → 主题色实心**圆角矩形**（`--radius-chip` = 6px；白字；12px/700；`--hairline-inset` 细内描边）
- *   · **段内并列**（同站上、同站下，任选其一）→ 各码仍是各自主题色块，相邻侧各切一条**互相平行的斜边**
- *     （`--slash-cut: 7px`）+ 负 `margin-right: -4px`（`--slash-bite`）咬合 ⇒ 中间形成**等宽空白斜间隙**
- *     （视觉缝宽 3px），**缝里露的是卡片背景色**（白卡 ⇒ 白缝）—— **不是 `/` 字符、不是墨底胶囊**；
- *     首块左端竖直 / 末块右端竖直；上限 3 条，第 4 条起折叠为 `+N`（`--muted`）
- *   · **段间换乘**（先后推进）→ **箭头 `→`**，两侧各留 `--space-2`(8px)，一眼看出「这是两段」
- *   · **复合** `A/B → C/D` = 上面两者的组合（两个多码组 + 一个箭头），无新增视觉语汇
+ * ── 形态规范（v0.19.1 · 需求 13 定稿；权威 = `globals.css` 的 B2 段）──────────────
+ *   · **整「段」（组）= 一个圆角外框**（`--radius-chip` 6px + `overflow:hidden`，**逐组裁剪**）；
+ *   · **块** = 右倾平行四边形（`clip-path`，md 斜切 8px / sm 6px），白字 13px·700、水平垂直居中；
+ *   · **块间** = 相邻块 `margin-right: -5px`（sm -4px）**咬合** ⇒ 留出 3px（sm 2px）的
+ *     「/」形**负空间留白缝**（露出父级卡片底色，**不是 `/` 字符、不是黑块**）；
+ *   · **首块**左端竖直 / **尾块**右端竖直 ⇒ 保留组右上/左下的完整圆角；
+ *   · **单块** = 干净圆角矩形（`clip-path:none`），左右不斜切；
+ *   · **段间换乘**（先后推进）→ **箭头 `→`**，两侧各留 `--space-2`(8px)，一眼看出「这是两段」；
+ *   · 上限 3 条并列，第 4 条起折叠为中性尾块 `+N`（`--surface-2`/`--muted`）。
+ *
+ * ── 现代方案（根治历史缺陷）────────────────────────────────────────────
+ *   v2.2.1 曾为支持多段换行把**顶层容器** `overflow` 改 `visible` ⇒ 容器圆角失去裁剪对象
+ *   ⇒ **容器圆角碎裂**。本批把「圆角 + `overflow`」**下沉到每个 `__group`**（逐组独立裁剪）
+ *   ⇒ 单段 = 连续圆角外框；多段换行时每组各自成框、组间由 `→` 分隔，互不切角。
  *
  * ── 反例（禁止）───────────────────────────────────────────────────────
- *   ❌ 用斜杠 `/` 表达「并列」，或用斜缝表达「换乘」（段间必须用箭头 `→`）
- *   ❌ 给单码加 `clip-path`（单码恒为干净圆角矩形）；❌ 新增 `--tag-*` Token / 新形态
- *
- * ── 上限 ──────────────────────────────────────────────────────────────
- *   单段内并列 **≤3 条**，第 4 条起折叠为 `+N`（防组过宽撑破头部容器）
+ *   ❌ 用 `/` 字符表达「并列」（缝是**负空间**，不是字）；❌ 用斜缝表达「换乘」（段间必须 `→`）；
+ *   ❌ 给单块加 `clip-path`；❌ 新增 `--tag-*` Token / 新形态。
  */
 import { Fragment } from "react";
 import { lineNameOf, sortRouteOptions } from "@/lib/route-label";
@@ -65,7 +68,11 @@ export default function RouteStack({
   if (!segs.length) return null;
 
   return (
-    <span className={`route-stack${size === "sm" ? " route-stack--sm" : ""} ${className}`}>
+    <span
+      className={`route-stack${size === "sm" ? " route-stack--sm" : ""} ${className}`}
+      /* ★ v3.2.0（Spec §2 / AC-89~91）：标签形状版本钩子（只读，QA 断言用） */
+      data-tag-shape="v0191"
+    >
       {segs.map((list, si) => (
         <Fragment key={si}>
           {/* ★ 段间 = 换乘箭头（§G.1 / §G.4）：粗一档 + muted，两侧 8px */}
@@ -74,24 +81,18 @@ export default function RouteStack({
               →
             </span>
           )}
-          <span className={`route-stack__group${list.length > 1 ? " route-stack__group--multi" : ""}`}>
-            {/* ★ v3.1.1 裁定（回 v2.4.0）：同段并列 = 块间**白斜杠 `/`**（`__slash`，白字 + 四向黑描边），
-                **不铺墨底**（零黑块）；每块保圆角（外 6px / 相邻内侧 3px，见 globals.css）。 */}
-            {list.slice(0, MAX_PARALLEL).map((c, i) => (
-              <Fragment key={c}>
-                {i > 0 && (
-                  <span className="route-stack__slash" aria-hidden="true">
-                    /
-                  </span>
-                )}
-                <span
-                  className="route-stack__seg"
-                  style={{ background: resolve?.(c) || "var(--primary)" }}
-                  title={lineNameOf(c)}
-                >
-                  {lineNameOf(c)}
-                </span>
-              </Fragment>
+          <span className="route-stack__group">
+            {/* ★ v3.2.0（需求 13）：同段并列 = 块间 **「/」形负空间留白缝**（`margin-right:-5px`
+                咬合 + `clip-path` 斜切；**不是 `/` 字符、不是黑块**）—— 详见 globals.css B2 段。 */}
+            {list.slice(0, MAX_PARALLEL).map((c) => (
+              <span
+                key={c}
+                className="route-stack__seg"
+                style={{ background: resolve?.(c) || "var(--primary)" }}
+                title={lineNameOf(c)}
+              >
+                {lineNameOf(c)}
+              </span>
             ))}
             {list.length > MAX_PARALLEL && (
               <span

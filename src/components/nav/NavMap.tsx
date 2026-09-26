@@ -32,7 +32,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { isInsideRings, loadMacauDistrict, maskOuterRing, type MacauDistrict } from "@/lib/amap/district";
 import { type ColoredLeg, type LL } from "@/lib/nav/route-overview";
 import { loadAMap } from "./amap-loader";
-import Icon from "@/components/ui/Icon";
+/* ★ v3.3.0（AC-92 · ADR-102）：起终点钉内联 SVG 单一真源 */
+import { PIN_SVG_DEST, PIN_SVG_ORIGIN } from "@/lib/nav/pin-svg";
 import {
   fitGapPx,
   maskFill,
@@ -200,13 +201,12 @@ export interface NavMapProps {
    */
   lineStops?: ReadonlySet<string> | null;
   /**
-   * ★ 2026-09-26（v3.1.1 真机反馈 #2）：**恢复按钮显示语境**。
-   *   真机反馈：「滑动地图左下角出现『回到路线』按钮、意义不明」——根因是它在 `free` 态**无条件**显示，
-   *   首页浏览拖图也会出现，而那时并没有「路线」可回。
-   *   ⇒ 仅当**导航语境**（宿主：`detailActive`）才渲染该按钮；非导航态拖动**不出现**
-   *     （双击地图 / 定位键两个恢复入口**保留**）。
+   * ★ v3.2.0（需求 7 / AC-80）：蓝点移动插值时长（ms，= 采样间隔）。
+   *   `0`（缺省）= 瞬移；riding 1500 / 候车 3000（>5s 采样必为 0）。透传给 `UserDotLayer`。
+   *   ⚠️ 语义变更（需求 9）：左下「回到我的位置」按钮已**彻底移除** ——
+   *     让位锁（`followState`/`free`）、双击恢复 `restore()`、定位键重跑**全部保留**。
    */
-  recenterEnabled?: boolean;
+  userDotSmoothMs?: number;
   /** 附加类名（承载全屏布局） */
   className?: string;
 }
@@ -231,7 +231,7 @@ export default function NavMap({
   userFix = null,
   traveled = null,
   lineStops = null,
-  recenterEnabled = false,
+  userDotSmoothMs = 0,
 }: NavMapProps) {
   const canvasRef = useRef<HTMLDivElement | null>(null);
   /** `.nav-map` 根元素（写观测钩子：data-map-follow / data-map-zoom / …） */
@@ -582,7 +582,9 @@ export default function NavMap({
       else {
         destMarkerRef.current = new AMap.Marker({
           position: pos,
-          content: '<div class="nav-map__destpin" aria-hidden="true"></div>',
+          // ★ v3.3.0（AC-92 · ADR-102）：**内联 SVG**（不再经「外链文件 + CSS background + filter」）
+          //   类名 `.nav-map__destpin` 保留（QA 选择器不失效）。
+          content: '<div class="nav-map__destpin" aria-hidden="true">' + PIN_SVG_DEST + "</div>",
           // ★ v2.15：新终点钉 20×26，钉尖在底边中点 ⇒ offset y 取 -26（全高），
           //   令钉尖精确锚定坐标点（旧址 -20 是歪水滴的凑数值，会让尖浮在点上方）。
           offset: new AMap.Pixel(-10, -26),
@@ -625,7 +627,9 @@ export default function NavMap({
       else {
         originMarkerRef.current = new AMap.Marker({
           position: pos,
-          content: '<div class="nav-map__originpin" aria-hidden="true"></div>',
+          // ★ v3.3.0（AC-92 · ADR-102 · 硬口径）：**内联 SVG 红钉**（`#B4342A`）——
+          //   起点语义恒由红钉承载（含「起点 = 我的位置」），**不得以蓝点替代**；类名保留。
+          content: '<div class="nav-map__originpin" aria-hidden="true">' + PIN_SVG_ORIGIN + "</div>",
           // ★ v3.1.1 #4：由 18px 圆点改为钉形（20×26，钉尖在底边中点）⇒ offset 同终点钉
           //   （-10, -26 = -w/2, -h）令**钉尖**精确锚定坐标点。
           offset: new AMap.Pixel(-10, -26),
@@ -904,12 +908,17 @@ export default function NavMap({
   }, [onRouteDirs]);
   // ★ 车辆点击回调直接交给 `VehicleLayer`（原生化层自管 ref），此处不再缓存
 
-  // ★ 右上定位按钮：locateTick 变化 → 重跑定位（首屏由 init 负责，tick=0 不触发）
+  // ★ 定位按钮（品牌栏原位 / 导航态浮动）：locateTick 变化 → **立即聚焦 + 后台刷新**
   //   ★ 本批：点定位键 = **显式意图** ⇒ 先恢复跟随，再强制居中（`focus: true`，AC-27）
+  //   ★ v3.3.0（AC-101）：**先**用「最近一次已知位置」立即居中（不等待新 fix）；
+  //     无已知位置（冷启动 / 首次定位尚未返回）⇒ 只走 `runLocate`（其 `setLocating(true)` 即加载态）。
   useEffect(() => {
     if (locateTick > 0) {
-      setFollowState("follow");
-      runLocate({ focus: true });
+      setFollowState("follow"); // 恢复跟随（让位锁解除）
+      const known =
+        lastLocatePosRef.current ?? (userFix ? { lng: userFix.lng, lat: userFix.lat } : null);
+      if (known) applyLocateView(known, true); // 立即聚焦（不等新 fix）
+      runLocate({ focus: true }); // 后台刷新（到达后用更准坐标再校正一次）
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [locateTick]);
@@ -1322,28 +1331,17 @@ export default function NavMap({
         enabled={phase === "ready"}
         traveled={traveled}
       />
-      {/* ★ 2026-09-25：用户定位蓝点（人，z128 < 车辆 130） */}
+      {/* ★ 2026-09-25：用户定位蓝点（人，z128 < 车辆 130）；★ v3.2.0：带移动插值时长（AC-80） */}
       <UserDotLayer
         map={phase === "ready" ? mapRef.current : null}
         amap={phase === "ready" ? amapRef.current : null}
         enabled={phase === "ready"}
         fix={userFix}
+        smoothMs={userDotSmoothMs}
       />
-      {/* ★ 本批（需求① / AC-27；v3.1.1 #2 收紧）：让位锁恢复入口 —— **仅导航语境**且 free 态显示；
-          点即恢复跟随 + 重放取景。文案/形态直观化：定位靶心图标 + 「回到我的位置」。 */}
-      {recenterEnabled && followState === "free" && (
-        <button
-          type="button"
-          className="nav-map__recenter"
-          data-recenter="on"
-          onClick={restore}
-          aria-label="回到我的位置，重新跟随地图"
-          title="回到我的位置"
-        >
-          <Icon name="locate" size={16} />
-          <span>回到我的位置</span>
-        </button>
-      )}
+      {/* ★ v3.2.0（需求 9 / AC-83）：左下「回到我的位置」按钮**已删除** ——
+          让位锁（followState=free 跳过自动取景，见上方 `if (followRef.current === "free")`）、
+          双击恢复 `restore()`、定位键重跑**全部保留**（「定位」能力由页面级 `.nav-locate-fab` 承担）。 */}
       {phase === "loading" && (
         <div className="nav-map__cover">
           <span className="rc-sk rc-sk--big" />

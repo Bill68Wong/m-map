@@ -11,6 +11,8 @@
  *   · **节流**：回调到达时若 `ts - lastAccept < intervalMs` 则暂存 `pending`；
  *     到达阈值时采纳（尾帧不丢、又不高频 setState）；
  *   · `intervalMs` 经 ref 读取 ⇒ **不重订阅** watchPosition（重订阅会丢监听 + 二次权限）；
+ *   · ★ v3.2.0（AC-79）：`maximumAge`（默认 **0**）经 ref 读取 —— 导航态只用新鲜坐标，
+ *     避免陈旧坐标导致蓝点/读数跳变；
  *   · **权限申请＝用户手势**：由调用方在「开始导航」onClick 内调用 `start()`；
  *   · **页面隐藏** → `clearWatch`；可见 → 重订阅并重置节流计时；
  *   · 卸载 → `clearWatch` 兜底。
@@ -39,8 +41,16 @@ export interface UseUserFixResult {
   stop: () => void;
 }
 
-export function useUserFix(opts: { enabled: boolean; intervalMs: number }): UseUserFixResult {
-  const { enabled, intervalMs } = opts;
+export function useUserFix(opts: {
+  enabled: boolean;
+  intervalMs: number;
+  /**
+   * ★ v3.2.0（AC-79）：`watchPosition` 的 `maximumAge`（ms）。
+   *   默认 **0** = 只用新鲜坐标（导航中避免陈旧坐标导致读数跳变）；浏览态可放宽。
+   */
+  maximumAge?: number;
+}): UseUserFixResult {
+  const { enabled, intervalMs, maximumAge = 0 } = opts;
   const [fix, setFix] = useState<UserFix | null>(null);
   const [denied, setDenied] = useState(false);
 
@@ -49,6 +59,8 @@ export function useUserFix(opts: { enabled: boolean; intervalMs: number }): UseU
   const pendingRef = useRef<UserFix | null>(null);
   const intervalRef = useRef(intervalMs);
   intervalRef.current = intervalMs;
+  const maxAgeRef = useRef(maximumAge);
+  maxAgeRef.current = maximumAge;
   const startedRef = useRef(false);
 
   const stopWatch = useCallback(() => {
@@ -87,7 +99,7 @@ export function useUserFix(opts: { enabled: boolean; intervalMs: number }): UseU
           }
         },
         () => setDenied(true),
-        { enableHighAccuracy: true, timeout: 10_000, maximumAge: 5000 },
+        { enableHighAccuracy: true, timeout: 10_000, maximumAge: maxAgeRef.current },
       );
       setDenied(false);
     } catch {

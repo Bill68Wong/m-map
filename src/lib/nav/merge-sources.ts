@@ -84,8 +84,10 @@ export function applyLocalGates(local: RankedItem[], opts: GateOpts): GateResult
       dropped.push({ key: it.key, reason: "suspect" });
       continue;
     }
-    // 闸门 3：覆盖度
-    if ((it.coverage ?? 0) < minCov) {
+    // 闸门 3：覆盖度 —— ★ v3.3.0（AC-96/97 · ADR-105）：**含轻轨段**的候选**豁免**本闸门。
+    //   理由：LRT 段本就是我们的数据（时刻表），等待是真实信息；旧口径把它与「无背书估算卡」
+    //   同等对待 ⇒ 全轻轨/跨线换乘组合（如石排灣→協和换乘氹仔线）被系统性误杀。
+    if (!segs.some((r) => r.kind === "lrt") && (it.coverage ?? 0) < minCov) {
       dropped.push({ key: it.key, reason: `low_coverage(${(it.coverage ?? 0).toFixed(2)})` });
       continue;
     }

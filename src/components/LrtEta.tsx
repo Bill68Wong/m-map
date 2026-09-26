@@ -6,14 +6,18 @@
  * 数据链路：/api/lrt/eta（本地算）→ 一次拉取当日该站该线该方向时刻，
  *   之后客户端按绝对发车时刻（depMs）本地每秒重算倒计时——秒级不依赖网络。
  *
- * 口径（与方案一致；v0.15.2 定稿）：
- *   - 氹仔线（整分精度）：剩余 ≥60s → 「下一班 X 分钟」（floor）；<60s → 大字切换「现正到达」flash
- *   - 石排湾线/横琴线（秒级精度）：始终显示「还有 X 分 Y 秒」逐秒读秒（含 <60s 的 0 分 XX 秒）；
- *     <60s 大字上方叠加闪烁「现正到达」徽章 —— 秒数不被替换
- *   - 轻轨一律用「现正到达」；「即将进站」是巴士（DSAT 实时车距）专属文案
- *   - 滚动：超过下一班发车时刻后自动落到再下一班（同数据，无请求）
- *   - 空态：首班前/已收车/无数据 文案与 LiveEta 空态同风格
- *   - 日切（澳门 0 点）自动重新拉取（服务班别/日期已变）
+ * 口径（★ v3.2.0 修订 · 需求 1/2 · AC-66/68/69/70）：
+ *   - **窗口**：`现正到达 ⇔ depMs - pre ≤ now ≤ depMs + post`（闭区间）。
+ *     `pre` 逐线（氹仔 0:30 / 石排湾 2:00 / 横琴 1:00）；`post` **逐班**（有秒级读秒 10s / 无读秒 30s）。
+ *   - **有秒级读秒的班次**（`secPrecise`）→ 窗口内一行「**现正到达 · X 分 Y 秒**」；窗口外「还有 X 分 Y 秒」。
+ *     归零后（保持期）保留 lead「现正到达」，数值槽 `visibility:hidden` 占位 ⇒ **零布局位移**。
+ *   - **无读秒的氹仔班次** → 窗口内大字切「现正到达」flash；窗口外「下一班 X 分钟」。
+ *   - 站台报时卡与推荐卡（`LrtEtaInline`）**同一文案结构 / 同源窗口**（AC-70）。
+ *   - **合规备注**（AC-66）：站台卡底部放完整句（小字、不换行）；紧凑处（推荐卡）放「推算」小角标。
+ *   - 轻轨一律用「现正到达」；「即将进站」是巴士（DSAT 实时车距）专属文案。
+ *   - 滚动：超过下一班发车时刻 + 该班保持期后自动落到再下一班（同数据，无请求）。
+ *   - 空态：首班前/已收车/无数据 文案与 LiveEta 空态同风格。
+ *   - 日切（澳门 0 点）自动重新拉取（服务班别/日期已变）。
  */
 import RouteStack from "./RouteStack";
 import Icon from "./ui/Icon";
@@ -26,7 +30,9 @@ const tickSecLine = (code: string) =>
 
 interface LrtDeparture {
   clock: string; // 'HH:MM'
-  depMs: number; // 绝对毫秒时刻（D 00:00 + 偏移）
+  depMs: number; // 绝对毫秒时刻（D 00:00 + 偏移；★ v3.2.0 = fixDeparture 叠加偏差后的值）
+  /** ★ v3.2.0（AC-63/65）：该班是否已叠加秒级偏差（true = 有秒级读秒）。缺省/undefined ⇒ 一律按 false 处理 */
+  secPrecise?: boolean;
 }
 
 interface LrtEtaData {
@@ -44,51 +50,55 @@ interface LrtEtaData {
 }
 
 /**
- * ★ 逐线「到站窗口」（修复包 v2.2.1-B5 / 07 §3.6 · D5）——**替换原先写死的 45s 与 <60s 阈值**。
+ * ★ v3.2.0（需求 2 / AC-68/69/70）：**逐线 `pre` + 逐班 `post`** 的到站窗口模型。
  *
- * 判定式（2026-09-20 裁定）：**现正到达 ⇔ `depMs - pre ≤ now ≤ depMs + post`**
- *   —— ★ **闭区间（含边界）**；窗口外 → 显示「下一班 X 分钟 / 还有 X 分 Y 秒」。
- *   · 石排湾 `post` **保留 45s**（用户只提"关门时间"偏移）；
- *   · 横琴 `pre=0`（+40s 关门偏移，即窗口只在发车后才开）；
- *   · ⚠️ 窗口**只作用于到站判定与显示**，**不改** `depMs`（时刻表绝对发车时刻）。
+ * 判定式：**现正到达 ⇔ `depMs - pre ≤ now ≤ depMs + post`**（★ **闭区间，含边界**）。
+ *   · **`pre` 逐线**（进入「现正到达」的提前量）：氹仔 0:30 · 石排湾 2:00 · 横琴 1:00；
+ *   · **`post` 逐班**（归零后「现正到达」保持时长）：有秒级读秒（`secPrecise`）**10s**；否则 **30s**；
+ *   · ⚠️ 窗口**只作用于到站判定与显示**，**不改** `depMs`（绝对发车时刻，已含偏差）。
  */
-const LRT_ARRIVAL_WINDOW: Record<string, { pre: number; post: number }> = {
-  "LRT-氹仔线": { pre: 30_000, post: 30_000 },
-  "LRT-石排湾线": { pre: 5_000, post: 45_000 },
-  "LRT-横琴线": { pre: 0, post: 40_000 },
+const LRT_PRE_SEC: Record<string, number> = {
+  "LRT-氹仔线": 30_000,
+  "LRT-石排湾线": 120_000,
+  "LRT-横琴线": 60_000,
 };
 
-/** 未知/新增线路的兜底窗口（贴近旧行为：无 pre、post = 旧 45s 留白） */
-const LRT_WINDOW_FALLBACK: { pre: number; post: number } = { pre: 0, post: 45_000 };
+/** 未知/新增线路的兜底 `pre`（沿用「氹仔」整分档的 30s 提前量） */
+const LRT_PRE_FALLBACK = 30_000;
 
-/** 取该线的到站窗口（对简/繁「橫琴/横琴」等写法做包含式兜底匹配） */
-function windowOf(lineCode: string): { pre: number; post: number } {
-  const exact = LRT_ARRIVAL_WINDOW[lineCode];
-  if (exact) return exact;
-  const key = Object.keys(LRT_ARRIVAL_WINDOW).find((k) => {
+/** 归零后「现正到达」保持时长：有秒级读秒 10s / 无读秒 30s（AC-69） */
+const postOf = (secPrecise: boolean) => (secPrecise ? 10_000 : 30_000);
+
+/** 取该线的 `pre`（对简/繁「橫琴/横琴」等写法做包含式兜底匹配） */
+function preOf(lineCode: string): number {
+  const exact = LRT_PRE_SEC[lineCode];
+  if (exact != null) return exact;
+  const key = Object.keys(LRT_PRE_SEC).find((k) => {
     const bare = k.replace(/^LRT-/, "");
     return lineCode.includes(bare) || lineCode === bare;
   });
-  if (key) return LRT_ARRIVAL_WINDOW[key];
-  // 秒级线（石排湾/横琴的繁体写法）优先级高于整分线
-  if (tickSecLine(lineCode)) return LRT_ARRIVAL_WINDOW["LRT-横琴线"];
-  return LRT_WINDOW_FALLBACK;
+  if (key) return LRT_PRE_SEC[key];
+  // 秒级线（石排湾/横琴的繁体写法）优先
+  if (tickSecLine(lineCode)) return LRT_PRE_SEC["LRT-横琴线"];
+  return LRT_PRE_FALLBACK;
 }
 
-/** 选「当前要展示的班次」= 第一个**窗口尚未结束**的班次（`depMs + post ≥ now`） */
-function pickNext(
-  dep: LrtDeparture[],
-  nowMs: number,
-  w: { pre: number; post: number },
-): LrtDeparture | null {
+/** 该班是否按秒级读秒（`secPrecise` 缺省 ⇒ 一律 false，AC-69 注解） */
+const isPrecise = (d: LrtDeparture) => d.secPrecise === true;
+
+/** 选「当前要展示的班次」= 第一个**窗口尚未结束**的班次（`depMs + post(该班) ≥ now`） */
+function pickNext(dep: LrtDeparture[], nowMs: number): LrtDeparture | null {
   if (!dep.length) return null;
-  return dep.find((d) => d.depMs + w.post >= nowMs) ?? null;
+  return dep.find((d) => d.depMs + postOf(isPrecise(d)) >= nowMs) ?? null;
 }
 
 /** 该班是否处于「现正到达」窗口（★ 闭区间，含边界） */
-function inArrivalWindow(d: LrtDeparture, nowMs: number, w: { pre: number; post: number }): boolean {
-  return nowMs >= d.depMs - w.pre && nowMs <= d.depMs + w.post;
+function inArrivalWindow(d: LrtDeparture, nowMs: number, pre: number, post: number): boolean {
+  return nowMs >= d.depMs - pre && nowMs <= d.depMs + post;
 }
+
+/** 「X 分 Y 秒」（两处统一：站台卡大字 / 推荐卡行内） */
+const secText = (totalSec: number) => `${Math.floor(totalSec / 60)} 分 ${totalSec % 60} 秒`;
 
 /** 澳门自然日 ymd（GMT+8，本地纯算） */
 function macauYmd(ms: number): string {
@@ -188,8 +198,8 @@ export default function LrtEta({
         }
         return;
       }
-      // ★ B5：与显示同口径 —— 逐线到站窗口（闭区间）；窗口内仍返回该班（不提前滚到下一班）
-      const nxtDep = pickNext(dep, nowMs, windowOf(data.lineCode));
+      // ★ v3.2.0：与显示同口径 —— 逐线 pre + 逐班 post（闭区间）；窗口内仍返回该班（不提前滚）
+      const nxtDep = pickNext(dep, nowMs);
       if (!nxtDep) {
         if (lastReportedRemain.current !== null) {
           lastReportedRemain.current = null;
@@ -207,8 +217,10 @@ export default function LrtEta({
     const tick = setInterval(() => {
       const nowMs = Date.now() + serverOffsetMs.current;
       const dep = data.departures;
-      if (dep.length > 0 && dep[dep.length - 1].depMs - nowMs <= 0) {
-        // 末班也已开出 → 重拉（跨日/换班表后旧数据失效）
+      const lastDep = dep[dep.length - 1];
+      // ★ v3.2.0：末班判据改为「末班 + 该班保持期」——避免 10s 保持期内过早重拉（AC-69）
+      if (dep.length > 0 && lastDep.depMs + postOf(isPrecise(lastDep)) - nowMs <= 0) {
+        // 末班也已开出（含保持期）→ 重拉（跨日/换班表后旧数据失效）
         fetchEta();
         return;
       }
@@ -231,19 +243,23 @@ export default function LrtEta({
 
   // —— 渲染 ——
   const nowMs = data ? Date.now() + serverOffsetMs.current : 0;
-  // ★ B5：逐线到站窗口（闭区间）；班次选择 = 第一个「窗口尚未结束」的班次（depMs + post ≥ now）
-  const win = windowOf(data?.lineCode || route || "");
-  const nxtDep = data ? pickNext(data.departures, nowMs, win) : null;
+  // ★ v3.2.0：逐线 pre（闭区间）；班次选择 = 第一个「窗口尚未结束」的班次（depMs + post(该班) ≥ now）
+  const pre = preOf(data?.lineCode || route || "");
+  const nxtDep = data ? pickNext(data.departures, nowMs) : null;
   const sndDep = (() => {
     if (!data || !nxtDep) return null;
     const i = data.departures.indexOf(nxtDep);
     return data.departures[i + 1] ?? null;
   })();
   const remainMs = nxtDep ? nxtDep.depMs - nowMs : null;
-  /** ★ B5：现正到达 ⇔ `depMs - pre ≤ now ≤ depMs + post`（**闭区间，含边界**） */
-  const arriving = !!nxtDep && inArrivalWindow(nxtDep, nowMs, win);
-  // v0.15.1：石排湾/横琴线秒级读秒（氹仔线维持整分显示）
-  const tickSec = !!data && tickSecLine(data.lineCode);
+  /** 该班是否按秒级读秒（缺省 false） */
+  const precise = !!nxtDep && isPrecise(nxtDep);
+  /** 现正到达 ⇔ `depMs - pre ≤ now ≤ depMs + post(该班)`（闭区间，含边界） */
+  const arriving = !!nxtDep && inArrivalWindow(nxtDep, nowMs, pre, postOf(precise));
+  /** 归零保持期（已过发车时刻、仍在 post 窗口内）⇒ 数值槽占位不显 */
+  const held = arriving && !!nxtDep && nowMs >= nxtDep.depMs;
+  /** 无秒可读时（无读秒窗口内 / 有读秒归零期）用有限次脉动提示 */
+  const flash = arriving && (!precise || held);
   // floor：60_000ms 整恰好 60s（1 分 0 秒）；<60s 时不会出现「0 分 60 秒」（ceil 陷阱）
   const totalSec = remainMs != null ? Math.max(0, Math.floor(remainMs / 1000)) : null;
 
@@ -314,40 +330,43 @@ export default function LrtEta({
         </p>
       ) : (
         <div style={{ marginTop: 2 }}>
-          {/* ★ B5：秒级线（石排湾/横琴）在**到站窗口内**保留秒数，上方叠加「现正到达」徽章；
-              氹仔线无秒精度 → 大字由「下一班 X 分钟」切换为「现正到达」flash。
-              窗口 = 逐线 `LRT_ARRIVAL_WINDOW`（★ 闭区间，含边界）—— 替换原先写死的 <60s 阈值与 45s 留白。 */}
-          {tickSec && arriving && (
-            <p
-              className="t-accent t-strong"
-              style={{
-                textAlign: "center",
-                margin: "0 0 2px",
-                fontSize: 15,
-                letterSpacing: 2,
-                animation: "eta-pulse 1.2s ease-in-out infinite",
-              }}
-            >
-              现正到达
-            </p>
-          )}
-          {/* 下一班大数字 */}
+          {/* ★ v3.2.0（需求 2 / AC-68~70）：**一行式**「现正到达 · X 分 Y 秒」。
+              有秒级读秒：窗口内一行 lead + 数值；归零保持期保留 lead、数值槽 `visibility:hidden` 占位
+              ⇒ **零布局位移**。无读秒氹仔班次：窗口内大字切「现正到达」（有限次脉动）。 */}
           <p
-            className={`t-accent eta-big${!tickSec && arriving ? " eta-big--flash" : ""}`}
+            className={`t-accent eta-big${flash ? " eta-big--flash" : ""}`}
             style={{ textAlign: "center", margin: "4px 0 0" }}
           >
-            {tickSec
-              ? `还有 ${Math.floor(totalSec! / 60)} 分 ${totalSec! % 60} 秒`
-              : arriving
-                ? "现正到达"
-                : `下一班 ${Math.max(0, Math.floor((remainMs ?? 0) / 60_000))} 分钟`}
+            {arriving ? (
+              precise ? (
+                <>
+                  <span className="eta-big__lead">现正到达</span>
+                  <span className="eta-big__sep" style={held ? { visibility: "hidden" } : undefined}>
+                    ·
+                  </span>
+                  <span
+                    className="eta-big__num"
+                    style={held ? { visibility: "hidden" } : undefined}
+                  >
+                    {secText(totalSec ?? 0)}
+                  </span>
+                </>
+              ) : (
+                "现正到达"
+              )
+            ) : precise ? (
+              <span className="eta-big__num">还有 {secText(totalSec ?? 0)}</span>
+            ) : (
+              `下一班 ${Math.max(0, Math.floor((remainMs ?? 0) / 60_000))} 分钟`
+            )}
           </p>
           {/* 副行：方向 + 绝对时刻 */}
           <p
             className="t-label t-muted"
             style={{ textAlign: "center", lineHeight: 1.5, marginTop: 2 }}
           >
-            {data.directionName ? `往${data.directionName} · ` : ""}
+            {/* ★ v3.3.0（AC-103）：方向文案统一为「{終點}方向」（改前为「往{終點}」） */}
+            {data.directionName ? `${data.directionName}方向 · ` : ""}
             {nxtDep.clock} 开出
           </p>
           {/* 再下一班 */}
@@ -368,6 +387,10 @@ export default function LrtEta({
           更新于 {fmtTime(data.serverNow)} · 时刻表来源 澳門輕軌
         </p>
       )}
+      {/* ★ v3.2.0（AC-66 · 合规备注）：完整句 · 小字 · 不换行（站台卡；紧凑处见 `LrtEtaInline` 的「推算」角标） */}
+      {data?.ok && (
+        <p className="eta-note">报时数据通过澳门轻轨时刻表推算，仅供参考，请以实际为准</p>
+      )}
     </div>
   );
 }
@@ -381,20 +404,24 @@ export default function LrtEta({
  *     （`RideLegView.liveDepartures` / `liveClocks`）→ SSR 出卡后不再有任何请求；
  *     客户端只做每秒本地读秒，滚动到下一班也是纯本地（同数据）。
  *
- * 口径与 `LrtEta` **完全一致**：复用同一套 `tickSecLine` / `pickNext` / 45s 到站留白 /
- * 「还有 X 分 Y 秒」vs「下一班 X 分钟」的分线策略 —— 只是不显示卡片外壳与刷新按钮。
+ * 口径与 `LrtEta` **完全一致**（★ v3.2.0 起）：复用同一套 `pickNext` / `preOf` / `postOf` 窗口与
+ * 「现正到达 · X 分 Y 秒」/「还有 X 分 Y 秒」/「下一班 X 分钟」文案策略 ——
+ * 只是不显示卡片外壳与刷新按钮；紧凑处（AC-66）以「推算」小角标替代完整备注句。
  */
 export function LrtEtaInline({
   lineCode,
   departuresMs,
   clocks,
+  precise,
   state,
   directionName,
 }: {
-  /** 本库线路码（决定整分 / 秒级读秒） */
+  /** 本库线路码（决定 `pre`：氹仔 0:30 / 石排湾 2:00 / 横琴 1:00） */
   lineCode: string;
   departuresMs?: number[];
   clocks?: string[];
+  /** ★ v3.2.0（AC-68/69）：逐班 `secPrecise`（来自 `RideLegView.livePrecise`，与 `departuresMs` 一一对应） */
+  precise?: boolean[];
   state?: "running" | "before_first" | "after_last" | "no_data";
   directionName?: string | null;
 }) {
@@ -418,6 +445,7 @@ export function LrtEtaInline({
   const dep: LrtDeparture[] = (departuresMs ?? []).map((ms, i) => ({
     depMs: ms,
     clock: clocks?.[i] ?? "",
+    secPrecise: precise?.[i] === true,
   }));
 
   if (state && state !== "running") {
@@ -431,25 +459,44 @@ export function LrtEtaInline({
   if (!mounted) return <span className="rc-live rc-live--dim">—</span>;
 
   const nowMs = Date.now();
-  const w = windowOf(lineCode);
-  const nxt = pickNext(dep, nowMs, w);
-  const sec = tickSecLine(lineCode);
-  // ★ B5：窗口内 = 「现正到达」；整日无后续班次 → 今日已收车（不再用写死的 45s 留白）
+  const pre = preOf(lineCode);
+  const nxt = pickNext(dep, nowMs);
+  // ★ v3.2.0：窗口内 = 「现正到达」；整日无后续班次 → 今日已收车
   if (!nxt) return <span className="rc-live rc-live--dim">今日已收车</span>;
   const remainMs = nxt.depMs - nowMs;
-  const arriving = inArrivalWindow(nxt, nowMs, w);
+  const precise0 = isPrecise(nxt);
+  const arriving = inArrivalWindow(nxt, nowMs, pre, postOf(precise0));
+  const held = arriving && nowMs >= nxt.depMs;
   const totalSec = Math.max(0, Math.floor(remainMs / 1000));
   return (
     <span className="rc-live">
-      {sec
-        ? arriving
-          ? "现正到达"
-          : `还有 ${Math.floor(totalSec / 60)} 分 ${totalSec % 60} 秒`
-        : arriving
-          ? "现正到达"
-          : `下一班 ${Math.max(0, Math.floor(remainMs / 60_000))} 分钟`}
+      {arriving ? (
+        precise0 ? (
+          <>
+            <span className="rc-live__lead">现正到达</span>
+            {" · "}
+            <span
+              className="rc-live__time"
+              style={held ? { visibility: "hidden" } : undefined}
+            >
+              {secText(totalSec)}
+            </span>
+          </>
+        ) : (
+          "现正到达"
+        )
+      ) : precise0 ? (
+        <>
+          还有 <span className="rc-live__time">{secText(totalSec)}</span>
+        </>
+      ) : (
+        `下一班 ${Math.max(0, Math.floor(remainMs / 60_000))} 分钟`
+      )}
+      {/* ★ v3.2.0（AC-66）：紧凑处「推算」小角标（灰 = 系统推算，与实色读数区分） */}
+      <span className="rc-est-badge">推算</span>
       <span className="rc-live__sub">
-        {directionName ? `往${directionName} · ` : ""}
+        {/* ★ v3.3.0（AC-103）：方向文案统一为「{終點}方向」；空值整段省略（不留 `·`） */}
+        {directionName ? `${directionName.endsWith("方向") ? directionName : `${directionName}方向`} · ` : ""}
         {nxt.clock} 开出
       </span>
     </span>

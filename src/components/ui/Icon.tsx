@@ -26,6 +26,8 @@ import {
   IconArrowsExchange,
   IconArrowsLeftRight,
   IconArrowsUpDown,
+  IconBook,
+  IconBookFilled,
   IconBookmark,
   IconBookmarkFilled,
   IconBus,
@@ -38,16 +40,15 @@ import {
   IconChevronUp,
   IconCircle,
   IconCircleCheck,
-  IconClipboardList,
+  IconClipboardText,
   IconClock,
   IconCurrentLocation,
   IconDownload,
   IconGauge,
-  IconHelpCircle,
   IconHome,
   IconHomeFilled,
-  IconInfoCircle,
-  IconList,
+  IconInfoCircleFilled,
+  IconListDetails,
   IconLock,
   IconMapPin,
   IconPlayerPlay,
@@ -78,6 +79,10 @@ const REGISTRY: Record<string, any> = {
   homeFilled: IconHomeFilled,
   bookmark: IconBookmark,
   bookmarkFilled: IconBookmarkFilled,
+  /* ★ v3.3.0（AC-109）：/help 底导图标 —— 由「问号圆圈」改「手册」（Tabler 同库线性/实心对，
+     隐喻更贴切「使用指南 + 合规说明」；且**零长度段 = 0**）。 */
+  book: IconBook,
+  bookFilled: IconBookFilled,
   origin: IconCircle,
   destination: IconMapPin,
   pin: IconMapPin,
@@ -103,8 +108,11 @@ const REGISTRY: Record<string, any> = {
   caretDown: IconChevronDown,
   caretUp: IconChevronUp,
   expandVertical: IconArrowsUpDown,
-  /* 数据 / 工具（旧版功能页） */
-  records: IconClipboardList,
+  /* 数据 / 工具（旧版功能页）
+     ★ v3.3.0（AC-109）：`records` 原用 `IconClipboardList` —— 其**项目符号 = 零长度段**（`l.01 0`），
+        在 `strokeLinecap="butt"`（本项目固定）下不渲染 ⇒ 图标「缺项目符号」。改 `IconClipboardText`：
+        同语义（清单/记录）、**无零长度段**（06 §1.11「改用无零长度段的等价图标」）。 */
+  records: IconClipboardText,
   stats: IconChartBar,
   timer: IconClock,
   trash: IconTrash,
@@ -120,9 +128,15 @@ const REGISTRY: Record<string, any> = {
   /* ★ v2.10.0（实时巴士 + 帮助页）：车辆信息卡 / 帮助页 / FAQ 用（Tabler 同库，stroke=2 不变） */
   gauge: IconGauge,
   "route-2": IconRoute2,
-  "help-circle": IconHelpCircle,
-  "info-circle": IconInfoCircle,
-  list: IconList,
+  /* ★ v3.3.0（AC-109）· 零长度段根治（butt cap 下「点」不渲染）：
+     · `help-circle`（帮助页分区图标）→ `IconBook`（与底导 help 语义统一；零长度段 0）
+     · `info-circle`（到站横幅「i」· **安全级元素，图标须完整**）→ `IconInfoCircleFilled`
+       （原 `IconInfoCircle` 的 i 点 = 零长度段 `h.01`；实心版以**镂空**呈现 i ⇒ 完整可见）
+     · `list` → `IconListDetails`（原 `IconList` 的项目符号 = 零长度段 ×3）
+     ⚠️ 所有选择：Tabler **同库 3.47.0**（不混库），size/stroke 风格不变。 */
+  "help-circle": IconBook,
+  "info-circle": IconInfoCircleFilled,
+  list: IconListDetails,
 };
 
 export type IconName = keyof typeof REGISTRY;

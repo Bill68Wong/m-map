@@ -48,6 +48,7 @@ import { loadStationMap, type BridgeContext, type StationMap } from "./map-stati
 import { mergeSources } from "./merge-sources";
 import { parseAndBridge } from "./parse-amap-plan";
 import { rankItems, type RankedItem } from "./rank";
+import { applyLrtPriority } from "@/lib/recommend/lrt-priority";
 import { makeCacheWalkResolver, makeWalkResolver, ourDataCoverage, overlayTransferIndex, patchAmapFallback, type WalkCacheMap } from "./recompute";
 import type { AmapPlanSeed, NavEmptyReason, NavPoint, RecomputeProvenance, SegmentLevel, WalkResolver } from "./types";
 
@@ -87,6 +88,12 @@ export interface NavInput {
    *   ⚠️ 偏好只影响**排序**（`rankItems` / `sortCards`）；**不进** `switch-plans` 组内排序。
    */
   prefs?: Prefs;
+  /**
+   * ★ v3.3.0（AC-105 · `/api/nav?lrtFirst=1`）：**轻轨优先**开关。
+   *   true ⇒ 含轻轨段且总时长 ≤ 前 `limit` 张最慢 + 15min 的候选**稳定置顶**；
+   *   其余相对序不变、张数不变；未命中静默。缺省 = false（行为与旧版完全一致）。
+   */
+  lrtFirst?: boolean;
 }
 
 export interface NavStats {
@@ -96,7 +103,13 @@ export interface NavStats {
   transitFromCache: boolean;
   amapPlans: number;
   bridged: number;
-  dropped: { index: number; reason: string }[];
+  /**
+   * ★ v3.3.0（AC-119 / ADR-105 §3）：**合并**两类丢弃记录 ——
+   *   · 高德解析丢弃：`{ index, reason }`（如 `s7:unsolvable`）；
+   *   · 本地闸门丢弃：`{ key, reason }`（如 `low_coverage(0.42)` / `unsolvable_stops` / `duplicate_of_amap` / `suspect`）。
+   *   旧口径只记高德侧 ⇒ 本类「本地候选被闸门丢掉」的问题**长期不可见**。
+   */
+  dropped: { index?: number; key?: string; reason: string }[];
   localCandidates: number;
   localKept: number;
   /** 本地枚举来源：`"inline"` = 请求期现场跑；`"none"` = 未产出（无近站等） */
@@ -563,17 +576,28 @@ export async function planNav(pool: Pool, input: NavInput): Promise<NavOutput> {
       provenance: prov,
       coverage: ourDataCoverage(card),
     });
+
+    // ★ v3.3.0（AC-95/120）：**本地种子也造 sibling** —— 组合内每条线都要有各自的后续班车
+    //   候选（`enumerate.ts` 已为本地的 `RideSegment` 补 `parallelRoutes`，此处据此建模）。
+    if (lseed.segments[0]?.parallelRoutes?.length) {
+      for (const sib of siblingSeedsOf(lseed, st.routeIdx)) {
+        const mSib = modelOption(sib.seed, ctx);
+        if (mSib) siblingAlts.push({ parentPlanId: lseed.planId, route: sib.route, alts: mSib.alts });
+      }
+    }
   }
 
-  // ⑧ 合并 + 排序
-  //   ★ chain 模式：站链由用户显式指定 ⇒ **不过本地补漏质量闸门**（覆盖度/补漏语义不适用），
+  // ⑧ 合并 + 排序：站链由用户显式指定 ⇒ **不过本地补漏质量闸门**（覆盖度/补漏语义不适用），
   //     直接把链候选送入统一排优；缺省模式仍走 `mergeSources` 闸门（口径不变）。
   const rankedLocal = rankItems(localItems, prefs);
   const merged = chainMode
     ? { items: rankedLocal, dropped: [] as { key: string; reason: string }[], localCap: Number.POSITIVE_INFINITY }
     : mergeSources(amapItems, rankedLocal, {});
   const ranked = rankItems(merged.items, prefs);
-  const cards = ranked.slice(0, limit).map((r) => r.card);
+  // ★ v3.3.0（AC-105）：**轻轨优先** —— 注入点 = `rankItems` 之后、`slice(limit)` **之前**；
+  //   只重排不增删（未开启/未命中则原样，静默）。
+  const ordered = applyLrtPriority(ranked, limit, input.lrtFirst ?? false);
+  const cards = ordered.slice(0, limit).map((r) => r.card);
 
   // ★ P2-a：回填「本班之外的后续班次」（**逐字复用旧 `service.ts` v1.1.5 口径**）
   //   ★ v2.3.0（A3）：并行线 sibling 的 alts 一并合并（按 route 分组）
@@ -623,7 +647,8 @@ export async function planNav(pool: Pool, input: NavInput): Promise<NavOutput> {
       transitFromCache: fromCache,
       amapPlans: amapTotal,
       bridged: bridgedSeeds.length,
-      dropped,
+      // ★ v3.3.0（AC-119）：高德解析丢弃 + 本地闸门丢弃（mergeSources）**合并**上报
+      dropped: [...dropped, ...merged.dropped],
       localCandidates: localCandidates.length,
       localKept: merged.items.filter((i) => i.origin === "local").length,
       localSource,
@@ -661,6 +686,8 @@ export function backfillAltBuses(
   const topSet = new Set(cards);
   for (const m of modeled) {
     if (!topSet.has(m.card)) continue;
+    // ★ v3.3.0（AC-120）：**幂等** —— 先清空再重建（重复调用结果一致；防陈旧 altBuses 残留）
+    m.card.altBuses = undefined;
     const byThreshold = (a: AltBusView) => a.totalMin <= threshold + 1e-9;
     // 本线（主干线）后续
     const groups: AltBusView[] = m.alts.filter(byThreshold);
@@ -669,6 +696,14 @@ export function backfillAltBuses(
       const sib = siblings.find((s) => s.parentPlanId === m.card.planId && s.route === pr);
       if (sib) groups.push(...sib.alts.filter(byThreshold));
     }
-    if (groups.length) m.card.altBuses = groups;
+    // 去重（键 = `route + totalMin`）——sibling 与主干线可能给出同线同班次
+    const seen = new Set<string>();
+    const dedup = groups.filter((g) => {
+      const k = `${g.route}|${g.totalMin}`;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+    if (dedup.length) m.card.altBuses = dedup;
   }
 }

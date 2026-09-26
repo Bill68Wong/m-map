@@ -1,6 +1,6 @@
 {
   "name": "must-dengxiao",
-  "version": "3.1.1",
+  "version": "3.2.0",
   "private": true,
   "description": "M Map · 澳门巴士 / 轻轨全澳导航：全屏地图、路线收藏与实时报站（数据来源：澳门交通事务局 DSAT）",
   "scripts": {
@@ -33,6 +33,12 @@
     "db:migrate-v160": "tsx scripts/db-guard.ts run db/migrate-v160.ts",
     "db:migrate-v161": "tsx scripts/db-guard.ts run db/migrate-v161.ts",
     "lrt:fetch": "tsx scripts/db-guard.ts run scripts/fetch-lrt-timetable.ts",
+    "db:migrate-v3200": "tsx scripts/db-guard.ts run db/migrate-v3200.ts",
+    "db:seed-lrt-biases": "tsx scripts/db-guard.ts run scripts/seed-lrt-biases.ts",
+    "db:build-lrt-patterns": "tsx scripts/db-guard.ts run scripts/build-lrt-patterns.ts",
+    "lrt:refresh": "npm run lrt:fetch -- cloud --allow-prod && npm run db:build-lrt-patterns -- cloud --allow-prod",
+    "test:lrt-bias": "tsx scripts/test-lrt-bias.ts",
+    "test:lrt-pattern-consistency": "tsx scripts/test-lrt-pattern-consistency.ts",
     "db:migrate-v163": "tsx scripts/db-guard.ts run db/migrate-v163.ts",
     "db:migrate-v164": "tsx scripts/db-guard.ts run db/migrate-v164.ts",
     "db:migrate-v170": "tsx scripts/db-guard.ts run db/migrate-v170.ts",

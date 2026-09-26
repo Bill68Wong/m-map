@@ -19,6 +19,7 @@
  */
 import { Fragment, useState } from "react";
 import RouteStack from "@/components/RouteStack";
+import { dirTextOf } from "@/components/RoutePieces";
 import Icon from "@/components/ui/Icon";
 import type { SegmentStrip } from "@/lib/recommend/types";
 
@@ -33,9 +34,9 @@ export interface StripNav {
   /** 下车提醒级别：none / soon（下一站是下车站）/ now（已到下车站） */
   alarm: "none" | "soon" | "now";
   /**
-   * ★ 本批（需求⑤ / AC-43/44）：**段内插值用户点**。
-   *   `frac = 0` ⇒ 点贴 `afterIdx` 站节点；`0 < frac < 1` ⇒ 位于 `afterIdx → afterIdx+1` 之间。
-   *   `afterIdx = -1` ⇒ 尚未到上车站（点在上车站之前）。`null` ⇒ 不显示。
+   * ★ v3.2.0（需求 6 / AC-78）：**二值 + 驻留用户点**。
+   *   `frac = 0` ⇒ 点贴 `afterIdx` 站节点（停靠中）；`frac = 0.5` ⇒ 锁 `afterIdx → afterIdx+1`
+   *   **两站正中间**并驻留（行驶中，不随进度微动）。`afterIdx = -1` ⇒ 尚未到上车站。`null` ⇒ 不显示。
    */
   youAt?: { afterIdx: number; frac: number } | null;
   /** ★ 本批：观测钩子 `data-nav-leg` 取值（当前乘车段下标，由宿主透传） */
@@ -71,6 +72,14 @@ export default function NavStrip({
   const open = openManual || !!nav;
   const rail = color ?? "var(--accent)";
   const stops = strip.stops;
+  /**
+   * ★ v3.3.0（AC-102）：上车站行标签 = **实际可乘的那班**（四规则；服务端派生 `boardRoute`）。
+   *   ①② 主干能赶 → 主干；赶不上 → `altBuses` 最早可赶并行线（**均已在服务端判定**）；
+   *   ③④ `boardRoute` 缺失 / 无法判定 → **回落主干**（`strip.route`）⇒ **不会显错线**。
+   */
+  const boardRoute = strip.boardRoute ?? strip.route;
+  /** ★ v3.3.0（AC-103）：轻轨段方向（`{終點}方向`）；空值 ⇒ 不渲染（巴士段 `dirLabel = null`） */
+  const dirText = dirTextOf(strip.dirLabel);
   const lastK = stops.length - 1;
   const mids = stops.filter((s) => s.role === "mid").length;
   const board = stops[0];
@@ -106,12 +115,14 @@ export default function NavStrip({
         <span className={`navstrip__seg${segPassed ? " is-passed" : ""}`} />
         <span className="navstrip__dot" />
         <span className="navstrip__label">
-          {k === 0 && <RouteStack codes={[strip.route]} colorOf={() => rail} />}
+          {k === 0 && <RouteStack codes={[boardRoute]} colorOf={() => rail} />}
           {isNext && <span className="navstrip__badge">下一站</span>}
           {k === lastK ? <b>{s.label}</b> : s.label}
           {isAt && <span className="navstrip__sub">停靠中</span>}
           {k === lastK && isAlightNow && <span className="navstrip__sub">到站</span>}
           {k === lastK && isAlight && <span className="navstrip__sub">下车</span>}
+          {/* ★ v3.3.0（AC-103）：轻轨方向上车站行右侧（`margin-left:auto` 右对齐，不与站名抢位） */}
+          {k === 0 && dirText && <span className="navstrip__dir">{dirText}</span>}
           {!end && s.minToNext > 0 && !nav && (
             <span className={`navstrip__hop${s.level >= 3 ? " rc-val--est" : ""}`}>
               {Math.round(s.minToNext)} 分
@@ -123,7 +134,7 @@ export default function NavStrip({
             <Icon name="check" size={16} />
           </span>
         )}
-        {/* ★ 本批：行驶中骑线浮标（挂在 row(afterIdx) 内；--you-frac 由 JS 写 0..1）。
+        {/* ★ v3.2.0：行驶中骑线浮标（挂在 row(afterIdx) 内；--you-frac 由 JS 写 **0（停靠）或 0.5（行驶中点）**）。
             停靠中（atIdx !== null）由 CSS 复用 is-at 节点，不渲染本浮标。 */}
         {nav && nav.youAt && nav.atIdx === null && nav.youAt.afterIdx === k && (
           <span

@@ -45,18 +45,22 @@ const TABS: TabDef[] = [
   {
     key: "favorites",
     href: "/favorites",
-    label: "路线收藏",
+    /* ★ v3.3.0（AC-110）：「路线收藏」→「收藏」（收藏体系 = 组合 + 地点两类，不再是「路线」） */
+    label: "收藏",
     icon: "bookmark",
     iconOn: "bookmarkFilled",
     match: (p) => p.startsWith("/favorites"),
   },
   {
     // ★ v2.10.0：第 3 个 tab「帮助」（`/help`；旧 `/about` 已 308 重定向到此）
+    // ★ v3.3.0（AC-109）：图标由「问号圆圈」改「手册」—— 原 `help-circle` 的问号圆点是**零长度段**，
+    //   在 `strokeLinecap="butt"` 下不渲染（用户反馈「怪怪的」）；`book/bookFilled` 是同库原生
+    //   线性/实心对 ⇒ **恢复选中态「切实心」第二通道**（设计 §1.4 方案 A）。
     key: "help",
     href: "/help",
     label: "帮助",
-    icon: "help-circle",
-    iconOn: "help-circle",
+    icon: "book",
+    iconOn: "bookFilled",
     match: (p) => p.startsWith("/help") || p.startsWith("/about"),
   },
 ];

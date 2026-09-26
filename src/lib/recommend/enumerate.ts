@@ -34,6 +34,39 @@ export function idxsOf(stops: string[], target: string): number[] {
 }
 
 /**
+ * ★ v3.3.0（AC-120）：本地候选的**段内并行线**（同 `board→alight` 的其他本库线路）。
+ *
+ * 动机：本地枚举出的 `RideSegment` 此前**不带 `parallelRoutes`** ⇒ 组合卡无并行标签（如 `25/26`），
+ *   且 `siblingSeedsOf`（依赖 `segments[0].parallelRoutes`）**无从触发** ⇒ 组合内其他线的
+ *   后续班车丢失（AC-95 假绿）。
+ *
+ * 判定（廉价 + 保守）：
+ *   ① 先用 `adjOwners`（`mainCodeOf(首站)→mainCodeOf(次站)`）取**共享首跳**的候选线路集合
+ *      —— 并行线必然共享首跳，避免遍历全线路；
+ *   ② 再对每个候选调 `segmentsOf(idx, r, board, alight)` 复验：能解出逐跳者才算并行。
+ * 返回**稳定排序**（数字感知），供标签 `A/B` 渲染与 sibling 建模。
+ */
+function parallelRoutesFor(
+  idx: RouteIndex,
+  route: string,
+  board: string,
+  alight: string,
+  hops: [string, string][],
+): string[] {
+  const first = hops[0];
+  if (!first) return [];
+  const cand = idx.adjOwners.get(`${mainCodeOf(first[0])}→${mainCodeOf(first[1])}`);
+  if (!cand || cand.size <= 1) return [];
+  const out: string[] = [];
+  for (const r of cand) {
+    if (r === route) continue;
+    const s = segmentsOf(idx, r, board, alight);
+    if (s && s.segs.length) out.push(r);
+  }
+  return out.sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
+}
+
+/**
  * 对某条线路、某 from→to，取逐跳段列表
  * （选能顺向解出的方向 + 沿行驶方向环距最近的解 —— 循环线首尾同码取近的一圈）
  */
@@ -242,6 +275,8 @@ export function enumerateOptions(
           board,
           alight,
           hops: seg0.segs,
+          // ★ v3.3.0（AC-120）：本地候选补段内并行线（同 board→alight 的其他本库线路）
+          parallelRoutes: parallelRoutesFor(idx, R, board, alight, seg0.segs),
         },
       ];
       let ok = true;
@@ -257,6 +292,7 @@ export function enumerateOptions(
           board: rest.board,
           alight: rest.alight,
           hops: s.segs,
+          parallelRoutes: parallelRoutesFor(idx, rest.route, rest.board, rest.alight, s.segs),
         });
       }
       if (!ok) continue;

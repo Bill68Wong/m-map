@@ -17,9 +17,6 @@
 import RecommendCard from "./RecommendCard";
 import type { RecommendCard as CardData, SchoolZone } from "@/lib/recommend/types";
 
-/** UI 目标卡数（用户门槛：点首页卡 2 秒内看到 5 张）；实际不足时给出原因说明 */
-const TARGET_CARDS = 5;
-
 export default function RecommendCards({
   cards,
   colors,
@@ -75,16 +72,8 @@ export default function RecommendCards({
 
   return (
     <div className="rc-list">
-      {/* ★ v1.0.2：不足目标张数时说明原因（用户 2026-09-16 拍板：真实几张就几张 + 明确提示，
-          不用估算卡凑满）。★ v1.0.6：原因分两类——「没实时车」与「首班赶不上」，
-          后者已整条剔除而不是塞一张带估算等车的卡。 */}
-      {cards.length < TARGET_CARDS && (
-        <p className="t-label t-muted" style={{ margin: "0 2px 8px", lineHeight: 1.6 }}>
-          目前仅有 {cards.length} 条路线可用
-          {reasons.length > 0 && <>・{reasons.join("・")}</>}
-          （均为实时结果）
-        </p>
-      )}
+      {/* ★ v3.3.0（AC-108）：删除「目前仅有 X 条路线可用」提示（用户明确要求不展示）。
+          结果不足时的解释改由空态块承担（`RouteResultPane` 中性空态：图标 + 「暂时没有可用方案」+ 重试）。 */}
       {cards.map((c, i) => (
         <RecommendCard
           key={`${c.planId}-${c.rides.map((r) => `${r.route}${r.alight}`).join("_")}`}

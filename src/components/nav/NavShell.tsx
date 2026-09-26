@@ -37,8 +37,11 @@
  *   · ★ 取景**全部自算**（`fit-box`），**禁用** `setBounds`/`setFitView`（会撑到珠海）。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Icon from "@/components/ui/Icon";
 import NavMap from "./NavMap";
 import NavBrandBar from "./NavBrandBar";
+import AlightBanner from "./AlightBanner";
+import PinDiag from "./PinDiag";
 import NavSearchBarSlot from "./NavSearchBarSlot";
 import RouteLinesSheet from "./RouteLinesSheet";
 import RoutePanel from "./RoutePanel";
@@ -94,6 +97,12 @@ export default function NavShell({
   const [editing, setEditing] = useState<"dest" | "from">("dest");
   /** 重新定位触发计数（右上定位按钮） */
   const [locateTick, setLocateTick] = useState(0);
+  /** ★ v3.3.0（AC-93）：`?diag=pin` 钉诊断浮层开关（仅带参为真；客户端读 URL） */
+  const [diagPin, setDiagPin] = useState(false);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    setDiagPin(new URLSearchParams(window.location.search).get("diag") === "pin");
+  }, []);
 
   /**
    * 路线查看模式（选线路看实时车辆）；`picked` 非空 ⇒ 地图画该线 + 底部主题色标签。
@@ -164,9 +173,16 @@ export default function NavShell({
     () => (to ? { lng: to.lng, lat: to.lat, label: to.label } : null),
     [to],
   );
+  /**
+   * ★ v3.2.0（需求 5 / AC-76 · P4 裁定）：起点钉以 **`fromPoint`（= `from ?? 我的位置`）** 为准 ——
+   *   改前 `from = null`（起点为「我的位置」）时 `originArg = null` ⇒ `NavMap` **从不创建红钉**
+   *   （严格复现用户「全程没见过红钉」）。改为 `fromPoint` ⇒ 起点=我的位置时也画红钉（与蓝点组合）。
+   *   依赖用 `fromPoint?.lng/lat` ⇒ 坐标不变则不产生新对象，避免下游 OD 标记 effect 抖动。
+   */
   const originArg = useMemo(
-    () => (from ? { lng: from.lng, lat: from.lat, label: from.label } : null),
-    [from],
+    () => (fromPoint ? { lng: fromPoint.lng, lat: fromPoint.lat, label: fromPoint.label } : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [fromPoint?.lng, fromPoint?.lat],
   );
 
   /** ★ 路线总览数据流（仅 detail pane 打开时启用） */
@@ -194,11 +210,13 @@ export default function NavShell({
     return set.size > 0 ? set : null;
   }, [rsOpen, pane, ov.body]);
 
-  /** ★ 2026-09-25：GPS 通道（候车 15s / 乘车 30s 节流；权限由手势申请） */
-  const userFixR = useUserFix({
-    enabled: navActive,
-    intervalMs: ridePhase === "riding" ? 30_000 : 15_000,
-  });
+  /**
+   * ★ v3.2.0（需求 4/7 / AC-74/79）：GPS 通道 —— **`enabled` 扩到「地图页常开」**（浏览/选点/选路线/导航
+   *   全程只要有定位就显示蓝点）；采纳间隔按档位：riding **1.5s** / 候车（detail 非 riding）**3s** / 浏览 **10s**；
+   *   `maximumAge: 0` ⇒ 只用新鲜坐标（避免陈旧点导致蓝点/读数跳变）。
+   */
+  const gpsIntervalMs = ridePhase === "riding" ? 1_500 : navActive ? 3_000 : 10_000;
+  const userFixR = useUserFix({ enabled: true, intervalMs: gpsIntervalMs, maximumAge: 0 });
 
   /** ★ 2026-09-24：乘车追踪（自动上车 + 安全网 + 轻轨 GPS 推进） */
   const ride = useRideTracking({
@@ -245,12 +263,50 @@ export default function NavShell({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rsOpen, pane, ov.box, ovExtra, stage, from, to]);
 
-  /** 全屏化：导航中隐藏底导（body[data-nav="riding"]） */
+  /**
+   * ★ v3.2.0（Spec §2/§3 · AC-84）：`body[data-nav-phase]` **四值**（页面级导航阶段钩子）——
+   *   `off`（未开面板）/ `recommend`（选路线）/ `detail`（查看·候车）/ `riding`（导航中）。
+   *   ⚠️ 与 `.nav-actions[data-nav-phase]`（NavTrackBar，值为**乘车 phase**）语义不同，勿混用；
+   *      旧布尔 `body[data-nav="riding"]` **废弃**（底导隐藏规则已改选择器，见 globals.css）。
+   */
+  const navPhase: "off" | "recommend" | "detail" | "riding" = !rsOpen
+    ? "off"
+    : pane === "recommend"
+      ? "recommend"
+      : ride.phase === "riding"
+        ? "riding"
+        : "detail";
   useEffect(() => {
-    if (navActive && ride.phase === "riding") document.body.setAttribute("data-nav", "riding");
-    else document.body.removeAttribute("data-nav");
-    return () => document.body.removeAttribute("data-nav");
-  }, [navActive, ride.phase]);
+    document.body.setAttribute("data-nav-phase", navPhase);
+    return () => document.body.removeAttribute("data-nav-phase");
+  }, [navPhase]);
+
+  /**
+   * ★ v3.2.0（需求 4 / AC-74）：**打开地图页即申请一次定位**（触发权限弹窗）。
+   *   拒权 / 失败 ⇒ `denied` 置位但不抛错：页面**不空白**、默认视野与搜索照常、仅不显示蓝点（AC-75）。
+   *   `startFix` 经 `useCallback([doWatch])` 恒稳定 ⇒ 该 effect 只在 mount 跑一次。
+   */
+  const startFix = userFixR.start;
+  useEffect(() => {
+    startFix();
+  }, [startFix]);
+
+  /**
+   * ★ v3.2.0（需求 8 / AC-81）：页面级下车横幅的下车站名（与面板内 `NavAlarmOverlay` 同口径：
+   *   本腿纵条末站 → 该腿 `alightLabel` → 首腿 `alightLabel`）。
+   */
+  const alarmLabel = useMemo(() => {
+    const card = detailCard?.card;
+    if (!card) return "";
+    const li = ride.legIndex ?? 0;
+    const stops = ov.body?.strips?.[li]?.stops ?? [];
+    return (
+      (stops.length ? stops[stops.length - 1].label : "") ||
+      card.rides[li]?.alightLabel ||
+      card.rides[0]?.alightLabel ||
+      ""
+    );
+  }, [detailCard?.card, ride.legIndex, ov.body]);
 
   /* ── 舞台操作 ── */
   function openSearch(which: "dest" | "from") {
@@ -359,17 +415,18 @@ export default function NavShell({
           onVehicleClick={onVehicleClick}
           /* ★ 2026-09-23：路线总览（灰底线 + 彩段） */
           overview={detailActive ? ov.legs : null}
-          /* ★ 本批（需求⑤ / AC-40~42）：单蓝点 —— riding 用 GPS 投影点（`youDot`），
-             否则回落原始 GPS；**取消原 riding 隐藏三元**（乘车中蓝点不再隐藏）。 */
-          userFix={detailActive ? (ride.youDot ?? userFixR.fix) : null}
+          /* ★ v3.2.0（需求 4 / AC-74）：**蓝点任何时候显示** —— 导航态用 GPS 投影点（`youDot`）回落原始
+             GPS；**浏览/选点/选路线态也回落原始 GPS**（原先非 detail 态传 `null` ⇒ 浏览时不显示蓝点，
+             违反 AC-74）。拒权/未获定位 ⇒ `userFixR.fix = null` ⇒ 蓝点不显示、页面照常（AC-75）。 */
+          userFix={detailActive ? (ride.youDot ?? userFixR.fix) : userFixR.fix}
           traveled={detailActive && ride.phase === "riding" ? ride.traveled : null}
           /* ★ 本批（需求②）：站点白名单（导航模式仅显示本线路站点） */
           lineStops={detailActive ? lineStops : null}
-          /* ★ v3.1.1 #2：「回到我的位置」仅在**导航语境**显示（非导航态拖图不出现该按钮） */
-          recenterEnabled={detailActive}
+          /* ★ v3.2.0（需求 7 / AC-80）：蓝点移动插值时长 = 采样间隔；仅 ≤5s 才插值（浏览 10s ⇒ 0） */
+          userDotSmoothMs={gpsIntervalMs <= 5_000 ? gpsIntervalMs : 0}
         />
 
-        {/* 品牌栏（三栏网格）：左=空 · 中=换向键+线路标签 · 右=竖排按钮组 */}
+        {/* 品牌栏（三栏网格）：左=空 · 中=换向键+线路标签 · 右=竖排按钮组（导航态右列隐藏，AC-84） */}
         <NavBrandBar
           picked={rv.picked ? { label: rv.picked.label, color: rv.picked.color, kind: rv.picked.kind } : null}
           canReverse={rv.canReverse}
@@ -378,7 +435,10 @@ export default function NavShell({
           onExitLine={rv.exitLine}
           onRefresh={rv.refresh}
           onOpenLines={() => setLineSheet(true)}
+          /* ★ v3.3.0（AC-100）：首页定位按钮（右列原位）；导航态整列隐藏 ⇒ 由浮动 FAB 承担 */
           onLocate={() => setLocateTick((t) => t + 1)}
+          /* ★ v3.2.0（需求 10 / AC-84）：导航语境（data-nav-phase ≠ off）⇒ 隐藏「查看路线」与「M Map logo」 */
+          navMode={navPhase !== "off"}
         />
 
         {/* 顶置搜索条 + 提示条槽 */}
@@ -393,6 +453,32 @@ export default function NavShell({
           onOpenSearch={() => openSearch("dest")}
         />
       </div>
+
+      {/* ★ v3.2.0（需求 11 / AC-85）+ v3.3.0（AC-100）：**定位两模式**（`data-locate-pos` 冻结钩子）
+          · `off`（首页默认地图）⇒ **不渲染浮动层**，定位按钮在品牌栏右列原位（`bar`）；
+          · `!=off`（recommend/detail/riding）⇒ 浮动层（`float`）随面板档位上下避让
+            （`--sheet-y-anim` bottom 公式），品牌栏整列隐藏 ⇒ **两模式互斥、不重叠**。 */}
+      {navPhase !== "off" && (
+        <button
+          type="button"
+          className="nav-locate-fab"
+          data-locate-fab="on"
+          data-locate-pos="float"
+          aria-label="定位到我的位置"
+          title="定位到我的位置"
+          onClick={() => setLocateTick((t) => t + 1)}
+        >
+          <Icon name="locate" size={20} />
+        </button>
+      )}
+
+      {/* ★ v3.2.0（需求 8 / AC-81/82）：**页面级顶部下车横幅** —— 独立于面板，fixed + 安全区，
+          z94（> 面板 70 / > 车卡浮层 90），落位公式见 globals.css `.nav-alarm--top`（07 §3.4）。 */}
+      {ride.phase === "riding" && ride.alarm !== "none" && (
+        <div className="nav-alarm--top" data-alarm-pos="top" data-alarm={ride.alarm}>
+          <AlightBanner alarm={ride.alarm} destLabel={alarmLabel} />
+        </div>
+      )}
 
       {/* ★ 卡片浮层（车卡/站卡）—— 挂在 wrap **之外**，`.nav-card-overlay`（fixed z90）
           ⇒ 面板打开时点地图带上的车/站，卡片不被面板（z70）压住。 */}
@@ -507,6 +593,9 @@ export default function NavShell({
           onTapDest={() => openSearch("dest")}
         />
       )}
+
+      {/* ★ v3.3.0（AC-93 · ADR-102）：`?diag=pin` 起终点钉诊断浮层 —— **生产默认不渲染** */}
+      {diagPin && <PinDiag />}
     </section>
   );
 }

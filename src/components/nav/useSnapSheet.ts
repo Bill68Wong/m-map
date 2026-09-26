@@ -100,8 +100,9 @@ export function useSnapSheet(opts: UseSnapSheetOpts): UseSnapSheet {
   const winH = topsPx.length ? topsPx[topsPx.length - 1] / 0.8 : 844;
 
   /** 命令式写面板位移（GPU 合成；拖动中每帧调用，不触发 React 渲染）
-   *  ★ 2026-09-26（P1-②）：**同时镜像到 `document.documentElement`** —— 供 `.nav-map__recenter`
-   *  「动态贴可见地图区下沿」读取（地图子树不在 `.route-sheet` 内，拿不到面板内联变量；走根继承）。
+   *  ★ 2026-09-26（P1-②）：**同时镜像到 `document.documentElement`** —— 供「随面板避让」的浮层
+   *  （★ v3.2.0 起为页面级 `.nav-locate-fab`；此前为 `.nav-map__recenter`）读取 `bottom` 公式
+   *  （这些浮层不在 `.route-sheet` 子树内，拿不到面板内联变量；走根继承）。
    *  仍为零 React 更新（直接 `style.setProperty`）。 */
   const paint = (y: number) => {
     const px = `${Math.round(y)}px`;
@@ -125,8 +126,9 @@ export function useSnapSheet(opts: UseSnapSheetOpts): UseSnapSheet {
 
   /**
    * ★ 2026-09-26（P1-②）：把「拖动中」也镜像到 `<html>`（`data-sheet-dragging`）。
-   * 用途：`.nav-map__recenter` 不在 `.route-sheet` 子树内，无法用 `[data-dragging]` 选择器选中；
-   *   它需要「拖动期 0ms 跟手 / 落定期与面板同缓动」—— 借此属性区分（与面板同步、无跑位）。
+   * 用途：页面级浮层（★ v3.2.0 起为 `.nav-locate-fab`）不在 `.route-sheet` 子树内，无法用
+   *   `[data-dragging]` 选择器选中；它需要「拖动期 0ms 跟手 / 落定期与面板同缓动」——
+   *   借此属性区分（与面板同步、无跑位）。
    */
   useEffect(() => {
     if (typeof document === "undefined") return;

@@ -24,13 +24,13 @@
  * ── ★ 限流与降级 ──────────────────────────────────────────────────────
  *   调用前必取**跨实例令牌桶**（`rate-limit.ts`，3 QPS 全实例共享）。取不到令牌 →
  *   返回 `{ ok:false, degraded:true }`，调用方走**正式降级路径**（本地图枚举 + `walk_cache`，§B.6）。
- *   超时预算 **1.5s**（§B.6 触发条件之一）。
+ *   超时预算 **4s**（v3.3.0 由 1.5s 上调，见 `TRANSIT_TIMEOUT_MS`；§B.6 触发条件之一）。
  *
  * 设计：docs/设计-全澳导航-v1-20260918.md §2.B.1~B.4 / §4；
  *       调研：docs/调研-全澳导航-高德API能力-20260918.md A1.1~A1.5、§6。
  */
 import { haversineM, type LatLng } from "./coord";
-import { acquireToken, RATE_BUCKET } from "./rate-limit";
+import { acquireToken, acquireWithWait, RATE_BUCKET } from "./rate-limit";
 import { fixWalkDistance } from "./walk-fix";
 import type { AmapPlanLeg, AmapPlanSeed, AmapPlanTransfer, AmapStop } from "@/lib/nav/types";
 
@@ -49,8 +49,24 @@ export const TRANSIT_STRATEGY = 0;
 export const CITYCODE_MACAU = "1853";
 /** 澳门 adcode（备用） */
 export const ADCODE_MACAU = "820000";
-/** 请求超时预算（毫秒）—— §B.6 降级触发条件之一 */
-export const TRANSIT_TIMEOUT_MS = 1_500;
+/**
+ * 请求超时预算（毫秒）—— §B.6 降级触发条件之一。
+ *
+ * ★ v3.3.0（ADR-103）：**1500 → 4000**。生产（函数真身 iad1 → 高德中国）实测 RTT 是
+ *   本地的 12~28 倍，1500ms 令首次尝试**必然超时**（`transitMs≈3000` = 超时+重试成功），
+ *   偶发双超时降级 ⇒ 用户看到「刷新后才好」。上调后首次即成功，且总时长下降。
+ *   可用 `AMAP_TRANSIT_TIMEOUT_MS` 覆盖（运维调参，默认 4000）。
+ */
+export const TRANSIT_TIMEOUT_MS = (() => {
+  const v = Number(process.env.AMAP_TRANSIT_TIMEOUT_MS);
+  return Number.isFinite(v) && v > 0 ? v : 4_000;
+})();
+/**
+ * ★ v3.3.0（ADR-103）：**主调用**取令牌的最长等待（毫秒）。
+ *   把「瞬时桶空（3 QPS 共享）」从「直接降级」改为「短等 ≤0.8s」；
+ *   多策略补查（s=7/8）仍用**不等待**的 `acquireToken`（可失败）。
+ */
+export const TRANSIT_ACQUIRE_WAIT_MS = 800;
 
 /** OD 缓存：坐标取整位数（3~4 位；§Q14 可工程决定，取 4） */
 export const OD_ROUND_DIGITS = 4;
@@ -513,9 +529,15 @@ export async function fetchTransitPlans(
   }
 
   // ② 跨实例令牌桶（3 QPS 全实例共享）
+  //   ★ v3.3.0（ADR-103）：**主调用**（strategy=0）改**短等** `acquireWithWait(≤0.8s)` ——
+  //     瞬时桶空不再直接降级为「路网不可用」；**多策略补查**（s=7/8）仍用不等待的
+  //     `acquireToken`（可失败，失败只影响补查、不动主路径）。
+  const isMainCall = strategy === TRANSIT_STRATEGY;
   let token;
   try {
-    token = await acquireToken(RATE_BUCKET.transit);
+    token = isMainCall
+      ? await acquireWithWait(RATE_BUCKET.transit, TRANSIT_ACQUIRE_WAIT_MS)
+      : await acquireToken(RATE_BUCKET.transit);
   } catch (e) {
     return { ok: false, degraded: true, error: `限流器不可用：${(e as Error).message}` };
   }
@@ -523,7 +545,7 @@ export async function fetchTransitPlans(
     return { ok: false, degraded: true, error: "rate_limited" };
   }
 
-  // ③ 请求（超时预算 1.5s）
+  // ③ 请求（超时预算 4s；可用 AMAP_TRANSIT_TIMEOUT_MS / opts.timeoutMs 覆盖）
   const started = Date.now();
   let json: AmapTransitRawResponse | null = null;
   try {

@@ -24,9 +24,64 @@ export function macauClock(ms: number): string {
  * ★ v1.1.8：签名由「收整个 card」改为「收 tier/tierText」——
  *   详情页的「后续班车」也要画徽章，收 card 无法复用。
  */
-export function TierBadge({ tier, tierText }: { tier: CatchTier | null; tierText: string }) {
+/**
+ * ★ v3.3.0（AC-107）：取本段「赶车提示」文案 —— `RideLegView.catchHint`（带时刻变体）**优先**，
+ * 回落既有 `tierText`。合并式：同一 `TierBadge` 胶囊同时承载档位色与「可赶上 HH:MM」。
+ */
+export function catchHintOf(leg: { tierText?: string; catchHint?: string }): {
+  text: string;
+  isHint: boolean;
+} {
+  return { text: leg.catchHint ?? leg.tierText ?? "", isHint: !!leg.catchHint };
+}
+
+/**
+ * ★ v3.3.0（AC-103）：轻轨段**方向**（终点站名，如「氹仔碼頭」）。
+ * 数据源 `RideLegView.directionName`（已落地；上游 `LrtLive.directionName`）。
+ */
+export function directionNameOf(leg: { route?: string; directionName?: string | null }): string | null {
+  return leg.directionName ?? null;
+}
+
+/**
+ * ★ v3.3.0（AC-105）：本卡是否被「轻轨优先」置顶。
+ * 数据源 `RecommendCard.lrtPromoted`（**唯一产生点** = `applyLrtPriority` 命中回写；
+ *   `!enabled` 时早返回、字段不置 ⇒ `undefined`）。`=== true` 判定 ⇒ 未触发时**绝不误标**
+ *   （符合设计「未触发静默」口径）。
+ */
+export function lrtPromotedOf(card: { planId?: number; lrtPromoted?: boolean }): boolean {
+  return card.lrtPromoted === true;
+}
+
+/**
+ * ★ v3.3.0（AC-103）：方向文案 —— 统一格式 **`{終點}方向`**（繁体地名原样 + 简体功能词）。
+ * 幂等：若调用方已给 `…方向` 则不重复追加；空值 ⇒ `null`（整段省略，不显示空壳）。
+ */
+export function dirTextOf(name?: string | null): string | null {
+  if (!name) return null;
+  return name.endsWith("方向") ? name : `${name}方向`;
+}
+
+export function TierBadge({
+  tier,
+  tierText,
+  catchHint = false,
+}: {
+  tier: CatchTier | null;
+  tierText: string;
+  /**
+   * ★ v3.3.0（AC-107）：本胶囊承载**赶车提示**（「走快一点可赶上 HH:MM 那班」）。
+   *   合并式 —— 文案由后端放进 `catchHint`/`tierText`，本组件只加观测钩子 `data-catch-hint="on"`。
+   *   ⚠️ 纯展示文本（不是独立 `role`，随卡片 DOM 天然可读）。
+   */
+  catchHint?: boolean;
+}) {
   if (tier === null || !tierText) return null;
-  return <span className={`rc-tier rc-tier--${tier}`}>{tierText}</span>;
+  return (
+    <span className={`rc-tier rc-tier--${tier}`} data-catch-hint={catchHint ? "on" : undefined}>
+      {tierText}
+    </span>
+  );
 }
 
 /**

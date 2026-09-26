@@ -39,7 +39,7 @@
 import { useRouter } from "next/navigation";
 import { LrtEtaInline } from "./LrtEta";
 import RouteStack from "./RouteStack";
-import { EtaText, macauClock, Row, TierBadge } from "./RoutePieces";
+import { catchHintOf, directionNameOf, EtaText, macauClock, Row, TierBadge } from "./RoutePieces";
 import { buildCardHref } from "@/lib/recommend/card-link";
 import { TRANSFER_SAFETY_MIN } from "@/lib/recommend/score";
 import { usePressGuard } from "@/lib/use-press-guard";
@@ -100,6 +100,8 @@ export default function RecommendCard({
   const press = usePressGuard();
   const colorOf = (c: string) => colors[c] ?? null;
   const first = card.rides[0];
+  /** ★ v3.3.0（AC-107）：赶车提示（合并式）—— 后端 `catchHint` 优先、回落 `tierText` */
+  const firstHint = first ? catchHintOf(first) : { text: "", isHint: false };
   /** ★ 本批（AC-50）：换乘可行性（观测钩子 H8 取值） */
   const transferFeasible = transferFeasibleOf(card);
   /** ★ v2.4.1：下车站取**末段**（旧版取首段 ⇒ 换乘路线把换乘站当下车站显示） */
@@ -203,7 +205,8 @@ export default function RecommendCard({
 
         {/* ③ 附属行（属于 ②）：实时报站 + 赶车分档
             ★ v2.4.1：改用 `dot="sub"` —— 它是**上车站的附属信息**，不再单给一个巴士站图标 */}
-        {first && (first.waitMin > 0 || first.liveText || !!first.liveDepartures?.length) && (
+        {first &&
+          (first.waitMin > 0 || first.liveText || !!first.liveDepartures?.length || !!firstHint.text) && (
           <Row
             dot="sub"
             main={
@@ -213,14 +216,23 @@ export default function RecommendCard({
                   lineCode={first.route}
                   departuresMs={first.liveDepartures}
                   clocks={first.liveClocks}
+                  /* ★ v3.2.0（AC-68/69）：逐班 secPrecise（`RideLegView.livePrecise`） */
+                  precise={first.livePrecise}
                   state="running"
-                  directionName={null}
+                  /* ★ v3.3.0（AC-103）：接通轻轨方向（改前恒传 null ⇒ 用户看不到「往哪开」） */
+                  directionName={directionNameOf(first)}
                 />
               ) : (
                 <EtaText text={first.liveText || `等 ${first.waitMin} 分`} />
               )
             }
-            aside={first.tierText ? <TierBadge tier={first.tier} tierText={first.tierText} /> : null}
+            /* ★ v3.3.0（AC-107）：赶车提示 = **合并式** TierBadge（带时刻文案进 `catchHint`，
+               回落到既有 `tierText`）—— 零新增元素/零新增行。 */
+            aside={
+              firstHint.text ? (
+                <TierBadge tier={first.tier} tierText={firstHint.text} catchHint={firstHint.isHint} />
+              ) : null
+            }
           />
         )}
 

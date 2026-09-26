@@ -4,40 +4,31 @@
  * 面板内容层浮层（src/components/nav/NavAlarmOverlay.tsx，2026-09-26 新增 · 需求③ / AC-34~36）
  *
  * ── 为什么独立成层（设计 §2.3「横幅浮层化」）─────────────────────────────
- *   横幅 / toast 原先在 `.route-sheet__scroll` 滚动流内 ⇒ 被滚走 + 出现/消失**推挤内容**
- *   （布局抖动）。现挂到 `.route-sheet__pane`（内容层，position:absolute）内、**滚动容器之外**，
- *   绝对定位于内容顶部 ⇒ 不参与滚动、不推挤内容。
+ *   原先在 `.route-sheet__scroll` 滚动流内 ⇒ 被滚走 + 出现/消失**推挤内容**（布局抖动）。
+ *   现挂到 `.route-sheet__pane`（内容层，position:absolute）内、**滚动容器之外**，绝对定位于
+ *   内容顶部 ⇒ 不参与滚动、不推挤内容。
  *
- * ── 三层（互斥/可叠加，均非模态 pointer-events:none 容器）──────────────
- *   · 下车横幅（`.nav-alarm-layer`，soon/now，`role="alert"`）；
+ * ── 本层保留（★ v3.2.0 拆分后）────────────────────────────────────────────
  *   · 自动上车瞬态 toast（`.nav-toast-layer`，≤2.5s，含「不是这辆」纠错）；
  *   · 自动下车瞬态（`.nav-alight-layer`，`justAlighted`，含「还没到」撤销）。
+ *   ⇒ 二者为**反馈级**瞬态，留在面板内（架构师 02 §8.1 / 03 §2.5）。
+ *
+ * ── ◇ 已迁出 ─────────────────────────────────────────────────────────────
+ *   **下车提醒横幅**（安全级）已迁至**页面级顶部** `.nav-alarm--top`（由 `NavShell` 承载、
+ *   `AlightBanner` 渲染，AC-81/82）—— 面板内不再渲染横幅。
  *
  * ── 纪律 ──────────────────────────────────────────────────────────────
  *   全 Token 上色；无 emoji；`prefers-reduced-motion` 下停动画（globals.css 已覆盖）。
  */
 import { useEffect, useState } from "react";
-import AlightBanner from "./AlightBanner";
 import Icon from "@/components/ui/Icon";
-import type { SegmentStrip, RecommendCard } from "@/lib/recommend/types";
 import type { RideTrackView } from "./useRideTracking";
 
 export interface NavAlarmOverlayProps {
   track: RideTrackView | null;
-  strips: SegmentStrip[] | null;
-  card: RecommendCard;
 }
 
-export default function NavAlarmOverlay({ track, strips, card }: NavAlarmOverlayProps) {
-  const legIdx = track?.legIndex ?? 0;
-  const trackStops = strips?.[legIdx]?.stops ?? [];
-  const legRide = card.rides[legIdx];
-  const alightLabel =
-    (trackStops.length ? trackStops[trackStops.length - 1].label : "") ||
-    legRide?.alightLabel ||
-    card.rides[0]?.alightLabel ||
-    "";
-
+export default function NavAlarmOverlay({ track }: NavAlarmOverlayProps) {
   /** 自动上车瞬态反馈（2.5s 自动消失；可关闭） */
   const [toastDismissed, setToastDismissed] = useState(false);
   useEffect(() => {
@@ -51,20 +42,12 @@ export default function NavAlarmOverlay({ track, strips, card }: NavAlarmOverlay
   const showToast =
     !!track && track.phase === "riding" && track.autoSwitched && !!track.autoNote && !toastDismissed;
 
-  const showBanner = !!track && track.phase === "riding" && track.alarm !== "none";
   const showAlightDone = !!track && track.justAlighted;
 
-  if (!showBanner && !showToast && !showAlightDone) return null;
+  if (!showToast && !showAlightDone) return null;
 
   return (
     <>
-      {/* 下车提醒横幅（警告色；绿只标记站名）—— 浮层，不参与滚动 */}
-      {showBanner && track && (
-        <div className="nav-alarm-layer">
-          <AlightBanner alarm={track.alarm as "soon" | "now"} destLabel={alightLabel} />
-        </div>
-      )}
-
       {/* 自动上车瞬态反馈（非模态，role=status） */}
       {showToast && track && (
         <div className="nav-toast-layer">

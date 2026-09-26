@@ -97,7 +97,9 @@ export default function RouteSheet({
   // 推荐列表数据（列表 pane 常驻；同一 query + prefs 只自动拉一次）
   /** ★ 本批（需求⑧ / AC-52/53）：三档偏好（默认综合） */
   const [pref, setPref] = useState<PrefMode>("balanced");
-  const rec = useRecommend(query, open && pane === "recommend", pref);
+  /** ★ v3.3.0（AC-105）：轻轨优先开关（与三档**正交**的独立布尔；同一行右侧） */
+  const [lrtFirst, setLrtFirst] = useState(false);
+  const rec = useRecommend(query, open && pane === "recommend", pref, lrtFirst);
 
   /* ── ★ 本批：详情吸底操作条（`.nav-actions` 移出滚动容器 → 挂面板根）所需派生值 ── */
   const dTrack = detail?.track ?? null;
@@ -154,6 +156,21 @@ export default function RouteSheet({
         onNotArrive={dTrack.onNotArrive}
       />
     ) : null;
+
+  /**
+   * ★ v3.2.0（需求 12 / AC-86/87/88）：头部按钮重构 —— **左上双态 + 右上情境化刷新**。
+   *   · 左上（两 pane 均渲染）：`recommend` ⇒ 关闭面板；`detail`/`riding` ⇒ 返回推荐列表；同调 `onContextClose()`。
+   *   · 右上：`recommend` ⇒ 重查推荐；`detail`/`riding` ⇒ 刷新巴士数据；busy 自旋 + `aria-disabled`。
+   *   ⚠️ 用 `aria-disabled`（非原生 disabled）：本栏是**拖动把手**，原生 disabled 按钮会**吞掉 pointerdown**
+   *      ⇒ 在把手区形成死区、破坏拖拽；`aria-disabled` + 点击守卫即可防重复点击且保留无障碍语义。
+   */
+  const refreshBusy = pane === "recommend" ? rec.phase === "loading" : detail?.phase === "loading";
+  const onRefreshClick = () => {
+    if (refreshBusy) return;
+    if (pane === "recommend") rec.reload();
+    else if (detail?.track?.onRefresh) detail.track.onRefresh();
+    else detail?.reload?.();
+  };
 
   /**
    * ★ 2026-09-25：`.route-sheet` 根 ref —— 供 `useSnapSheet` 拖动期**命令式**写 `--sheet-y-anim`
@@ -242,40 +259,36 @@ export default function RouteSheet({
       actions={detailActions}
       bar={
         <>
-          {pane === "detail" && detail && (
-            <button
-              type="button"
-              className="route-sheet__iconbtn"
-              onClick={onContextClose}
-              aria-label="返回推荐列表"
-            >
-              <Icon name="back" size={20} />
-            </button>
-          )}
-          <span className="route-sheet__od t-label">{odLabel}</span>
-          {pane === "recommend" && (
-            <>
-              {fav && (
-                <FavoriteButton kind="place" entry="odbar" from={fav.from} to={fav.to} query={query} />
-              )}
-              <button
-                type="button"
-                className="btn btn--text btn--sm"
-                onClick={rec.reload}
-                disabled={rec.phase === "loading"}
-                aria-label="刷新路线结果"
-              >
-                {rec.phase === "loading" ? "刷新中…" : "刷新"}
-              </button>
-            </>
-          )}
+          {/* 左上（双态 · 两 pane 均渲染）：recommend ⇒ 关闭面板；detail/riding ⇒ 返回推荐列表。
+              aria-label / title 随 pane 切换（读屏正确性；AC-86）。 */}
           <button
             type="button"
             className="route-sheet__iconbtn"
             onClick={onContextClose}
-            aria-label={pane === "detail" ? "返回推荐列表" : "关闭面板"}
+            aria-label={pane === "recommend" ? "关闭面板" : "返回推荐列表"}
+            title={pane === "recommend" ? "关闭面板" : "返回推荐列表"}
           >
-            <Icon name="close" size={20} />
+            <Icon name="back" size={20} />
+          </button>
+          <span className="route-sheet__od t-label">{odLabel}</span>
+          {/* 收藏（仅 recommend 栏；位于刷新按钮左侧） */}
+          {pane === "recommend" && fav && (
+            <FavoriteButton kind="place" entry="odbar" from={fav.from} to={fav.to} query={query} />
+          )}
+          {/* 右上：情境化刷新（AC-87）——recommend 重查推荐 / detail·riding 刷新巴士数据；busy 自旋 */}
+          <button
+            type="button"
+            className={`route-sheet__iconbtn${refreshBusy ? " is-spin" : ""}`}
+            data-refresh-scope={pane === "recommend" ? "recommend" : "detail"}
+            onClick={onRefreshClick}
+            aria-disabled={refreshBusy || undefined}
+            aria-busy={refreshBusy || undefined}
+            aria-label={
+              refreshBusy ? "刷新中" : pane === "recommend" ? "刷新路线推荐" : "刷新巴士数据"
+            }
+            title={refreshBusy ? "刷新中" : pane === "recommend" ? "刷新路线推荐" : "刷新巴士数据"}
+          >
+            <Icon name="refresh" size={20} />
           </button>
         </>
       }
@@ -323,8 +336,14 @@ export default function RouteSheet({
       {/* 推荐列表 pane：常驻不卸载（opacity 切换 ⇒ 保滚动位置） */}
       <div className="route-sheet__pane" data-pane="recommend" aria-hidden={pane !== "recommend"}>
         <div className="route-sheet__scroll">
-          {/* ★ 本批（需求⑧ / AC-52/53）：三档偏好（唯一入口 = 推荐列表顶部） */}
-          <PrefSwitch value={pref} onChange={setPref} />
+          {/* ★ 本批（需求⑧ / AC-52/53）：三档偏好（唯一入口 = 推荐列表顶部）
+              ★ v3.3.0（AC-105）：轻轨优先开关与三档**同一行右侧**（独立布尔，与排序正交） */}
+          <PrefSwitch
+            value={pref}
+            onChange={setPref}
+            lrtFirst={lrtFirst}
+            onLrtFirst={setLrtFirst}
+          />
           <RouteResultPane
             phase={rec.phase}
             data={rec.data}
@@ -338,8 +357,9 @@ export default function RouteSheet({
 
       {/* 详情 pane（总览段数观测钩子的归属是**地图 canvas**（NavMap），此处不重复挂 ⇒ 免 QA 选择器歧义） */}
       <div className="route-sheet__pane" data-pane="detail" aria-hidden={pane !== "detail"}>
-        {/* ★ 本批（需求③）：下车横幅 / 自动上车 toast / 自动下车瞬态 —— 浮层（滚动容器之外） */}
-        {detail && <NavAlarmOverlay track={detail.track ?? null} strips={detail.body?.strips ?? null} card={detail.card} />}
+        {/* ★ 本批（需求③）：自动上车 toast / 自动下车瞬态 —— 浮层（滚动容器之外）；
+            ★ v3.2.0（需求 8）：**下车横幅已迁出**（页面级 `.nav-alarm--top`，由 NavShell 承载）。 */}
+        {detail && <NavAlarmOverlay track={detail.track ?? null} />}
         <div className="route-sheet__scroll">
           {detail && (
             <RouteDetailPane
@@ -423,22 +443,54 @@ const PREF_HINT: Record<PrefMode, ReactNode> = {
   ),
 };
 
-function PrefSwitch({ value, onChange }: { value: PrefMode; onChange: (v: PrefMode) => void }) {
+/**
+ * 路线偏好三档 + ★ v3.3.0（AC-105）轻轨优先开关。
+ * 布局（03 §5 修订 4）：**三档与开关同一行横排** —— 三档 `flex:1 1 0`（`nowrap` 不折行），
+ * 开关 `flex:none` 固定在右侧；说明行（既有）不动。
+ * 开关语义 = `role="switch"` + `aria-checked`（独立布尔，非第四档）；点标签文字也可切换。
+ */
+function PrefSwitch({
+  value,
+  onChange,
+  lrtFirst,
+  onLrtFirst,
+}: {
+  value: PrefMode;
+  onChange: (v: PrefMode) => void;
+  lrtFirst: boolean;
+  onLrtFirst: (v: boolean) => void;
+}) {
   return (
     <div className="pref-switch">
-      <div className="pref-switch__seg" role="group" aria-label="路线偏好">
-        {PREF_OPTS.map((o) => (
-          <button
-            key={o.value}
-            type="button"
-            className={`pref-switch__opt${value === o.value ? " is-on" : ""}`}
-            aria-pressed={value === o.value}
-            onClick={() => onChange(o.value)}
-          >
-            {o.icon}
-            <span>{o.label}</span>
-          </button>
-        ))}
+      <div className="pref-switch__row">
+        <div className="pref-switch__seg" role="group" aria-label="路线偏好">
+          {PREF_OPTS.map((o) => (
+            <button
+              key={o.value}
+              type="button"
+              className={`pref-switch__opt${value === o.value ? " is-on" : ""}`}
+              aria-pressed={value === o.value}
+              onClick={() => onChange(o.value)}
+            >
+              {o.icon}
+              <span>{o.label}</span>
+            </button>
+          ))}
+        </div>
+        {/* 轻轨优先（开关）—— 开：轨道 `--accent` + 旋钮左移；双通道（非仅靠颜色） */}
+        <button
+          type="button"
+          className="lrt-switch"
+          role="switch"
+          aria-checked={lrtFirst}
+          aria-label="轻轨优先"
+          onClick={() => onLrtFirst(!lrtFirst)}
+        >
+          <span className="lrt-switch__label">轻轨优先</span>
+          <span className="lrt-switch__track" aria-hidden="true">
+            <span className="lrt-switch__knob" />
+          </span>
+        </button>
       </div>
       <p className="pref-switch__hint">{PREF_HINT[value]}</p>
     </div>
