@@ -538,6 +538,13 @@ export interface RideLegView {
    *   来源 = 该段线路的 `LrtLive.directionName`（`live.ts` 已下发）；巴士段为 `null`。
    */
   directionName?: string | null;
+  /**
+   * ★ v3.3.0（AC-105 营运判据）：该轻轨段的实时状态（取自 `LrtLive.state`）。
+   *   仅轻轨段非空；`'running'` = **当前营运中**（有可赶班次）。轻轨优先**只认 running**，
+   *   `before_first`（当日首班前）/`after_last`（已收车）/`no_data` 一律**不得**置顶（收班后只能赶
+   *   次日首班 ⇒ 静默按常规排序）。巴士段 `undefined`。
+   */
+  lrtState?: "running" | "before_first" | "after_last" | "no_data";
   /** 车上用时（分钟） */
   minutes: number;
   /**

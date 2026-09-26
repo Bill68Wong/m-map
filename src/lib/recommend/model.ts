@@ -564,6 +564,8 @@ export function modelOption(seed: OptionSeed, ctx: ModelContext): ModeledOption 
     //   巴士段为 null。供前端渲染 `{終點}方向`（推荐卡副行 / 导航站条）。
     const segLv = ctx.live.get(seg.route);
     const segDirectionName = seg.kind === "lrt" && segLv?.kind === "lrt" ? segLv.directionName : null;
+    // ★ v3.3.0（AC-105）：轻轨段实时状态（供轻轨优先判「当前营运中」；bus 段 undefined）
+    const segLrtState = seg.kind === "lrt" && segLv?.kind === "lrt" ? segLv.state : undefined;
 
     rides.push({
       route: seg.route,
@@ -573,6 +575,7 @@ export function modelOption(seed: OptionSeed, ctx: ModelContext): ModeledOption 
       boardLabel: labelOf(ctx, seg.board),
       alightLabel: labelOf(ctx, seg.alight),
       directionName: segDirectionName,
+      lrtState: segLrtState,
       // ★ B5.2：轻轨保留秒级精度（不取整）；巴士照常 1 位小数
       minutes: seg.kind === "lrt" ? ride.minutes : Math.round(ride.minutes * 10) / 10,
       rideSecText,

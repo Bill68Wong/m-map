@@ -8,8 +8,12 @@
  * ── 口径（写死 · fail-safe）───────────────────────────────────────────
  *   · `!enabled` / 候选不足 2 条 → **原样返回**（零副作用）；
  *   · `baseline` = **前 `limit` 张里最慢的 `totalMin`**；
- *   · 命中 = 含轻轨段（`rides.some(kind==='lrt')`）**且** `totalMin <= baseline + 15`；
- *     （命中意味着其建模时 `LrtLive.state==='running'` 且有可赶班次 —— 由 `modelOption` 保证）
+ *   · 命中 = 含**营运中**轻轨段（`rides.some(r => r.kind==='lrt' && r.lrtState==='running')`）
+ *     **且** `totalMin <= baseline + 15`；
+ *     ★ v3.3.0（AC-105 营运判据，QA 修正）：**必须 `lrtState === 'running'`** —— 收班后
+ *     （`before_first` / `after_last` / `no_data`）只能赶**次日首班**，**不得置顶**（静默按常规排序）。
+ *     即「置顶前提 = 当前能坐上一班」。`LrtLive.state` 的 `running` 只代表「今日服务日内有可赶班次」
+ *     （含昨日跨午夜续班），本判据据此成立；`before_first`/`after_last` 由 `model.ts` 透出后在此拦截。
  *   · 命中者按 `totalMin` 升序**稳定置顶**；其余**相对序不变**；**只重排、不增删**；
  *   · 无命中 → **静默**原样（不置顶、不报错）。
  *
@@ -35,8 +39,11 @@ export function applyLrtPriority(items: RankedItem[], limit: number, enabled: bo
   const head = items.slice(0, Math.max(1, Math.trunc(limit) || 1));
   const baseline = Math.max(...head.map((i) => i.card.totalMin));
 
+  // ★ v3.3.0（AC-105）：命中须为**营运中**轻轨段（`lrtState === 'running'`）——
+  //   收班后（before_first/after_last/no_data）不得置顶（只能赶次日首班 ⇒ 静默）。
   const isLrtHit = (i: RankedItem): boolean =>
-    i.card.rides.some((r) => r.kind === "lrt") && i.card.totalMin <= baseline + LRT_PRIORITY_SLACK_MIN;
+    i.card.rides.some((r) => r.kind === "lrt" && r.lrtState === "running") &&
+    i.card.totalMin <= baseline + LRT_PRIORITY_SLACK_MIN;
 
   const hits = items.filter(isLrtHit);
   if (!hits.length) return items; // 未命中 → 静默（保持已清空状态）

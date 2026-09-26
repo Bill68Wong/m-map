@@ -372,11 +372,19 @@ export async function queryLrtDepartures(
     // 5) 合并候选（「服务日 D 00:00 起分钟偏移」单轴）→ 逐班叠加偏差 → 取后续 n 班
     //    ★ v3.2.0：候选带**原始 depMin**（模式查表键）与**所属班别**（今日/昨日行各异）；
     //      由 `fixDeparture` 统一产出 depMs/biasSec/secPrecise ⇒ 两路由 depMs 同源（AC-67）。
-    const cands: { depMin: number; dayType: DayType }[] = [];
-    if (todayRow) for (const o of rowOffsetsOf(todayRow.minutes)) cands.push({ depMin: o, dayType });
-    if (prevRow) for (const o of rowOffsetsOf(prevRow.minutes)) if (o >= 1440) cands.push({ depMin: o, dayType: prevDayType });
     const nowMs = nowMsRef;
     const dayStartUtcMs = nowMs - ((nowMs + 8 * 3_600_000) % DAY_MS); // 澳门今日 00:00
+    // ★ v3.3.0（修 v3.2.0 回归）：候选须带**其所属服务日的 00:00**（`dayStartMs`）——
+    //   昨日行的跨午夜续班（offset ≥ 1440）= **昨日** 00:00 + offset*60 ⇒ 落在**今日凌晨**；
+    //   旧写法对昨/今两行同用「今日 00:00」⇒ 该班被**整整推迟一天**（state 由表定秒判为 running，
+    //   而 departures 却给次日晨班 —— QA 于澳门 00:07 复现的「次日首班被当成 running」即此：
+    //   昨日 24:09/24:15 的末班被算成「次日 00:09/00:15」而挤出 departures）。
+    //   模式查表键仍用**原始** `depMin`（与 `lrt_station_patterns.dep_min` 同轴）。
+    const cands: { depMin: number; dayStartMs: number; dayType: DayType }[] = [];
+    if (todayRow) for (const o of rowOffsetsOf(todayRow.minutes)) cands.push({ depMin: o, dayStartMs: dayStartUtcMs, dayType });
+    if (prevRow)
+      for (const o of rowOffsetsOf(prevRow.minutes))
+        if (o >= 1440) cands.push({ depMin: o, dayStartMs: dayStartUtcMs - DAY_MS, dayType: prevDayType });
 
     const selected: { tableSec: number; fix: ReturnType<typeof fixDeparture> }[] = [];
     for (const c of cands) {
@@ -387,7 +395,7 @@ export async function queryLrtDepartures(
         apiStation: stationApi,
         dayType: c.dayType,
         tableMin: c.depMin,
-        dayStartMs: dayStartUtcMs,
+        dayStartMs: c.dayStartMs,
         pattern: patternLookup(c.dayType, c.depMin),
         biasIndex,
       });

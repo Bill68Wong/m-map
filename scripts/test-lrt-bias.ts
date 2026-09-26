@@ -189,14 +189,25 @@ console.log("fixDeparture · 轻轨读秒契约单测\n");
   assert(fU.secPrecise === false && fU.biasSec === 0, "undefined（站级）：回落 0 / false");
 }
 
-// ── ⑧ 跨午夜 tableMin>1440 ──
+// ── ⑧ 跨午夜（服务日轴）──
+//    ⚠️ v3.3.0 澄清：`fixDeparture` 的 `tableMin` = **服务日 00:00 起分钟偏移**，`dayStartMs` = **该服务日的 00:00**。
+//       昨日行跨午夜续班（offset ≥ 1440）由**调用方**（`queryLrtDepartures`）把 `dayStartMs` 传为**昨日 00:00**
+//       ⇒ 绝对时刻落在**今日凌晨**。（v3.2.0 曾对昨/今两行同用「今日 00:00」⇒ 该班被整整推迟一天，QA 复现。）
 {
   const idx = mkIndex([], [[LINE_HQL, 40]]);
-  const f = fixDeparture({
+  const DAY_MS_T = 86_400_000;
+  // ⑧a：今日服务日行、offset>1440（今日末班跨入次日凌晨）→ 以「今日 00:00」为基
+  const todayAxis = fixDeparture({
     lineCode: LINE_HQL, routeNo: "HQL", directionApi: "HQ", apiStation: "LOT",
     dayType: "fri", tableMin: 1445, dayStartMs: DAY_START, pattern: null, biasIndex: idx,
   });
-  assert(f.depMs === (1445 * 60 + 40) * 1000, "跨午夜（1445 分）：depMs = (1445*60 + 40)s（数值自洽，>24h）");
+  assert(todayAxis.depMs === (1445 * 60 + 40) * 1000, "今日服务日 offset=1445 ⇒ dayStart(今日0点) + 1445*60 + 40");
+  // ⑧b：昨日行跨午夜续班 → 以「昨日 00:00」为基 ⇒ 落在**今日** 00:05:40（**不得**被推迟一天）
+  const prevAxis = fixDeparture({
+    lineCode: LINE_HQL, routeNo: "HQL", directionApi: "HQ", apiStation: "LOT",
+    dayType: "fri", tableMin: 1445, dayStartMs: DAY_START - DAY_MS_T, pattern: null, biasIndex: idx,
+  });
+  assert(prevAxis.depMs === (5 * 60 + 40) * 1000, "昨日跨午夜(offset=1445) ⇒ 昨日0点为基 ⇒ 今日 00:05:40（不被推迟一天）");
 }
 
 // ── ⑨ AC-67 不变式：同参两次调用 ⇒ depMs 完全相等 ──
