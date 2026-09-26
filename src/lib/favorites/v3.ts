@@ -259,26 +259,10 @@ export function writeV3(file: FavoritesFileV3): { ok: boolean; error?: string } 
 
 /* ─────────────────────────── 迁移 ─────────────────────────── */
 
-/** 备份①：触发「导出 JSON」下载（尽力而为；被拦截不阻断迁移） */
-function exportBackupJson(v2: unknown, v1: unknown): void {
-  try {
-    const payload = { exportedAt: new Date().toISOString(), note: "M Map 收藏 v2→v3 迁移备份", v2, v1 };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-    a.href = url;
-    a.download = `must-favorites-backup-${ts}.json`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 4000);
-  } catch {
-    /* 尽力而为 */
-  }
-}
-
-/** 备份②：写隐藏备份键（**可回滚的硬前置**；失败 ⇒ 抛错中止迁移） */
+/** 写隐藏备份键（**可回滚的硬前置**；失败 ⇒ 抛错中止迁移）
+ *  ⚠️ 2026-09-27 口径修正：迁移**只做静默备份**（本函数）——「导出 JSON」为**用户手动入口**
+ *     （`FavoritesClient` 的「下载备份」按钮）；**禁止**在迁移路径自动触发下载
+ *     （曾因自动 `a.click()` 直接下载文件惊吓用户，已移除该路径）。 */
 function writeBackupKey(v2: unknown, v1: unknown): void {
   window.localStorage.setItem(
     FAVORITES_BACKUP_KEY,
@@ -380,8 +364,7 @@ export function readV3(): ReadV3Result {
     };
   }
   try {
-    exportBackupJson(rv2.parsed, rv1.parsed); // ① 导出 JSON
-    writeBackupKey(rv2.parsed, rv1.parsed); // ② 隐藏备份键（硬前置：失败即抛 → 中止）
+    writeBackupKey(rv2.parsed, rv1.parsed); // 静默备份（硬前置：失败即抛 → 中止迁移）
     const file = migrateToV3(rv2.parsed, rv1.parsed);
     const w = writeV3(file);
     if (!w.ok) throw new Error(w.error ?? "写入失败");
