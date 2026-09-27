@@ -179,7 +179,22 @@ function mainKindOk(code: string, kind: "bus" | "lrt"): boolean {
 /** 桥接一腿（就地返回新对象；映射失败时 mapped* 为 null） */
 export function bridgeLeg(ctx: BridgeContext, leg: AmapPlanLeg): AmapPlanLeg {
   const mappedRoute = routeCodeOf(leg.amapLineName, leg.kind, ctx.validRoutes);
-  let mappedBoard = bridgeStop(ctx.map, leg.amapBoard);
+  // ★ 2026-09-27（实测修复「石排湾线重复变体」）：**上车站**补「同名站锚定」兜底，与 alight 对称——
+  //   轻轨站**不在 `station_amap_map`**（该表仅巴士）⇒ 高德轻轨腿的 board 曾整段映射失败
+  //   （实测：石排湾线腿 board 保留简体名「石排湾」+ 回落 Amap 时长 4 分 + 「上車站」占位泄漏，
+  //    与本地枚举的站码级卡重复并存）。人工确认行仍优先；未命中/未人工确认 → `anchorMainFor`
+  //   （L1/L2 同名 + L3 距离闸门 + 种类过滤；geo 含全站、normalizeName 繁简归一）。
+  const metaBoard = bridgeStopMeta(ctx.map, leg.amapBoard);
+  let mappedBoard = metaBoard?.main ?? null;
+  if (!metaBoard || !metaBoard.verified) {
+    const hitBoard = anchorMainFor(
+      { label: leg.amapBoard.name, lng: leg.amapBoard.lng, lat: leg.amapBoard.lat },
+      ctx.geo,
+      ctx.routeIdx,
+      leg.kind,
+    );
+    if (hitBoard) mappedBoard = hitBoard.main;
+  }
   // ★ v2.3.0（07 §3.7-3 二次加固）：**下车锚站**优先取「同名站」（L1/L2 + L3 距离闸门）。
   //   ⚠️ 仅当映射来自**自动**（未人工确认）或未映射时才覆盖 —— **人工确认行优先**，
   //      绝不推翻 `station_amap_map` 的 curated 映射（防回归）。
