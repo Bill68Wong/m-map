@@ -37,6 +37,7 @@
 import { NextResponse } from "next/server";
 import { getPool } from "@/lib/db";
 import { gcj02ToWgs84 } from "@/lib/amap/coord";
+import { nowBucketOf } from "@/lib/rebuild/buckets";
 import { contextFor, loadStatics } from "@/lib/recommend/query";
 import { loadHeadway } from "@/lib/recommend/headway";
 import { fetchLive } from "@/lib/recommend/live";
@@ -247,11 +248,11 @@ export async function POST(req: Request) {
     });
 
     // ── ⑦ 实时（全候选一次性批量：DSAT 巴士 + 本库轻轨时刻表）──
-    const weekday = new Date(nowMs + 8 * 3_600_000).getUTCDay();
+    const nowBucket = nowBucketOf(nowMs);
     // 发车间隔索引失败不影响出卡（fetchLive 传 null = 不估算，退化为旧行为）
     const headway = await loadHeadway(pool).catch(() => null);
     const batch = await fetchLive(pool, seeds, st.routeIdx, st.segIdx, {
-      todayWeekday: weekday,
+      nowBucket,
       nowMs,
       lrtPre: st.lrtPre,
       headway,

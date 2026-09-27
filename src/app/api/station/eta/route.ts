@@ -30,6 +30,7 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { getPool } from "@/lib/db";
+import { nowBucketOf } from "@/lib/rebuild/buckets";
 import {
   type BiasIndex,
   type BiasLineRow,
@@ -408,7 +409,7 @@ export async function GET(req: NextRequest) {
     } else {
       const st = await loadStatics(pool);
       const idx = st.routeIdx;
-      const weekday = new Date(nowMs + 8 * 3_600_000).getUTCDay();
+      const nowBucket = nowBucketOf(nowMs);
 
       // ② 枚举该主码出现的全部 (线路 × 方向)，构造「本站 → 下一站」查询作业
       const jobs: { station: string; dest: string; routes: string[] }[] = [];
@@ -428,7 +429,7 @@ export async function GET(req: NextRequest) {
       if (jobs.length) {
         // ③ 实时（复用 fetchStationLive：与详情页报站同一实现）；整体超时兜底
         const liveMap = await withTimeout(
-          fetchStationLive(pool, jobs, idx, st.segIdx, { todayWeekday: weekday, nowMs }),
+          fetchStationLive(pool, jobs, idx, st.segIdx, { nowBucket, nowMs }),
           TOTAL_TIMEOUT_MS,
         ).catch((): Map<string, BusLive> => new Map());
 

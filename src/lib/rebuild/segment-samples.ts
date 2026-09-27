@@ -31,7 +31,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Pool, PoolClient } from "pg";
-import { rebuildSegmentStats, bucketOf, macauParts, mainCode } from "./segment-stats";
+import { rebuildSegmentStats, macauParts, mainCode } from "./segment-stats";
+import { bucketOfRoute } from "./buckets";
 
 /** 一条待入库的原始样本（与 segment_samples 列对齐） */
 export interface SegmentSampleRow {
@@ -137,7 +138,7 @@ function readTrackFile(file: string): { label: string; rows: SegmentSampleRow[];
       source: "track",
       observed_at: d,
       weekday: mp.weekday,
-      time_bucket: bucketOf(mp.hour),
+      time_bucket: bucketOfRoute(mp.weekday, mp.hour),
     });
   }
   return { label, rows, maxT: Number.isFinite(maxT) ? maxT : -Infinity };
@@ -163,23 +164,26 @@ async function collectTimerRows(pool: Pool): Promise<SegmentSampleRow[]> {
   const r = await rebuildSegmentStats(pool, { dry: true });
   return r.rawSamples
     .filter((s) => s.source === "timer")
-    .map((s) => ({
-      run_label: "timer",
-      route_code: s.route,
-      dir: null, // 手动实测：方向可为 NULL
-      plate: null,
-      from_main: mainCode(s.from),
-      to_main: mainCode(s.to),
-      from_station: s.from,
-      to_station: s.to,
-      from_idx: null,
-      minutes: s.minutes,
-      arrive_kind: "depart", // 事件路径即「离开口径」（见 segment-stats.ts 文件头定案）
-      source: "timer" as const,
-      observed_at: new Date(s.t),
-      weekday: s.weekday,
-      time_bucket: s.bucket,
-    }));
+    .map((s) => {
+      const mp = macauParts(new Date(s.t));
+      return {
+        run_label: "timer",
+        route_code: s.route,
+        dir: null, // 手动实测：方向可为 NULL
+        plate: null,
+        from_main: mainCode(s.from),
+        to_main: mainCode(s.to),
+        from_station: s.from,
+        to_station: s.to,
+        from_idx: null,
+        minutes: s.minutes,
+        arrive_kind: "depart", // 事件路径即「离开口径」（见 segment-stats.ts 文件头定案）
+        source: "timer" as const,
+        observed_at: new Date(s.t),
+        weekday: s.weekday,
+        time_bucket: bucketOfRoute(mp.weekday, mp.hour), // ★ v3.4.0：统一口径重算
+      };
+    });
 }
 
 /** UNNEST 批量 UPSERT（ON CONFLICT DO NOTHING）；返回实际插入行数 */

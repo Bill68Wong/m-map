@@ -136,7 +136,7 @@ function toBusArrival(
   route: string,
   dir: string,
   e: EtaBus,
-  todayWeekday: number,
+  nowBucket: string,
 ): BusArrival {
   const hopMin: number[] = [];
   const pairs: [string, string][] =
@@ -158,7 +158,7 @@ function toBusArrival(
           return out;
         })();
 
-  for (const [a, b] of pairs) hopMin.push(lookupHop(segIdx, route, a, b, todayWeekday).minutes);
+  for (const [a, b] of pairs) hopMin.push(lookupHop(segIdx, route, a, b, nowBucket).minutes);
   // 逐跳完全缺失（站序对不上）→ 退化为「该线单跳均值 × 站数」
   if (!hopMin.length && e.stopsAway > 0) {
     const per = fallbackHop(segIdx, route);
@@ -195,7 +195,7 @@ function hopsDurationBetween(
   stops: string[],
   fromIdx: number,
   steps: number,
-  todayWeekday: number,
+  nowBucket: string,
 ): number | null {
   const n = stops.length;
   if (!n || steps <= 0) return null;
@@ -205,7 +205,7 @@ function hopsDurationBetween(
     const a = stops[(fromIdx + k) % n];
     const b = stops[(fromIdx + k + 1) % n];
     if (!a || !b) break;
-    sum += lookupHop(segIdx, route, a, b, todayWeekday).minutes;
+    sum += lookupHop(segIdx, route, a, b, nowBucket).minutes;
     any = true;
   }
   return any ? sum : null;
@@ -236,7 +236,7 @@ function estimateWait(
   station: string,
   idx: RouteIndex,
   segIdx: SegmentIndex,
-  todayWeekday: number,
+  nowBucket: string,
   headway: HeadwayIndex | null,
   nowMs: number,
 ): WaitEstimate | null {
@@ -262,7 +262,7 @@ function estimateWait(
       if (bi < 0) continue;
       const gap = bi > userIdx ? bi - userIdx : bi + n - userIdx;
       if (gap <= 0 || gap >= bestGap) continue;
-      const mins = hopsDurationBetween(segIdx, r.route, stops, userIdx, gap, todayWeekday);
+      const mins = hopsDurationBetween(segIdx, r.route, stops, userIdx, gap, nowBucket);
       if (mins !== null) {
         bestGap = gap;
         sinceLastMin = mins;
@@ -300,7 +300,7 @@ function buildBusLive(
   r: { route: string; dir?: string; nearest?: EtaBus; second?: EtaBus; rest?: EtaBus[] },
   idx: RouteIndex,
   segIdx: SegmentIndex,
-  todayWeekday: number,
+  nowBucket: string,
   /** ★ 2026-09-21：以下三个参数供「未发车估算」用（实车为空时才用到） */
   station: string,
   headway: HeadwayIndex | null,
@@ -308,7 +308,7 @@ function buildBusLive(
 ): BusLive {
   const dir = r.dir ?? "0";
   const toArr = (e: EtaBus | undefined) =>
-    e ? toBusArrival(idx, segIdx, r.route, dir, e, todayWeekday) : null;
+    e ? toBusArrival(idx, segIdx, r.route, dir, e, nowBucket) : null;
   const pool = [r.nearest, r.second, ...(r.rest ?? [])].filter((e): e is EtaBus => !!e && !e.passed);
   const arr = pool.map((e) => toArr(e)).filter((x): x is BusArrival => x !== null);
   const empty = arr.length === 0;
@@ -322,7 +322,7 @@ function buildBusLive(
     second: arr[1] ?? null,
     more: arr.slice(2),
     // 仅在全空时估算（有实车时不需要，保持原有精确路径）
-    waitEstimate: empty ? estimateWait(r, station, idx, segIdx, todayWeekday, headway, nowMs) ?? undefined : undefined,
+    waitEstimate: empty ? estimateWait(r, station, idx, segIdx, nowBucket, headway, nowMs) ?? undefined : undefined,
   };
 }
 
@@ -355,7 +355,7 @@ export async function fetchLive(
   idx: RouteIndex,
   segIdx: SegmentIndex,
   opts: {
-    todayWeekday: number;
+    nowBucket: string;
     nowMs?: number;
     lrtPre: LrtPreload;
     /**
@@ -366,7 +366,7 @@ export async function fetchLive(
   },
 ): Promise<LiveBatch> {
   const t0 = Date.now();
-  const todayWeekday = opts.todayWeekday;
+  const nowBucket = opts.nowBucket;
   /** 诊断用：同线多站冲突（route 只能有一个 live 视图 → 取首个） */
   const conflicts: string[] = [];
 
@@ -465,7 +465,7 @@ export async function fetchLive(
                   r,
                   idx,
                   segIdx,
-                  todayWeekday,
+                  nowBucket,
                   b.station,
                   opts.headway ?? null,
                   opts.nowMs ?? Date.now(),
@@ -572,10 +572,10 @@ export async function fetchStationLive(
   jobs: { station: string; dest: string; routes: string[] }[],
   idx: RouteIndex,
   segIdx: SegmentIndex,
-  opts: { todayWeekday: number; nowMs?: number },
+  opts: { nowBucket: string; nowMs?: number },
 ): Promise<Map<string, BusLive>> {
   void pool; // 巴士侧不需要 pool（走 DSAT + 注入索引）；保留参数以对齐 fetchLive 签名
-  const todayWeekday = opts.todayWeekday;
+  const nowBucket = opts.nowBucket;
   const out = new Map<string, BusLive>();
 
   // 分桶：(station, dest) → routes（再按 MAX_ROUTES_PER_BUCKET 切片）
@@ -605,7 +605,7 @@ export async function fetchStationLive(
           for (const r of res)
             out.set(
               `${r.route}@${b.station}`,
-              buildBusLive(r, idx, segIdx, todayWeekday, b.station, null, Date.now()),
+              buildBusLive(r, idx, segIdx, nowBucket, b.station, null, Date.now()),
             );
         } catch {
           // 超时/失败 → 该桶的线路不出现在结果里（调用方按「无实时数据」降级展示）

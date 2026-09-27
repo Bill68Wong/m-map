@@ -30,6 +30,7 @@
  */
 import type { Pool } from "pg";
 import { gcj02ToWgs84, haversineM } from "@/lib/amap/coord";
+import { nowBucketOf } from "@/lib/rebuild/buckets";
 import { fixWalkDistance, walkMinutes } from "@/lib/amap/walk-fix";
 import { fetchTransitPlans, type RawPlan, type TransitCacheIo, type AmapTransitRawResponse } from "@/lib/amap/transit";
 import { fetchLive } from "@/lib/recommend/live";
@@ -494,13 +495,13 @@ export async function planNav(pool: Pool, input: NavInput): Promise<NavOutput> {
 
   // ⑥ 实时（两来源共用一次）
   const tLive = Date.now();
-  const weekday = new Date(nowMs + 8 * 3_600_000).getUTCDay();
+  const nowBucket = nowBucketOf(nowMs);
   // ★ B4（需求 7）：发车间隔索引 —— 既供 `fetchLive` 做「未发车估算」（旧行为），
   //   **也注入 `ModelContext.headway`** 供 `model.ts` 第 2 段巴士等车按到达时刻查班距（§h.2）。
   //   失败/表不存在 ⇒ `loadHeadway` 内部兜底（空索引）⇒ 第 2 段等车明示降级（waitMin=null）。
   const headway = await loadHeadway(pool);
   const batch = await fetchLive(pool, allSeeds, st.routeIdx, st.segIdx, {
-    todayWeekday: weekday,
+    nowBucket,
     nowMs,
     lrtPre: st.lrtPre,
     // ★ 2026-09-21：发车间隔索引 ⇒ 让「本方向无在途车」的线路也能出卡（估算等待时间，见 live.ts）。
@@ -530,7 +531,7 @@ export async function planNav(pool: Pool, input: NavInput): Promise<NavOutput> {
     };
     const modeled1 = modelOption(opt, ctx);
     if (!modeled1) continue;
-    const prov = patchAmapFallback(modeled1.card, seed, st.segIdx, weekday);
+    const prov = patchAmapFallback(modeled1.card, seed, st.segIdx, nowBucket);
     provenance[opt.key] = prov;
     modeled.push(modeled1);
     amapItems.push({ card: modeled1.card, origin: "amap", key: opt.key, seed, provenance: prov });

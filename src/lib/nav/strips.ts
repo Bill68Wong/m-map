@@ -23,8 +23,8 @@ export interface StripBuildCtx {
   routeIdx: RouteIndex;
   segIdx: SegmentIndex;
   nameOf: Map<string, string>;
-  /** 今天星期（0=周日…6=周六） */
-  weekday: number;
+  /** ★ v3.4.0：查询时段桶（bucketOfRoute 五桶之一）——替代旧 weekday */
+  nowBucket: string;
 }
 
 /** ★ v3.3.0（AC-103）：站条方向名 —— 仅轻轨段非空（取该段 `RideLegView.directionName`） */
@@ -71,7 +71,7 @@ export function buildStrips(card: RecommendCard, ctx: StripBuildCtx): SegmentStr
       const isFirst = k === 0;
       const isLast = k === codes.length - 1;
       const next = codes[k + 1];
-      const hop = !isLast && next ? lookupHop(ctx.segIdx, ride.route, code, next, ctx.weekday) : null;
+      const hop = !isLast && next ? lookupHop(ctx.segIdx, ride.route, code, next, ctx.nowBucket) : null;
       return {
         code,
         label: ctx.nameOf.get(code) ?? code,

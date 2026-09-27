@@ -16,6 +16,7 @@
  *     失败一律收敛为空，不阻塞。
  */
 import type { Pool } from "pg";
+import { nowBucketOf } from "@/lib/rebuild/buckets";
 import { fetchStationLive } from "@/lib/recommend/live";
 import { rangeText } from "@/lib/recommend/catch-up";
 import { mainCodeOf } from "@/lib/recommend/segment-lookup";
@@ -49,7 +50,7 @@ export async function foldLiveAt(
   routes: string[],
   nowMs: number,
 ): Promise<Record<string, string>> {
-  const weekday = new Date(nowMs + 8 * 3_600_000).getUTCDay();
+  const nowBucket = nowBucketOf(nowMs);
   const jobs: { station: string; dest: string; routes: string[] }[] = [];
   const stopCodeOf: Record<string, string> = {};
   for (const r of routes) {
@@ -67,7 +68,7 @@ export async function foldLiveAt(
   if (!jobs.length) return {};
   const out: Record<string, string> = {};
   try {
-    const live = await fetchStationLive(pool, jobs, st.routeIdx, st.segIdx, { todayWeekday: weekday, nowMs });
+    const live = await fetchStationLive(pool, jobs, st.routeIdx, st.segIdx, { nowBucket, nowMs });
     for (const r of Object.keys(stopCodeOf)) {
       const b = live.get(`${r}@${stopCodeOf[r]}`)?.nearest ?? null;
       out[r] = b ? `还有 ${b.stopsAway} 站 · ${rangeText(b.loSec, b.hiSec)}` : "暂无班次信息";

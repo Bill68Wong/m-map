@@ -172,16 +172,16 @@ export function overlayTransferIndex(seed: AmapPlanSeed, base: TransferIndex): T
 /**
  * 把「映射失败段」的高德时长补进卡片，并产出 `provenance`。
  *
- * @param card    由 `modelOption` 产出的卡片（`rides` 与 `seed.legs` **一一对应**）
- * @param seed    已桥接的方案骨架
- * @param segIdx  段统计索引（供逐跳层级/provenance）
- * @param weekday 今天星期（0=周日…6=周六）
+ * @param card      由 `modelOption` 产出的卡片（`rides` 与 `seed.legs` **一一对应**）
+ * @param seed      已桥接的方案骨架
+ * @param segIdx    段统计索引（供逐跳层级/provenance）
+ * @param nowBucket ★ v3.4.0：查询时段桶（bucketOfRoute 五桶之一）
  */
 export function patchAmapFallback(
   card: RecommendCard,
   seed: AmapPlanSeed,
   segIdx: SegmentIndex,
-  weekday: number,
+  nowBucket: string,
 ): RecomputeProvenance {
   const hopLevels: SegmentLevel[][] = [];
   let usedOur = 0;
@@ -199,7 +199,7 @@ export function patchAmapFallback(
     if (mapped) {
       usedOur++;
       const levels: SegmentLevel[] = [];
-      for (const [a, b] of leg.mappedHops!) levels.push(lookupHop(segIdx, leg.mappedRoute!, a, b, weekday).level);
+      for (const [a, b] of leg.mappedHops!) levels.push(lookupHop(segIdx, leg.mappedRoute!, a, b, nowBucket).level);
       hopLevels.push(levels);
 
       // §C.7 单段差异告警

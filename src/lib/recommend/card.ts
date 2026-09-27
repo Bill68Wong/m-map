@@ -17,6 +17,7 @@
  *   3. 折叠栏那一批实时数据加**软闸**：整体超时 → `reports: []` + `liveDegraded: true`，绝不造假数据。
  */
 import type { Pool } from "pg";
+import { nowBucketOf } from "@/lib/rebuild/buckets";
 import { modelOption } from "./model";
 import { optionsFor, contextFor, loadStatics, type RecStatic } from "./query";
 import { lookupHop } from "./segment-lookup";
@@ -93,7 +94,8 @@ export async function cardDetail(
   // ③ 静态层（Data Cache 命中，几乎零成本）
   const st: RecStatic = await loadStatics(pool);
   const nowMs = input.nowMs ?? Date.now();
-  const todayWeekday = new Date(nowMs + 8 * 3_600_000).getUTCDay();
+  // ★ v3.4.0：查询上下文由「星期」升级为「时段桶」（bucketOfRoute 五桶）——见 segment-lookup 头注
+  const nowBucket = nowBucketOf(nowMs);
 
   // ④ 站条：每段载具一条。逐跳站点取 **seed 自己的 hops**（见文件头事实 1）
   const seeds = optionsFor(st, input.fromSlug, input.toSlug);
@@ -111,7 +113,7 @@ export async function cardDetail(
     const stops: StripStop[] = [];
     for (let k = 0; k < hops.length; k++) {
       const [a, b] = hops[k]!;
-      const hit = ride.kind === "lrt" ? { minutes: LRT_MIN_PER_HOP, level: 2 } : lookupHop(st.segIdx, ride.route, a, b, todayWeekday);
+      const hit = ride.kind === "lrt" ? { minutes: LRT_MIN_PER_HOP, level: 2 } : lookupHop(st.segIdx, ride.route, a, b, nowBucket);
       sum += hit.minutes;
       stops.push({
         code: a,
@@ -157,11 +159,11 @@ export async function cardDetail(
   let liveDegraded = false;
   try {
     const liveMap = await withDeadline(
-      fetchStationLive(pool, busJobs, st.routeIdx, st.segIdx, { todayWeekday, nowMs }),
+      fetchStationLive(pool, busJobs, st.routeIdx, st.segIdx, { nowBucket, nowMs }),
       REPORT_DEADLINE_MS,
       "report",
     );
-    reports = await buildReports(pool, st, input, card, reachable, liveMap, seeds, nowMs, todayWeekday, thresholdMin);
+    reports = await buildReports(pool, st, input, card, reachable, liveMap, seeds, nowMs, nowBucket, thresholdMin);
   } catch {
     liveDegraded = true;
     reports = [];
@@ -194,7 +196,7 @@ async function buildReports(
   liveMap: Awaited<ReturnType<typeof fetchStationLive>>,
   seeds: ReturnType<typeof optionsFor>,
   nowMs: number,
-  todayWeekday: number,
+  nowBucket: string,
   thresholdMin: number,
 ): Promise<ReachReport[]> {
   const out: ReachReport[] = [];

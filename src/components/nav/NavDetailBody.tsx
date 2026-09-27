@@ -18,6 +18,7 @@
  * 结构（自上而下）：头部 → 步行/等车行 → 进度纵条（NavStrip）→ 下车步行行
  *   → 折叠区（StationReachFold）→ 来源脚注。
  */
+import { useEffect, useMemo, useRef, useState } from "react";
 import NavStrip from "./NavStrip";
 import StationReachFold from "./StationReachFold";
 import RouteStack from "@/components/RouteStack";
@@ -91,6 +92,39 @@ export default function NavDetailBody({
   const stopLabel = (k: number | null): string =>
     k !== null && k >= 0 && k < trackStops.length ? trackStops[k].label : "";
 
+  // ── ★ v3.4.0（量化 P1）：距下车站「约 X 分钟」──
+  //  X = 沿站条从「下一站」到末站的逐跳值之和（服务端 lookupHop 产物，已随 P0 升级到时段口径）；
+  //  帧与帧之间（12s 轮询）按真实流逝**本地递减**，数字不卡住；帧到达（key 变化）时重校准。
+  const progKey = track && track.prog ? `${track.prog.passedIdx}|${track.prog.nextIdx}` : "";
+  const etaBaseRef = useRef<{ key: string; min: number; ts: number } | null>(null);
+  const [etaTick, setEtaTick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setEtaTick((x) => x + 1), 15_000);
+    return () => clearInterval(t);
+  }, []);
+  const etaBaseMin = useMemo(() => {
+    // ★ v3.4.0（进度模型）：本段有「位置感知剩余」（服务端投影 + 客户端融合）→ 优先用它；
+    //   否则回退为「沿站条逐跳求和」（纯静态口径）。
+    const segSec = track?.segProgress?.segRemainSec;
+    if (segSec != null && segSec >= 0) return segSec / 60;
+    if (!track || !track.prog || trackStops.length < 2) return 0;
+    const nextIdx = track.prog.nextIdx ?? Math.min(trackStops.length - 1, track.prog.passedIdx + 1);
+    let sum = 0;
+    for (let k = Math.max(0, nextIdx); k < trackStops.length - 1; k++) sum += trackStops[k]?.minToNext ?? 0;
+    return sum;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [progKey, trackStops, track?.segProgress?.segRemainSec, track?.segProgress?.segFrom, track?.segProgress?.segTo]);
+  useEffect(() => {
+    etaBaseRef.current = { key: `${progKey}|${Math.round(etaBaseMin * 10)}`, min: etaBaseMin, ts: Date.now() };
+  }, [progKey, etaBaseMin]);
+  const remainMin = useMemo(() => {
+    const base = etaBaseRef.current;
+    if (!base) return etaBaseMin;
+    return Math.max(0, base.min - (Date.now() - base.ts) / 60_000);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [etaTick, etaBaseMin, progKey]);
+  const stopsAway = track && track.prog ? Math.max(0, trackStops.length - 1 - track.prog.passedIdx) : 0;
+
   return (
     <>
       {/* 头部：总用时 / 到达 + 线路标签**同行**（★ 去灰框、仅下分割线；删「估算」） */}
@@ -162,12 +196,17 @@ export default function NavDetailBody({
         )}
       </div>
 
-      {/* 距下车站还有 N 站（导航中；AC-02 站数刻度） */}
+      {/* 距下车站还有 N 站（导航中；AC-02 站数刻度）· ★ v3.4.0：下方小字「约 X 分钟」 */}
       {track && track.phase === "riding" && track.prog && trackStops.length >= 2 && (
-        <div className="nav-note-neutral">
-          <span className="navstrip__badge">距离</span>
-          距下车站还有 <b>{Math.max(0, trackStops.length - 1 - track.prog.passedIdx)}</b> 站
-          {track.prog.nextIdx !== null && <> · 下一站 {stopLabel(track.prog.nextIdx)}</>}
+        <div className="nav-note-neutral nav-note-neutral--eta">
+          <div className="nav-note__main">
+            <span className="navstrip__badge">距离</span>
+            距下车站还有 <b>{stopsAway}</b> 站
+            {track.prog.nextIdx !== null && <> · 下一站 {stopLabel(track.prog.nextIdx)}</>}
+          </div>
+          <div className="nav-note__sub" data-eta-remain={Math.max(1, Math.round(remainMin))}>
+            {stopsAway <= 1 ? "即将到站" : `约 ${Math.max(1, Math.round(remainMin))} 分钟`}
+          </div>
         </div>
       )}
 

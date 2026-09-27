@@ -19,6 +19,7 @@
  *     **绝不猜测**（呼应「报站数必须符合物理常识」的项目口径）。
  */
 import { nearestOnPath, type LL } from "./route-overview";
+import type { VehicleProgress } from "./progress";
 
 /** 追踪用的车辆子集（= `/api/route-vehicles` 的 vehicles[] 元素；坐标已 GCJ-02） */
 export interface TrackVehicle {
@@ -31,6 +32,8 @@ export interface TrackVehicle {
   interval: { from: { code: string }; to: { code: string } } | null;
   /** 挂靠站（status='stopping'/'terminal' 时存在）；code 为主码 */
   atStation: { code: string } | null;
+  /** ★ v3.4.0：区间进度（服务端 `?progress=1` 填充；缺省 = 不可算） */
+  progress?: VehicleProgress | null;
 }
 
 /** 站码归一（剥站台后缀：`T373/1` → `T373`）—— 与全站口径一致 */

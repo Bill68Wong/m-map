@@ -35,6 +35,7 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { getPool } from "@/lib/db";
+import { attachProgress, type VehicleProgress } from "@/lib/nav/progress";
 import { getBusLocations, getBusPositions } from "@/lib/dsat/client";
 import { wgs84ToGcj02 } from "@/lib/amap/coord";
 
@@ -63,6 +64,8 @@ interface Vehicle {
   isLast: boolean;
   interval: { from: StopRef; to: StopRef } | null;
   atStation: StopRef | null;
+  /** ★ v3.4.0：区间进度（`?progress=1` 时填充；详见 src/lib/nav/progress.ts） */
+  progress?: VehicleProgress;
 }
 
 /** 站码归一：`T373/1` → `T373`（去站台后缀，与全站口径一致） */
@@ -239,6 +242,16 @@ export async function GET(req: NextRequest) {
     let note: string | undefined;
     if (!locData) note = "dsat_locations_unavailable";
     else if (!posData) note = "dsat_positions_unavailable"; // 降级：仅坐标+车牌，区间/状态留空
+
+    // ⑦-b ★ v3.4.0：区间进度（`?progress=1`）——坐标投影 → 相对进度 p + 位置模型剩余。
+    //   任何一环缺失（无几何/无里程/无时长）→ 该车不带 progress 字段（调用方降级用逐跳）。
+    if (sp.get("progress") === "1" && vehicles.length) {
+      try {
+        await attachProgress(getPool(), code, dir, vehicles);
+      } catch (e) {
+        console.warn("[api/route-vehicles] progress 计算失败（忽略）：", (e as Error).message);
+      }
+    }
 
     return NextResponse.json(
       {

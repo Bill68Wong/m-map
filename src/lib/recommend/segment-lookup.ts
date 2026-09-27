@@ -1,17 +1,17 @@
 /**
- * 段时长回退链（src/lib/recommend/segment-lookup.ts，v1.0.0）
+ * 段时长回退链（src/lib/recommend/segment-lookup.ts，v3.4.0 数据驱动升级）
  *
- * 逐跳取「A 站开到 B 站要几分钟」，命中层级（★ 依批判性复核实测命中率而定）：
- *   ① `(route,f,t,今天,'all','stop')` n≥3 → p50       实测 9.9%
- *   ② `(route,f,t,-1,'all','stop')`   n≥3 → p50       实测 40.8%
- *   ③ `(route,f,t,-1,'all','all')`    n≥1 → p50/avg   实测  2.1%
- *   ④ **跨线邻接共享**：任一线路的 `(mainCode(f)→mainCode(t))` 邻接对样本 n≥1  实测 23.9%
- *      依据项目铁律「邻接区间可跨线路共享 → 覆盖按『邻接站对』评估，不按线路」
- *      （C653→C654 这段实体马路，26 路要开、50 路也要开，物理时长同源）
- *   ⑤ 该线「单站均值」× 1 跳                             实测 23.2%（与 ⑥ 合计）
- *   ⑥ 全局「单站均值」× 1 跳
+ * 逐跳取「A 站开到 B 站要几分钟」。★ v3.4.0 链（依据 docs/量化方案-导航站间时长-20260927.md §6）：
+ *   ① `(route,f,t,-1,当前桶,'stop')`  n≥5 → p50      ← 时段优先（新五桶 am_work/am_weekend/day/pm/night）
+ *   ② `(route,f,t,-1,'all','stop')`    n≥1 → p50      ← 本线全周
+ *   ③ `(route,f,t,-1,'all','all')`     n≥1 → p50/avg
+ *   ④ **跨线邻接共享 · 当前桶**：任一线路的 `(f→t,-1,当前桶,'stop')` n≥5 → p50   ← 新
+ *   ⑤ 跨线邻接共享 · 任意行 n≥1（原 ④；邻接区间可跨线路复用——物理同源）
+ *   ⑥ 该线「单站均值」× 1 跳
+ *   ⑦ 全局「单站均值」× 1 跳
  *
- * 补上 ④ 后逐跳命中率 52.8% → 76.8%。
+ * 离线评测（按场切分）：相对旧链（星期+minN1）整体 MADE −24%；时段维 + 细层门槛 n≥5
+ * 是收益主来源（实验②⑥）——「星期」维度已废弃（实验⑦b/⑦c：无增益、周一可并入工作日）。
  * ⚠️ 全程 **mainCode 归一**（C690/3 ≡ C690、M9/2 ≡ M9）：同站多台是同一物理位置。
  */
 import type { RouteIndex, SegmentStatRow } from "./types";
@@ -21,8 +21,8 @@ export function mainCodeOf(code: string): string {
   return /^[A-Za-z]+\d+/.exec(code)?.[0] ?? code;
 }
 
-/** 命中层级：1~6 = 回退链第 n 级 */
-export type SegmentLevel = 1 | 2 | 3 | 4 | 5 | 6;
+/** 命中层级：1~7 = 回退链第 n 级（v3.4.0 七层） */
+export type SegmentLevel = 1 | 2 | 3 | 4 | 5 | 6 | 7;
 
 export interface SegmentIndex {
   /** `route|mainF|mainT` → 该线路该邻接对的全部行 */
@@ -118,23 +118,22 @@ const pickBy = (
 
 /**
  * 查一跳的时长（分钟）。
- * @param todayWeekday 今天星期（0=周日…6=周六）；v1 不分时段，故只用到 weekday 精确层
+ * @param nowBucket ★ v3.4.0：当前时段桶（`bucketOfRoute` 五桶之一）——替代旧的 `todayWeekday`。
+ *   消费方由 `nowBucketOf(nowMs)`（src/lib/rebuild/buckets.ts）一键构造。
  */
 export function lookupHop(
   idx: SegmentIndex,
   route: string,
   from: string,
   to: string,
-  todayWeekday: number,
+  nowBucket: string,
 ): HopLookup {
   const mf = mainCodeOf(from);
   const mt = mainCodeOf(to);
   const routeRows = idx.byRoute.get(`${route}|${mf}|${mt}`);
 
-  // ① 本线 · 今天 · stop
-  // ⚠️ 分层行的 time_bucket 是具体时段（am_peak/day/…），**不存在 bucket='all' 的分层行**
-  //    （见 rebuild/segment-stats.ts 的三条 push）→ 本层只按 weekday 匹配，不再要求 bucket
-  const l1 = pickBy(routeRows, (r) => r.weekday === todayWeekday && r.arrive_kind === "stop", 1);
+  // ① 本线 · 当前时段桶 · stop（细层门槛 n≥5——实验②：n<5 噪声大于收益）
+  const l1 = pickBy(routeRows, (r) => r.weekday === -1 && r.time_bucket === nowBucket && r.arrive_kind === "stop", 5);
   if (l1 !== null) return { minutes: l1, level: 1 };
 
   // ② 本线 · 全周 · stop
@@ -145,16 +144,22 @@ export function lookupHop(
   const l3 = pickBy(routeRows, (r) => r.weekday === -1 && r.time_bucket === "all" && r.arrive_kind === "all", 1);
   if (l3 !== null) return { minutes: l3, level: 3 };
 
-  // ④ 跨线邻接共享（同一条实体马路，任意线路的样本皆可用）
-  const l4 = pickBy(idx.byAdj.get(`${mf}|${mt}`), () => true, 1);
+  // ④ 跨线邻接共享 · 当前时段桶 · stop（n≥5）
+  //    （同一条实体马路，任意线路的样本皆可用——物理时长同源）
+  const adj = idx.byAdj.get(`${mf}|${mt}`);
+  const l4 = pickBy(adj, (r) => r.weekday === -1 && r.time_bucket === nowBucket && r.arrive_kind === "stop", 5);
   if (l4 !== null) return { minutes: l4, level: 4 };
 
-  // ⑤ 该线单站均值 × 1 跳
-  const per = idx.routeHop.get(route);
-  if (per !== undefined && per > 0) return { minutes: Math.round(per * 10) / 10, level: 5 };
+  // ⑤ 跨线邻接共享 · 任意行（原 ④）
+  const l5 = pickBy(adj, () => true, 1);
+  if (l5 !== null) return { minutes: l5, level: 5 };
 
-  // ⑥ 全局单站均值 × 1 跳
-  return { minutes: Math.round(idx.globalHop * 10) / 10, level: 6 };
+  // ⑥ 该线单站均值 × 1 跳
+  const per = idx.routeHop.get(route);
+  if (per !== undefined && per > 0) return { minutes: Math.round(per * 10) / 10, level: 6 };
+
+  // ⑦ 全局单站均值 × 1 跳
+  return { minutes: Math.round(idx.globalHop * 10) / 10, level: 7 };
 }
 
 /** 一条载具段的行驶时长 = 逐跳累加（⚠️ 禁止「站数 × 常数」跳过逐跳，见项目铁律） */
@@ -162,12 +167,12 @@ export function rideOfHops(
   idx: SegmentIndex,
   route: string,
   hops: [string, string][],
-  todayWeekday: number,
+  nowBucket: string,
 ): { minutes: number; levels: SegmentLevel[] } {
   let sum = 0;
   const levels: SegmentLevel[] = [];
   for (const [a, b] of hops) {
-    const r = lookupHop(idx, route, a, b, todayWeekday);
+    const r = lookupHop(idx, route, a, b, nowBucket);
     sum += r.minutes;
     levels.push(r.level);
   }

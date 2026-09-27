@@ -6679,6 +6679,11 @@ body[data-sheet="open"] .nav-searchbar {
 }
 .nav-note-neutral i { flex: none; width: 7px; height: 7px; border-radius: var(--radius-full); background: var(--meta); }
 
+/* ★ v3.4.0（量化 P1）：距下车站「N 站」行下方小字「约 X 分钟」（两行布局；用户口径） */
+.nav-note-neutral--eta { display: block; white-space: normal; }
+.nav-note__main { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.nav-note__sub { margin-top: 2px; font-size: var(--text-2xs); color: var(--muted); }
+
 /* ── 折叠区：线路为父、方案为子（树形）── */
 .nav-fold-group-label {
   display: block;

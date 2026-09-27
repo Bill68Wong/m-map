@@ -20,6 +20,7 @@
 import type { Pool } from "pg";
 import { unstable_cache } from "next/cache";
 import { getPool } from "@/lib/db";
+import { nowBucketOf } from "@/lib/rebuild/buckets";
 import {
   buildRouteIndexFromRows,
   queryRouteIndexRows,
@@ -301,8 +302,7 @@ export function contextFor(
   zone: SchoolZone | null,
   live: ModelContext["live"],
 ): ModelContext {
-  // 澳门时间的星期（0=周日…6=周六）—— 时段分层只用到 weekday
-  const macau = new Date(nowMs + 8 * 3_600_000);
+  // ★ v3.4.0：查询上下文只用到「时段桶」（bucketOfRoute 五桶）——星期维度已废弃
   return {
     nowMs,
     segIdx: st.segIdx,
@@ -314,7 +314,7 @@ export function contextFor(
     live,
     excluded: [],
     missed: [],
-    todayWeekday: macau.getUTCDay(),
+    nowBucket: nowBucketOf(nowMs),
   };
 }
 

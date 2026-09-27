@@ -18,6 +18,7 @@
  *   屏距 ≤ `VEHICLE_MERGE_DIST`（28px）合并为一枚图标；角标 ≤9 显数字、>9 显 `9+`。
  */
 import type { CSSProperties } from "react";
+import type { VehicleProgress } from "@/lib/nav/progress";
 
 /** `/api/route-vehicles` 单车（前端视图模型；`company` 由调用方从响应顶层注入） */
 export interface VehicleLite {
@@ -33,6 +34,8 @@ export interface VehicleLite {
   interval?: { from: { code: string; name: string }; to: { code: string; name: string } } | null;
   /** 停靠中所在站 */
   atStation?: { code: string; name: string } | null;
+  /** ★ v3.4.0：区间进度（服务端 `?progress=1` 填充；缺省 = 该车不可算，调用方降级） */
+  progress?: VehicleProgress | null;
   /** 运营商：`澳巴` / `新福利`（决定涂装色） */
   company?: string;
 }

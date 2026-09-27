@@ -67,6 +67,16 @@ const NOTE_FETCH_FAIL = "车辆数据获取失败，稍后自动重试";
 
 export type RidePhase = "off" | "boarding" | "riding" | "done";
 
+/** ★ v3.4.0（进度模型）：本段「位置感知剩余」——服务端 progress 与客户端时间项融合后的结果 */
+export interface RideSegProgress {
+  segFrom: string;
+  segTo: string;
+  /** 区间内相对进度 0-1 */
+  p: number;
+  /** 融合后的本段剩余（秒）：w·D + (1−w)·max(md − u, 0) */
+  segRemainSec: number;
+}
+
 /** ★ 本批（需求⑤）：地图蓝点（视觉层 = GPS 投影；`frozen` = 冻结不跳） */
 export interface RideYouDot {
   lng: number;
@@ -114,6 +124,8 @@ export interface RideTrackView {
   youAt: RideYouAt | null;
   /** ★ 本批：当前在显车辆（riding 按 plate 过滤 → 0/1 辆；AC-45/46） */
   mapVehicles: VehicleLite[];
+  /** ★ v3.4.0（进度模型）：本段位置感知剩余（riding 且有 progress 时非空；否则 NavDetailBody 用逐跳兜底） */
+  segProgress: RideSegProgress | null;
   /** ★ 本批：自动下车瞬态（`data-track-state='alighted'` 窗口） */
   justAlighted: boolean;
   onStart: () => void;
@@ -174,6 +186,10 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
   /** ★ 本批：蓝点 / 纵条用户点 */
   const [youDot, setYouDot] = useState<RideYouDot | null>(null);
   const [youAt, setYouAt] = useState<RideYouAt | null>(null);
+  /** ★ v3.4.0（进度模型）：本段位置感知剩余（帧驱动更新；riding 外恒 null） */
+  const [segProgress, setSegProgress] = useState<RideSegProgress | null>(null);
+  /** 本区间「首见」记录（u 的基准）——区间变化时重置；u0 用位置模型反推（中途打开也成立） */
+  const segSeenRef = useRef<{ segKey: string; u0Sec: number; ts: number } | null>(null);
 
   const vehicleRef = useRef<TrackVehicle | null>(null);
   const missRef = useRef(0);
@@ -386,7 +402,7 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
       setTraveling(true);
       try {
         const r = await fetch(
-          `/api/route-vehicles?code=${encodeURIComponent(leg.route)}&dir=${encodeURIComponent(dir)}&kind=bus`,
+          `/api/route-vehicles?code=${encodeURIComponent(leg.route)}&dir=${encodeURIComponent(dir)}&kind=bus&progress=1`,
           { cache: "no-store" },
         );
         const j = (await r.json()) as { vehicles?: VehicleLite[]; company?: string | null };
@@ -397,6 +413,7 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
           status: String(v.status ?? "unknown"),
           interval: v.interval ?? null,
           atStation: v.atStation ?? null,
+          progress: v.progress ?? null,
         }));
         listRef.current = list;
         lastCompanyRef.current = j.company ?? null; // ★ 本批：帧顶层运营商（mapVehicles 涂装色）
@@ -420,6 +437,24 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
         missRef.current = 0;
         setNote("");
         vehicleRef.current = v;
+
+        // ★ v3.4.0（进度模型）：本段「位置感知剩余」——服务端 progress（坐标投影结果）
+        //   与客户端「时间项」融合：fused = w·D + (1−w)·max(md − u, 0)。
+        //   u 的获取：区间首见时用「位置模型反推」（u0 = md − D，中途打开也成立），此后按时间累积。
+        const pr = v.progress ?? null;
+        if (pr && pr.mdSec > 0) {
+          const segKey = `${pr.segFrom}|${pr.segTo}`;
+          const seen = segSeenRef.current;
+          if (!seen || seen.segKey !== segKey) {
+            segSeenRef.current = { segKey, u0Sec: Math.max(0, pr.mdSec - pr.remainSecD), ts: Date.now() };
+          }
+          const s0 = segSeenRef.current!;
+          const uSec = s0.u0Sec + (Date.now() - s0.ts) / 1000;
+          const fusedSec = pr.w * pr.remainSecD + (1 - pr.w) * Math.max(pr.mdSec - uSec, 0);
+          setSegProgress({ segFrom: pr.segFrom, segTo: pr.segTo, p: pr.p, segRemainSec: fusedSec });
+        } else {
+          setSegProgress(null);
+        }
 
         const p = progressOf(stopMains, v);
         if (p.kind === "at" || p.kind === "between") setProg(p);
@@ -950,6 +985,7 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
     youAt,
     mapVehicles,
     justAlighted,
+    segProgress: phase === "riding" ? segProgress : null,
     onStart: start,
     onStop: stop,
     onBoard: board,

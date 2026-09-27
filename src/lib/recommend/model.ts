@@ -264,8 +264,8 @@ export interface ModelContext {
    * 合成一个数组会让文案与诊断都失真。
    */
   missed: string[];
-  /** 今天星期（0 = 周日 … 6 = 周六） */
-  todayWeekday: number;
+  /** ★ v3.4.0：查询时段桶（bucketOfRoute 五桶之一）——替代旧 todayWeekday（星期维度已废弃） */
+  nowBucket: string;
   /**
    * ★ v1.3.0（全澳导航接缝，设计 §C.8）：**可选**的步行解析器。
    *
@@ -582,7 +582,7 @@ export function modelOption(seed: OptionSeed, ctx: ModelContext): ModeledOption 
       // 仅「固定秒数线」（石排湾/横琴）下发秒级展示串；氹仔线维持整分展示（不下发）
       if (LRT_RIDE_SEC_FIXED[seg.route] !== undefined) rideSecText = fmtRideSec(lrtSec);
     } else {
-      ride = rideOfHops(ctx.segIdx, seg.route, seg.hops, ctx.todayWeekday);
+      ride = rideOfHops(ctx.segIdx, seg.route, seg.hops, ctx.nowBucket);
     }
     cursor += ride.minutes * 60_000;
 
