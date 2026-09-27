@@ -21,6 +21,9 @@
  */
 import RouteStack from "./RouteStack";
 import Icon from "./ui/Icon";
+import { TierBadge } from "./RoutePieces";
+import { pickCatchTier } from "@/lib/recommend/catch-up";
+import { TIER_TEXT, type CatchTier } from "@/lib/recommend/types";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 /** 秒级读秒线路：石排湾线/横琴线（班次稀疏，倒计时需精确到秒）；
@@ -415,6 +418,8 @@ export function LrtEtaInline({
   precise,
   state,
   directionName,
+  neighbors,
+  tierCtx,
 }: {
   /** 本库线路码（决定 `pre`：氹仔 0:30 / 石排湾 2:00 / 横琴 1:00） */
   lineCode: string;
@@ -424,6 +429,18 @@ export function LrtEtaInline({
   precise?: boolean[];
   state?: "running" | "before_first" | "after_last" | "no_data";
   directionName?: string | null;
+  /**
+   * ★ 2026-09-27（用户需求 2/4）：邻班区模式——
+   *   `"expanded"`：直接列出「前一班（如有）/ 后一班」；`"collapsed"`：默认折叠、点击展开；
+   *   缺省 = 不渲染邻班区。邻班 = 主班在 `departuresMs` 中的前/后一项（前班须未发车）。
+   */
+  neighbors?: "expanded" | "collapsed";
+  /**
+   * ★ 2026-09-27（用户需求 2）：邻班「怎样走才能赶上」的档位上下文——
+   *   有值时每班附 `TierBadge`（档位 = `pickCatchTier(walkMin, 该班剩余秒, walkDistM)`；
+   *   全档不可及 → 「赶不上」）。`walkMin` = 到上车站的步行分钟（卡级 `walkOut.minutes`）。
+   */
+  tierCtx?: { walkMin: number; walkDistM?: number | null };
 }) {
   const [, tick] = useState(0);
   /**
@@ -434,6 +451,8 @@ export function LrtEtaInline({
    * 这不影响「每秒重算」这条口径 —— 只是把**首帧**让给占位符。
    */
   const [mounted, setMounted] = useState(false);
+  /** ★ 2026-09-27（用户需求 4）：折叠式邻班区开合（默认收起） */
+  const [openN, setOpenN] = useState(false);
   useEffect(() => {
     setMounted(true);
   }, []);
@@ -468,37 +487,94 @@ export function LrtEtaInline({
   const arriving = inArrivalWindow(nxt, nowMs, pre, postOf(precise0));
   const held = arriving && nowMs >= nxt.depMs;
   const totalSec = Math.max(0, Math.floor(remainMs / 1000));
+  // ★ 2026-09-27（用户需求 2）：邻班 = 主班在班次数组中的前/后一项（前班须**未发车**才显示）
+  const idx = dep.findIndex((d) => d.depMs === nxt.depMs);
+  const prevDep = idx > 0 ? dep[idx - 1] : null;
+  const prevOk = !!prevDep && prevDep.depMs > nowMs;
+  const nextDep = idx >= 0 && idx + 1 < dep.length ? dep[idx + 1] : null;
+  const hasNeighbors = prevOk || !!nextDep;
+  /** 单行邻班（剩余分钟 + 档位标签；该班全档不可及 → 「赶不上」） */
+  const neighborRow = (label: string, d: LrtDeparture) => {
+    const waitMinF = Math.max(0, Math.floor((d.depMs - nowMs) / 60_000));
+    const tier = tierCtx
+      ? pickCatchTier(tierCtx.walkMin, (d.depMs - nowMs) / 1000, tierCtx.walkDistM ?? null)
+      : null;
+    return (
+      <span className="rc-neighbor" key={d.depMs}>
+        <span className="rc-neighbor__when">
+          {label} · {waitMinF < 1 ? "即将" : `${waitMinF} 分钟`}
+        </span>
+        {tierCtx &&
+          (tier ? (
+            <TierBadge tier={tier} tierText={TIER_TEXT[tier as CatchTier]} />
+          ) : (
+            <span className="rc-neighbor__miss">赶不上</span>
+          ))}
+      </span>
+    );
+  };
   return (
     <span className="rc-live">
-      {arriving ? (
-        precise0 ? (
+      {/* ★ 2026-09-27（用户需求 5）：主行独立（角标同主行）；「方向 · 开出时刻」另起小字行 */}
+      <span className="rc-live__main">
+        {arriving ? (
+          precise0 ? (
+            <>
+              <span className="rc-live__lead">现正到达</span>
+              {" · "}
+              <span
+                className="rc-live__time"
+                style={held ? { visibility: "hidden" } : undefined}
+              >
+                {secText(totalSec)}
+              </span>
+            </>
+          ) : (
+            "现正到达"
+          )
+        ) : precise0 ? (
           <>
-            <span className="rc-live__lead">现正到达</span>
-            {" · "}
-            <span
-              className="rc-live__time"
-              style={held ? { visibility: "hidden" } : undefined}
-            >
-              {secText(totalSec)}
-            </span>
+            还有 <span className="rc-live__time">{secText(totalSec)}</span>
           </>
         ) : (
-          "现正到达"
-        )
-      ) : precise0 ? (
-        <>
-          还有 <span className="rc-live__time">{secText(totalSec)}</span>
-        </>
-      ) : (
-        `下一班 ${Math.max(0, Math.floor(remainMs / 60_000))} 分钟`
-      )}
-      {/* ★ v3.2.0（AC-66）：紧凑处「推算」小角标（灰 = 系统推算，与实色读数区分） */}
-      <span className="rc-est-badge">推算</span>
+          `下一班 ${Math.max(0, Math.floor(remainMs / 60_000))} 分钟`
+        )}
+        {/* ★ v3.2.0（AC-66）：紧凑处「推算」小角标（灰 = 系统推算，与实色读数区分） */}
+        <span className="rc-est-badge">推算</span>
+      </span>
       <span className="rc-live__sub">
         {/* ★ v3.3.0（AC-103）：方向文案统一为「{終點}方向」；空值整段省略（不留 `·`） */}
         {directionName ? `${directionName.endsWith("方向") ? directionName : `${directionName}方向`} · ` : ""}
         {nxt.clock} 开出
       </span>
+      {/* ★ 2026-09-27（用户需求 2/4）：邻班区 —— 推荐卡=展开；导航=默认折叠、点击展开 */}
+      {neighbors === "expanded" && hasNeighbors && (
+        <span className="rc-neighbors">
+          {prevOk && neighborRow("前一班", prevDep!)}
+          {nextDep && neighborRow("后一班", nextDep)}
+        </span>
+      )}
+      {neighbors === "collapsed" && hasNeighbors && (
+        <span className="rc-neighbors rc-neighbors--fold">
+          <button
+            type="button"
+            className="rc-neighbors__toggle"
+            onClick={() => setOpenN((v) => !v)}
+            aria-expanded={openN}
+          >
+            前后班次
+            <span className={`rc-neighbors__caret${openN ? " is-open" : ""}`} aria-hidden="true">
+              <Icon name="caretDown" size={16} />
+            </span>
+          </button>
+          {openN && (
+            <span className="rc-neighbors__list">
+              {prevOk && neighborRow("前一班", prevDep!)}
+              {nextDep && neighborRow("后一班", nextDep)}
+            </span>
+          )}
+        </span>
+      )}
     </span>
   );
 }

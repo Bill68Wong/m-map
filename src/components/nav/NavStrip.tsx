@@ -20,6 +20,7 @@
 import { Fragment, useState } from "react";
 import RouteStack from "@/components/RouteStack";
 import { dirTextOf } from "@/components/RoutePieces";
+import { LrtEtaInline } from "@/components/LrtEta";
 import Icon from "@/components/ui/Icon";
 import type { SegmentStrip } from "@/lib/recommend/types";
 
@@ -208,6 +209,25 @@ export default function NavStrip({
               {waitSrc && <span className="nav-actions__src">{waitSrc}</span>}
             </>
           )}
+        </div>
+      )}
+
+      {/* ★ 2026-09-27（用户需求 3）：换乘处 —— 换乘后线路的班次报时（折叠式邻班，点击展开） */}
+      {!last && transfer && strip.nextLeg && (
+        <div className="navstrip__xfer">
+          <span className="navstrip__xfer-line">
+            换乘后
+            <RouteStack codes={[strip.nextLeg.route]} colorOf={() => rail} />
+          </span>
+          <LrtEtaInline
+            lineCode={strip.nextLeg.route}
+            departuresMs={strip.nextLeg.liveDepartures}
+            clocks={strip.nextLeg.liveClocks}
+            precise={strip.nextLeg.livePrecise}
+            state="running"
+            directionName={strip.nextLeg.dirLabel}
+            neighbors="collapsed"
+          />
         </div>
       )}
     </div>

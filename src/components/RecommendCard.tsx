@@ -221,6 +221,9 @@ export default function RecommendCard({
                   state="running"
                   /* ★ v3.3.0（AC-103）：接通轻轨方向（改前恒传 null ⇒ 用户看不到「往哪开」） */
                   directionName={directionNameOf(first)}
+                  /* ★ 2026-09-27（用户需求 2）：推荐卡 = 展开式邻班（前一班/后一班 + 档位标签） */
+                  neighbors="expanded"
+                  tierCtx={{ walkMin: card.walkOut.minutes, walkDistM: card.walkOut.distanceM }}
                 />
               ) : (
                 <EtaText text={first.liveText || `等 ${first.waitMin} 分`} />

@@ -217,6 +217,9 @@ export default function CardDetailClient({
                   state="running"
                   /* ★ v3.3.0（AC-103）：接通轻轨方向（改前恒传 null） */
                   directionName={directionNameOf(first)}
+                  /* ★ 2026-09-27（用户需求 2）：详情页 = 展开式邻班（同推荐卡） */
+                  neighbors="expanded"
+                  tierCtx={{ walkMin: card.walkOut.minutes, walkDistM: card.walkOut.distanceM }}
                 />
               ) : (
                 <span className="rc-fold__live">

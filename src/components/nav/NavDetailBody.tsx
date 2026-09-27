@@ -143,6 +143,9 @@ export default function NavDetailBody({
                   state="running"
                   /* ★ v3.3.0（AC-103）：接通轻轨方向（改前恒传 null） */
                   directionName={directionNameOf(first)}
+                  /* ★ 2026-09-27（用户需求 4）：导航 = 邻班区默认折叠、点击展开 */
+                  neighbors="collapsed"
+                  tierCtx={{ walkMin: card.walkOut.minutes, walkDistM: card.walkOut.distanceM }}
                 />
               ) : (
                 <EtaText text={first.liveText || `等 ${first.waitMin} 分`} />

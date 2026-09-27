@@ -81,6 +81,18 @@ export function buildStrips(card: RecommendCard, ctx: StripBuildCtx): SegmentStr
       };
     });
 
+    // ★ 2026-09-27（用户需求 3）：换乘后一段（轻轨）的班次报时——供流程图换乘处渲染报时块
+    const nxtLeg = card.rides[i + 1];
+    const nextLeg =
+      nxtLeg && nxtLeg.kind === "lrt" && nxtLeg.liveDepartures?.length
+        ? {
+            route: nxtLeg.route,
+            dirLabel: nxtLeg.directionName ?? null,
+            liveDepartures: nxtLeg.liveDepartures,
+            liveClocks: nxtLeg.liveClocks ?? [],
+            livePrecise: nxtLeg.livePrecise,
+          }
+        : null;
     const t = card.transfers[i];
     // ★ B4（需求 7）：透传换乘等待/安全余量（`waitMin`/`slackMin`）⇒ 前端换乘行可显示
     //   「换乘 X · 步行 N 分 · 等车约 M 分」，并由 `slackMin` 派生观测钩子 H8。
@@ -111,6 +123,7 @@ export function buildStrips(card: RecommendCard, ctx: StripBuildCtx): SegmentStr
       // ★ v2.3.0（B5.2）：秒级乘车时长直接从卡片腿回填（口径一致：仅 LRT_RIDE_SEC_FIXED 线非空）
       rideSecText: ride.rideSecText,
       transferAfter,
+      nextLeg,
     };
   });
 }

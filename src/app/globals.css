@@ -1384,6 +1384,11 @@ button[aria-disabled="true"] {
 
 /* ── 实时报时（行车行内联 / 卡内） ── */
 .rc-live {
+  /* ★ 2026-09-27（用户需求 5）：报时块改列布局 —— 主行 / 「方向 · 时刻」小字行 / 邻班区 */
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
   font-size: var(--fs-meta);
   color: var(--primary);
   font-weight: 600;
@@ -1396,10 +1401,60 @@ button[aria-disabled="true"] {
 }
 
 .rc-live__sub {
-  margin-left: 6px;
   font-size: 12px;
   font-weight: 400;
   color: var(--on-surface-var);
+}
+/* ★ 2026-09-27（用户需求 2/4）：邻班区（前一班/后一班 + 档位标签或「赶不上」；折叠式默认收起） */
+.rc-neighbors {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  margin-top: 1px;
+  font-weight: 400;
+}
+.rc-neighbor {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--on-surface-var);
+}
+.rc-neighbor__when {
+  white-space: nowrap;
+}
+.rc-neighbor__miss {
+  font-size: 11px;
+  color: var(--meta);
+}
+.rc-neighbors__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: 12px;
+  color: var(--on-surface-var);
+  cursor: pointer;
+}
+.rc-neighbors__toggle:hover {
+  color: var(--primary);
+}
+.rc-neighbors__caret {
+  display: inline-flex;
+  transition: transform 0.15s ease;
+}
+.rc-neighbors__caret.is-open {
+  transform: rotate(180deg);
+}
+.rc-neighbors__list {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  margin-top: 2px;
 }
 
 /* ── ★ v3.2.0（需求 2 / AC-66/68）：推荐卡行内「现正到达 · X 分 Y 秒」+「推算」角标 ── */
@@ -6277,6 +6332,21 @@ body[data-sheet="open"] .nav-searchbar {
 }
 .navstrip__hop { font-size: var(--text-xs); color: var(--meta); white-space: nowrap; }
 .navstrip__sub { font-size: var(--text-xs); color: var(--muted); white-space: nowrap; }
+/* ★ 2026-09-27（用户需求 3）：换乘处的「换乘后线路报时」（缩进对齐换乘行） */
+.navstrip__xfer {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  margin: 2px 0 8px 30px;
+  font-size: var(--text-xs);
+}
+.navstrip__xfer-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--meta);
+}
 /* ★ v3.3.0（AC-103）：轻轨段方向（`{終點}方向`）—— 上车行右侧，右对齐不抢站名位（03 §2.3） */
 .navstrip__dir {
   margin-left: auto;

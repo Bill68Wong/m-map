@@ -262,10 +262,10 @@ export const LRT_HOP_FALLBACK_SEC = 120;
  * ⚠️ 这是**派生值**（距离→分钟），合规须可溯源（UI 注明算法）。
  */
 export const LRT_STATION_WALK = {
-  /** 进站 → 站台（米） */
-  inM: 168,
-  /** 站台 → 出站（米） */
-  outM: 168,
+  /** 进站 → 站台（米）—— ★ 2026-09-27（用户口径）：1.5 分钟「正常走」等效（84 m/min × 1.5） */
+  inM: 126,
+  /** 站台 → 出站（米）—— 同口径（1.5 分钟正常走） */
+  outM: 126,
   /** 站内换乘（按本库站主码，米） */
   transferByStation: { "LRT-UH": 336, "LRT-LOT": 420 } as Record<string, number>,
 } as const;
@@ -757,6 +757,19 @@ export interface SegmentStrip {
   rideSecText?: string;
   /** 该段之后的换乘（最后一段为 null）—— 用户口径：巴士标上一趟终点 + 换乘站台；轻轨写明换乘步行时长 */
   transferAfter: TransferView | null;
+  /**
+   * ★ 2026-09-27（用户需求 3）：**换乘后一段（轻轨）的班次报时**——
+   *   仅当下一段是轻轨且带班次数据时非空；供流程图（`NavStrip`）在换乘处渲染
+   *   「换乘后线路」报时块（前端 `LrtEtaInline` 折叠式消费）。
+   */
+  nextLeg?: {
+    route: string;
+    /** 换乘后线路方向名（终点展示名，前端渲染 `{dirLabel}方向`） */
+    dirLabel: string | null;
+    liveDepartures: number[];
+    liveClocks: string[];
+    livePrecise?: boolean[];
+  } | null;
 }
 
 /** 折叠栏里一行 = 该站台一条可达线路 */
