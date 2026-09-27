@@ -223,6 +223,7 @@ export default function RecommendCard({
                   directionName={directionNameOf(first)}
                   /* ★ 2026-09-27（用户需求 2）：推荐卡 = 展开式邻班（前一班/后一班 + 档位标签） */
                   neighbors="expanded"
+                  mainMs={first.liveMainMs}
                   tierCtx={{ walkMin: card.walkOut.minutes, walkDistM: card.walkOut.distanceM }}
                 />
               ) : (

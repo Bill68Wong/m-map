@@ -219,6 +219,7 @@ export default function CardDetailClient({
                   directionName={directionNameOf(first)}
                   /* ★ 2026-09-27（用户需求 2）：详情页 = 展开式邻班（同推荐卡） */
                   neighbors="expanded"
+                  mainMs={first.liveMainMs}
                   tierCtx={{ walkMin: card.walkOut.minutes, walkDistM: card.walkOut.distanceM }}
                 />
               ) : (

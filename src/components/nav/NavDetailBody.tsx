@@ -145,6 +145,7 @@ export default function NavDetailBody({
                   directionName={directionNameOf(first)}
                   /* ★ 2026-09-27（用户需求 4）：导航 = 邻班区默认折叠、点击展开 */
                   neighbors="collapsed"
+                  mainMs={first.liveMainMs}
                   tierCtx={{ walkMin: card.walkOut.minutes, walkDistM: card.walkOut.distanceM }}
                 />
               ) : (

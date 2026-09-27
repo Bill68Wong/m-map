@@ -91,6 +91,7 @@ export function buildStrips(card: RecommendCard, ctx: StripBuildCtx): SegmentStr
             liveDepartures: nxtLeg.liveDepartures,
             liveClocks: nxtLeg.liveClocks ?? [],
             livePrecise: nxtLeg.livePrecise,
+            mainMs: nxtLeg.liveMainMs,
           }
         : null;
     const t = card.transfers[i];

@@ -419,6 +419,7 @@ export function LrtEtaInline({
   state,
   directionName,
   neighbors,
+  mainMs,
   tierCtx,
 }: {
   /** 本库线路码（决定 `pre`：氹仔 0:30 / 石排湾 2:00 / 横琴 1:00） */
@@ -435,6 +436,11 @@ export function LrtEtaInline({
    *   缺省 = 不渲染邻班区。邻班 = 主班在 `departuresMs` 中的前/后一项（前班须未发车）。
    */
   neighbors?: "expanded" | "collapsed";
+  /**
+   * ★ 2026-09-27（用户需求 2）：**主班时刻（ms）**（`RideLegView.liveMainMs`）——
+   *   `liveDepartures` 内早于它的项 = 「前一班」；缺省时退回「数组首项」旧行为。
+   */
+  mainMs?: number;
   /**
    * ★ 2026-09-27（用户需求 2）：邻班「怎样走才能赶上」的档位上下文——
    *   有值时每班附 `TierBadge`（档位 = `pickCatchTier(walkMin, 该班剩余秒, walkDistM)`；
@@ -479,7 +485,12 @@ export function LrtEtaInline({
 
   const nowMs = Date.now();
   const pre = preOf(lineCode);
-  const nxt = pickNext(dep, nowMs);
+  // ★ 2026-09-27（用户需求 2）：主班定位改用 `mainMs`（模型选中那班）——
+  //   数组首项现含「前班」（可能赶不上/已发），不能再以「首个未发车」当主班；
+  //   主班发车后自动滚向后续班次（`slice(maIdx)` 内找首个未发车）。
+  const maIdxRaw = mainMs != null ? dep.findIndex((d) => d.depMs === mainMs) : -1;
+  const maIdx = maIdxRaw >= 0 ? maIdxRaw : 0;
+  const nxt = dep.slice(maIdx).find((d) => d.depMs > nowMs) ?? null;
   // ★ v3.2.0：窗口内 = 「现正到达」；整日无后续班次 → 今日已收车
   if (!nxt) return <span className="rc-live rc-live--dim">今日已收车</span>;
   const remainMs = nxt.depMs - nowMs;
@@ -490,21 +501,33 @@ export function LrtEtaInline({
   // ★ 2026-09-27（用户需求 2）：邻班 = 主班在班次数组中的前/后一项（前班须**未发车**才显示）
   const idx = dep.findIndex((d) => d.depMs === nxt.depMs);
   const prevDep = idx > 0 ? dep[idx - 1] : null;
-  const prevOk = !!prevDep && prevDep.depMs > nowMs;
+  // ★ 2026-09-27（用户需求 2）：前班**一律显示**（含「要提速才赶得上」与「刚已发车」两类——
+  //   用户明确「赶不上的前班车也允许显示」）；仅「主班已是数组首项」时才省略。
+  const prevOk = !!prevDep;
   const nextDep = idx >= 0 && idx + 1 < dep.length ? dep[idx + 1] : null;
   const hasNeighbors = prevOk || !!nextDep;
-  /** 单行邻班（剩余分钟 + 档位标签；该班全档不可及 → 「赶不上」） */
+  /** 单行邻班（★ 需求 3：实时读秒；已发车照常显示；档位标签或「赶不上」） */
   const neighborRow = (label: string, d: LrtDeparture) => {
-    const waitMinF = Math.max(0, Math.floor((d.depMs - nowMs) / 60_000));
-    const tier = tierCtx
-      ? pickCatchTier(tierCtx.walkMin, (d.depMs - nowMs) / 1000, tierCtx.walkDistM ?? null)
-      : null;
+    const remainSec = Math.floor((d.depMs - nowMs) / 1000);
+    const gone = remainSec <= 0;
+    const tier =
+      tierCtx && !gone ? pickCatchTier(tierCtx.walkMin, remainSec, tierCtx.walkDistM ?? null) : null;
     return (
       <span className="rc-neighbor" key={d.depMs}>
         <span className="rc-neighbor__when">
-          {label} · {waitMinF < 1 ? "即将" : `${waitMinF} 分钟`}
+          {label} ·{" "}
+          {gone ? (
+            "已发车"
+          ) : d.secPrecise ? (
+            <>还有 {secText(remainSec)}</>
+          ) : remainSec < 60 ? (
+            "即将"
+          ) : (
+            `${Math.floor(remainSec / 60)} 分钟`
+          )}
         </span>
         {tierCtx &&
+          !gone &&
           (tier ? (
             <TierBadge tier={tier} tierText={TIER_TEXT[tier as CatchTier]} />
           ) : (

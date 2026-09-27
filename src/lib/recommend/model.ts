@@ -441,6 +441,13 @@ export function modelOption(seed: OptionSeed, ctx: ModelContext): ModeledOption 
   let liveClocks: string[] | undefined;
   /** ★ v3.2.0：与 `liveDepartures` 一一对应的秒级精准标记（首段轻轨透传 `LrtLive.precise`） */
   let livePrecise: boolean[] | undefined;
+  /** ★ 2026-09-27（用户需求 2）：本段**主班时刻**（ms）——前端据此定位主班，数组内早于它的项 = 「前一班」 */
+  let liveMainMs: number | undefined;
+  /** ★ 2026-09-27（用户需求 1）：**后续段**（换乘后轻轨）的班次数据——由上一轮换乘块备好 */
+  let liveDeparturesNext: number[] | undefined;
+  let liveClocksNext: string[] | undefined;
+  let livePreciseNext: boolean[] | undefined;
+  let liveMainMsNext: number | undefined;
   /** ★ v3.3.0（AC-107）：首段轻轨的保守赶车提示（档 1/2 且有真实时刻时产出；否则 undefined） */
   let lrtCatchHint: string | undefined;
   /**
@@ -533,13 +540,18 @@ export function modelOption(seed: OptionSeed, ctx: ModelContext): ModeledOption 
     //   → 显示的是「马上就要开、但你还在路上」的那班，与 `waitMin`（按 `cursor` 之后第一班算）
     //     自相矛盾。实测：步行出门 4.6 分，却显示「1.8 分后开」→ 用户怀疑「显示的不是能赶上的班次」。
     //   现在只下发 `> cursor` 的班次，客户端的第一班 ≡ 模型用的那一班。
-    const afterWalk = lv.departures
-      .map((d, k) => ({ d, c: lv.clocks[k] ?? "", p: lv.precise?.[k] ?? false }))
-      .filter((x) => x.d > cursor);
-    liveDepartures = afterWalk.map((x) => x.d);
-    liveClocks = afterWalk.map((x) => x.c);
+    // ★ 2026-09-27（用户需求 2）：**前班（到达站台前最近一班）一并下发**——
+    //   用户口径「前面一班车（如有）……赶不上的前班车也允许显示」⇒ 保留 `cursor` 前最近一班；
+    //   客户端以 `liveMainMs` 定位主班，数组内早于主班的项即「前一班」。
+    const stamped = lv.departures.map((d, k) => ({ d, c: lv.clocks[k] ?? "", p: lv.precise?.[k] ?? false }));
+    const beforeWalk = stamped.filter((x) => x.d <= cursor).slice(-1);
+    const afterWalk = stamped.filter((x) => x.d > cursor);
+    const chain = [...beforeWalk, ...afterWalk];
+    liveDepartures = chain.map((x) => x.d);
+    liveClocks = chain.map((x) => x.c);
     // ★ v3.2.0：与班次同步过滤 —— 首段轻轨的秒级精准标记（供 `<LrtEtaInline>` 窗口/文案）
-    livePrecise = afterWalk.map((x) => x.p);
+    livePrecise = chain.map((x) => x.p);
+    liveMainMs = depMs;
   }
 
   cursor = boardAtMs;
@@ -599,9 +611,11 @@ export function modelOption(seed: OptionSeed, ctx: ModelContext): ModeledOption 
       levels: ride.levels,
       waitMin: Math.round(waitMin * 10) / 10,
       liveText: legText,
-      liveDepartures: i === 0 ? liveDepartures : undefined,
-      liveClocks: i === 0 ? liveClocks : undefined,
-      livePrecise: i === 0 ? livePrecise : undefined,
+      /* ★ 2026-09-27（用户需求 1）：每段都带班次数据 —— 首段用本轮变量、后续段用换乘块备好的 */
+      liveDepartures: i === 0 ? liveDepartures : liveDeparturesNext,
+      liveClocks: i === 0 ? liveClocks : liveClocksNext,
+      livePrecise: i === 0 ? livePrecise : livePreciseNext,
+      liveMainMs: i === 0 ? liveMainMs : liveMainMsNext,
       // ★ v3.3.0（AC-107）：首段轻轨的保守赶车提示（仅档 1/2 且有时刻时非空）
       catchHint: i === 0 ? lrtCatchHint : undefined,
       tier: i === 0 ? tier : null,
@@ -675,6 +689,19 @@ export function modelOption(seed: OptionSeed, ctx: ModelContext): ModeledOption 
       const gapMin = Math.max(0, (depMs - cursor) / 60_000);
       waitNext = gapMin;
       cursor = depMs;
+      // ★ 2026-09-27（用户需求 1/2）：备好**下一段**的班次数据（参照 = `need`：到达换乘站 + 安全余量）——
+      //   前班（need 前最近一班）一并带上（同首段口径）；`liveMainMsNext` = 模型选中的那班。
+      {
+        const stampedN = lv.departures.map((d, k) => ({ d, c: lv.clocks[k] ?? "", p: lv.precise?.[k] ?? false }));
+        const chainN = [
+          ...stampedN.filter((x) => x.d < need).slice(-1),
+          ...stampedN.filter((x) => x.d >= need),
+        ];
+        liveDeparturesNext = chainN.map((x) => x.d);
+        liveClocksNext = chainN.map((x) => x.c);
+        livePreciseNext = chainN.map((x) => x.p);
+        liveMainMsNext = depMs;
+      }
       // 轻轨第 2 段拿到的是**真实班次时刻** → 文案用绝对时刻（就是你会坐的那一班）
       liveTextNext = `${hhmmOf(((depMs + 8 * 3_600_000) % 86_400_000) / 1000)} 开出`;
       if (transferCur) {

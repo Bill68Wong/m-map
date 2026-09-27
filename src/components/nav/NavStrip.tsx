@@ -227,6 +227,7 @@ export default function NavStrip({
             state="running"
             directionName={strip.nextLeg.dirLabel}
             neighbors="collapsed"
+            mainMs={strip.nextLeg.mainMs}
           />
         </div>
       )}
