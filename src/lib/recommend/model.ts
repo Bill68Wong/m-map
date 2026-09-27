@@ -59,7 +59,7 @@
 import { PLACE_SHORT } from "@/lib/home-plans-shared";
 import { hhmmOf } from "@/lib/lrt/eta";
 import type { AmapPlanSeed, WalkResolver } from "@/lib/nav/types";
-import { etaTextOf, pickCatchTier, tierHintOf, tierTextOf, type TierSpeedOverride } from "./catch-up";
+import { etaTextOf, pickCatchTier, tierHintOf, tierTextOf, waitRangeText, type TierSpeedOverride } from "./catch-up";
 import { conservativeWaitMin, headwayAt, headwayMedian, type HeadwayIndex } from "./headway";
 import { cmpByPref, PREF_DEFAULTS, type Prefs } from "./score";
 import { mainCodeOf, rideOfHops, type SegmentIndex } from "./segment-lookup";
@@ -480,7 +480,7 @@ export function modelOption(seed: OptionSeed, ctx: ModelContext): ModeledOption 
       boardAtMs = nowMs + est.hiMin * 60_000;
       // 未发车 ⇒ 不涉及「赶车档位」，按常速（档 3；SPEED_RATIO[3] === 1）
       tier = 3;
-      liveText = `未发车 · 约 ${est.loMin} 到 ${est.hiMin} 分`;
+      liveText = `未发车 · ${waitRangeText(est.loMin, est.hiMin)}`;
       // 无实车可列 ⇒ 后续班次留空（卡片不展示 altBuses）
       busPool = [];
       chosenBus = null;

@@ -148,3 +148,19 @@ export function etaTextOf(a: { etaSec?: number | null; loSec: number; hiSec: num
   }
   return rangeText(a.loSec, a.hiSec);
 }
+
+/**
+ * ★ v3.5.1：**未发车等待**的统一显示口径（用户口径：约 X1~X2 分 · 整数 · 不用「到」）。
+ *   · 正常（lo < hi）：`约 X1~X2 分`
+ *   · 下界未知（lo ≤ 0）：`X2 分内`（「0~X 分」的诚实表达——快慢都有可能，0 会误导成「已到」）
+ *   · 单点（X1 === X2）：`约 X1 分`
+ *   · 上限被压到 ≤ 0（间隔推算异常）：`约 1 分内`（最小正值兜底）
+ */
+export function waitRangeText(loMin: number, hiMin: number): string {
+  const x1 = Math.floor(loMin);
+  const x2 = Math.ceil(hiMin);
+  if (x2 <= 0) return "约 1 分内";
+  if (x1 <= 0) return `${x2} 分内`;
+  if (x1 >= x2) return `约 ${x1} 分`;
+  return `约 ${x1}~${x2} 分`;
+}

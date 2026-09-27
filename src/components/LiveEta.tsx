@@ -33,6 +33,7 @@
 
 import RouteStack from "./RouteStack";
 import Icon from "./ui/Icon";
+import { waitRangeText } from "@/lib/recommend/catch-up";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { smoothStopsAway, getSmoothMem } from "@/lib/eta-smooth";
 
@@ -56,6 +57,9 @@ interface EtaResult {
   eta?: { etaSec?: number | null } | null;
   /** ★ v3.5.0：第二班车的量化 */
   eta2?: { etaSec?: number | null } | null;
+  /** ★ v3.5.1：未发车估算（发车间隔口径 · 分钟）——无在途车时的「下一班约 X~Y 分」 */
+  waitLo?: number | null;
+  waitHi?: number | null;
   busCount?: number;
   /** v0.13.x：等车站 = 本方向首站（总站/起点）——无车时显示「暂未发车」 */
   headTerminal?: boolean;
@@ -265,13 +269,14 @@ export default function LiveEta({
               <div key={r.route}>
                 {blockHead}
                 <p className="t-body t-muted" style={{ lineHeight: 1.7 }}>
-                  {r.headTerminal
+                  {(r.headTerminal
                     ? (r.busCount ?? 0) > 0
                       ? "暂未发车 · 总站暂无待发车"
                       : "暂未发车"
                     : (r.busCount ?? 0) > 0
                       ? "暂无车辆在途"
-                      : "暂无在线车辆"}
+                      : "暂无在线车辆") +
+                    (r.waitLo != null && r.waitHi != null ? ` · ${waitRangeText(r.waitLo, r.waitHi)}` : "")}
                 </p>
               </div>
             );

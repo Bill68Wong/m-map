@@ -227,7 +227,7 @@ export default function RecommendCard({
                   tierCtx={{ walkMin: card.walkOut.minutes, walkDistM: card.walkOut.distanceM }}
                 />
               ) : (
-                <EtaText text={first.liveText || `等 ${first.waitMin} 分`} />
+                <EtaText text={first.liveText || `等 ${Math.round(first.waitMin)} 分`} />
               )
             }
             /* ★ v3.3.0（AC-107）：赶车提示 = **合并式** TierBadge（带时刻文案进 `catchHint`，

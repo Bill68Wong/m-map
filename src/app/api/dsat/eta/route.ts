@@ -3,6 +3,7 @@ import { queryEta, type EtaBus } from "@/lib/dsat/eta";
 import { getPool } from "@/lib/db";
 import { nowBucketOf } from "@/lib/rebuild/buckets";
 import { loadStatics } from "@/lib/recommend/query";
+import { headwayAt, loadHeadway } from "@/lib/recommend/headway";
 import { collectMoving, fetchLocSegments, toBusArrival } from "@/lib/recommend/live";
 
 /** 就近部署：Supabase 新加坡池化器 → sin1 */
@@ -61,6 +62,8 @@ export async function GET(req: NextRequest) {
       rest?: EtaBus[];
       eta?: unknown;
       eta2?: unknown;
+      waitLo?: number;
+      waitHi?: number;
     }[];
     const moving = collectMoving(results);
     const locOf = await fetchLocSegments(pool, moving);
@@ -87,6 +90,18 @@ export async function GET(req: NextRequest) {
           nowBucket,
           p2 ? (locOf.get(`${r.route}|${p2}`) ?? null) : null,
         );
+      }
+    }
+    // ★ v3.5.1：**未发车量化**——无在途车的线路按「发车间隔」估「下一班约 X~Y 分」
+    //   （口径与 estimateWait 降级一致：下界未知 → [0, 间隔上限]；Interval 表缺失则该线不出估算）
+    const hwIdx = await loadHeadway(pool);
+    const nowMs2 = Date.now();
+    for (const r of results) {
+      if (!r.ok || r.nearest) continue;
+      const hit = headwayAt(hwIdx, r.route, nowMs2);
+      if (hit) {
+        r.waitLo = 0;
+        r.waitHi = hit.hi;
       }
     }
   } catch {
