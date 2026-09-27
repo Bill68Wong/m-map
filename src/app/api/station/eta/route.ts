@@ -442,7 +442,11 @@ export async function GET(req: NextRequest) {
             platform: m.platform,
             dirLabel: m.dirLabel,
             stopsAway: n ? n.stopsAway : null,
-            etaMin: n ? Math.max(0, Math.round(n.loSec / 60)) : null,
+            // ★ v3.5.0：改用单值点估计 etaSec（含位置修正）；缺省回退区间中点（旧口径 loSec 在
+            //   v3.4.1 区间重标定后 = 0.6×base，会系统性偏低——本处修正）
+            etaMin: n
+              ? Math.max(0, Math.round((n.etaSec ?? (n.loSec + n.hiSec) / 2) / 60))
+              : null,
             ok: !!bl, // 有 BusLive = 查询成功（nearest 为空 = 该方向暂无在途车，仍算成功）
             kind: "bus" as const,
           };

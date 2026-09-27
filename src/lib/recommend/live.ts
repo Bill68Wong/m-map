@@ -34,10 +34,13 @@
  */
 import type { Pool } from "pg";
 import { queryEta, type EtaBus } from "@/lib/dsat/eta";
+import { getBusLocations } from "@/lib/dsat/client";
+import { wgs84ToGcj02 } from "@/lib/amap/coord";
+import { locateSegmentOf, type VehicleSegmentLocation } from "@/lib/nav/progress";
 import { queryLrtDepartures, type LrtPreload } from "@/lib/lrt/next-departures";
 import { idxsOf } from "./enumerate";
 import { headwayAt, type HeadwayIndex } from "./headway";
-import { lookupHop, type SegmentIndex } from "./segment-lookup";
+import { lookupHop, mainCodeOf, type SegmentIndex } from "./segment-lookup";
 import {
   HOP_HI_FACTOR,
   HOP_LO_FACTOR,
@@ -131,13 +134,15 @@ function fallbackHop(segIdx: SegmentIndex, route: string): number {
  *   status='1'（停靠挂载站）= 车还在站上 → 含第 1 跳
  *   status='0'（已离挂载站驶向下一站）= 第 1 跳已在路上 → 该跳算 0
  */
-function toBusArrival(
+export function toBusArrival(
   idx: RouteIndex,
   segIdx: SegmentIndex,
   route: string,
   dir: string,
   e: EtaBus,
   nowBucket: string,
+  /** ★ v3.5.0：该车的区间定位（区间进度模型结果；不可用传 null）——供「还有 N 站」单值化 */
+  locSeg: VehicleSegmentLocation | null = null,
 ): BusArrival {
   const hopMin: number[] = [];
   const pairs: [string, string][] =
@@ -168,16 +173,32 @@ function toBusArrival(
 
   const sum = hopMin.reduce((a, b) => a + b, 0);
   const first = hopMin[0] ?? 0;
-  // ★ v3.4.1 实测标定：剩余点估计 base（已离站扣第一跳）→ 区间 [0.6×base, 1.4×base]
-  //   （旧口径 [1.00×, 1.25×] 实测覆盖率仅 34.7% → 新口径 84.9%；依据 accuracy-report.txt）
-  const base = e.status === "0" ? Math.max(0, sum - first) : sum;
-  const loSec = Math.max(0, Math.round(base * 60 * HOP_LO_FACTOR));
+  // ★ v3.5.0：单值点估计 etaSec——「还有 N 站 · 约 X 分钟」的口径（区间 loSec/hiSec 围绕它派生）
+  //   ① 在途 + 位置可用（区间进度模型）→ 首跳位置剩余 + 后续静态跳
+  //      （实测：过半场景误差 −42%、将到场景 −59%——.verify/_track-progress-13-interval-k.mjs）
+  //   ② 在途 + 无位置 → sum − 首跳×0.5（「已离站位置未知」的期望中点——比旧「减整跳」居中）
+  //   ③ 在站停靠 → sum
+  let etaSec: number;
+  if (e.status === "0") {
+    const restSec = Math.max(0, (sum - first) * 60);
+    const expectedNext = mainCodeOf((e.hops && e.hops.length ? e.hops[0]?.[1] : pairs[0]?.[1]) ?? "");
+    if (locSeg && expectedNext && mainCodeOf(locSeg.toMain) === expectedNext) {
+      etaSec = locSeg.remainSecD + restSec;
+    } else {
+      etaSec = Math.max(0, sum * 60 - first * 60 * 0.5);
+    }
+  } else {
+    etaSec = sum * 60;
+  }
+  // ★ v3.4.1 实测标定：区间 [0.6×eta, 1.4×eta]（覆盖率 84.9%；accuracy-report.txt）
+  const loSec = Math.max(0, Math.round(etaSec * HOP_LO_FACTOR));
   return {
     stopsAway: e.stopsAway,
     atStation: e.atStation,
     status: e.status,
+    etaSec: Math.round(etaSec),
     loSec,
-    hiSec: Math.max(loSec, Math.round(base * 60 * HOP_HI_FACTOR)),
+    hiSec: Math.max(loSec, Math.round(etaSec * HOP_HI_FACTOR)),
     hopMin,
   };
 }
@@ -308,10 +329,14 @@ function buildBusLive(
   station: string,
   headway: HeadwayIndex | null,
   nowMs: number,
+  /** ★ v3.5.0：位置修正表（`route|plate` → 区间定位；缺省 = 不修正，静态降级） */
+  locOf?: Map<string, VehicleSegmentLocation>,
 ): BusLive {
   const dir = r.dir ?? "0";
   const toArr = (e: EtaBus | undefined) =>
-    e ? toBusArrival(idx, segIdx, r.route, dir, e, nowBucket) : null;
+    e
+      ? toBusArrival(idx, segIdx, r.route, dir, e, nowBucket, e.plate ? (locOf?.get(`${r.route}|${e.plate}`) ?? null) : null)
+      : null;
   const pool = [r.nearest, r.second, ...(r.rest ?? [])].filter((e): e is EtaBus => !!e && !e.passed);
   const arr = pool.map((e) => toArr(e)).filter((x): x is BusArrival => x !== null);
   const empty = arr.length === 0;
@@ -327,6 +352,72 @@ function buildBusLive(
     // 仅在全空时估算（有实车时不需要，保持原有精确路径）
     waitEstimate: empty ? estimateWait(r, station, idx, segIdx, nowBucket, headway, nowMs) ?? undefined : undefined,
   };
+}
+
+/** ★ v3.5.0：位置修正的最大线路数（超出不修正——静态降级，防止请求膨胀） */
+const MAX_LOC_ROUTES = 8;
+
+/**
+ * ★ v3.5.0（等车场景）：为「在途车」批量拉实时坐标 → 定位所在区间。
+ * 输入：`route|plate` → { route, dir, plate }（来自报站结果的 status='0' 车）。
+ * 输出：`route|plate` → 区间定位（供 toBusArrival 把首跳换成「位置剩余」）。
+ * ⚠️ 任一环缺失（无坐标/定位失败/超上限）→ 该车不进表 → 调用方按静态降级（宁缺勿错）。
+ */
+export async function fetchLocSegments(
+  pool: Pool,
+  moving: Map<string, { route: string; dir: string; plate: string }>,
+): Promise<Map<string, VehicleSegmentLocation>> {
+  const out = new Map<string, VehicleSegmentLocation>();
+  if (!moving.size) return out;
+  const rds = [...new Set([...moving.values()].map((x) => `${x.route}|${x.dir}`))].slice(0, MAX_LOC_ROUTES);
+  await Promise.all(
+    rds.map(async (rd) => {
+      const [route, dir] = rd.split("|") as [string, string];
+      try {
+        const res = await getBusLocations(route, dir, "recommend");
+        const list = res.ok ? res.data?.busInfoList : undefined;
+        if (!list?.length) return;
+        const locByPlate = new Map<string, { lat: number; lng: number }>();
+        for (const c of list) {
+          const p = String(c.busPlate ?? "").trim();
+          const lat = Number(c.latitude);
+          const lng = Number(c.longitude);
+          if (p && Number.isFinite(lat) && Number.isFinite(lng)) locByPlate.set(p, { lat, lng });
+        }
+        for (const mv of moving.values()) {
+          if (mv.route !== route || mv.dir !== dir) continue;
+          const loc = locByPlate.get(mv.plate);
+          if (!loc) continue;
+          // loc 坐标为 WGS84 → 转 GCJ（route_shapes 为 GCJ）
+          const gcj = wgs84ToGcj02({ lat: loc.lat, lng: loc.lng });
+          const seg = await locateSegmentOf(pool, route, dir, gcj.lat, gcj.lng);
+          if (seg) out.set(`${route}|${mv.plate}`, seg);
+        }
+      } catch {
+        /* 单线失败 → 该组装车不修正（调用方静态降级） */
+      }
+    }),
+  );
+  return out;
+}
+
+/** ★ v3.5.0：位置修正拉取的整体超时（ms）——超时 → 全部按静态降级 */
+const LOC_FIX_TIMEOUT_MS = 1_500;
+
+/** ★ v3.5.0：从桶结果收集「在途（status='0'）且有车牌」的车——位置修正的输入 */
+export function collectMoving(
+  res: { route: string; ok: boolean; dir?: string; nearest?: EtaBus; second?: EtaBus; rest?: EtaBus[] }[],
+): Map<string, { route: string; dir: string; plate: string }> {
+  const moving = new Map<string, { route: string; dir: string; plate: string }>();
+  for (const r of res) {
+    if (!r.ok || !r.dir) continue;
+    for (const e of [r.nearest, r.second, ...(r.rest ?? [])]) {
+      if (e && e.status === "0" && e.plate) {
+        moving.set(`${r.route}|${e.plate}`, { route: r.route, dir: r.dir, plate: e.plate });
+      }
+    }
+  }
+  return moving;
 }
 
 /** 超时包装：到点即抛，由调用方按「该桶无数据」处理 */function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
@@ -460,6 +551,13 @@ export async function fetchLive(
               BUCKET_TIMEOUT_MS,
               key,
             );
+            // ★ v3.5.0：位置修正——对本桶「在途车」拉 loc → 定位区间（超时/失败 → 静态降级）
+            const moving = collectMoving(res);
+            const locOf = await withTimeout(
+              fetchLocSegments(pool, moving),
+              LOC_FIX_TIMEOUT_MS,
+              `locfix:${key}`,
+            ).catch(() => new Map<string, VehicleSegmentLocation>());
             for (const r of res)
               put(
                 r.route,
@@ -472,6 +570,7 @@ export async function fetchLive(
                   b.station,
                   opts.headway ?? null,
                   opts.nowMs ?? Date.now(),
+                  locOf,
                 ),
               );
             dsatCalls += b.routes.length;
@@ -577,7 +676,7 @@ export async function fetchStationLive(
   segIdx: SegmentIndex,
   opts: { nowBucket: string; nowMs?: number },
 ): Promise<Map<string, BusLive>> {
-  void pool; // 巴士侧不需要 pool（走 DSAT + 注入索引）；保留参数以对齐 fetchLive 签名
+  // ★ v3.5.0：pool 现用于「位置修正」的区间定位（locateSegmentOf 读 shape/里程表/时长表，模块级缓存）
   const nowBucket = opts.nowBucket;
   const out = new Map<string, BusLive>();
 
@@ -603,12 +702,17 @@ export async function fetchStationLive(
         const key = `${b.station}→${b.dest} [${b.routes.join(",")}]`;
         try {
           const res = await withTimeout(queryBusBucket(idx, b), BUCKET_TIMEOUT_MS, key);
+          // ★ v3.5.0：位置修正——对本桶「在途车」拉 loc → 定位区间（超时/失败 → 静态降级）
+          const moving = collectMoving(res);
+          const locOf = await withTimeout(fetchLocSegments(pool, moving), LOC_FIX_TIMEOUT_MS, `locfix:${key}`).catch(
+            () => new Map<string, VehicleSegmentLocation>(),
+          );
           // ★ 2026-09-21：站级实时（非路线推荐链路）暂不做「未发车估算」⇒ headway 传 null，
           //   行为与旧版完全一致（等需要时再接，避免这次改动面扩散）。
           for (const r of res)
             out.set(
               `${r.route}@${b.station}`,
-              buildBusLive(r, idx, segIdx, nowBucket, b.station, null, Date.now()),
+              buildBusLive(r, idx, segIdx, nowBucket, b.station, null, Date.now(), locOf),
             );
         } catch {
           // 超时/失败 → 该桶的线路不出现在结果里（调用方按「无实时数据」降级展示）

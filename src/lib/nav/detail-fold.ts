@@ -18,7 +18,7 @@
 import type { Pool } from "pg";
 import { nowBucketOf } from "@/lib/rebuild/buckets";
 import { fetchStationLive } from "@/lib/recommend/live";
-import { rangeText } from "@/lib/recommend/catch-up";
+import { etaTextOf } from "@/lib/recommend/catch-up";
 import { mainCodeOf } from "@/lib/recommend/segment-lookup";
 import type { RecStatic } from "@/lib/recommend/query";
 
@@ -71,7 +71,7 @@ export async function foldLiveAt(
     const live = await fetchStationLive(pool, jobs, st.routeIdx, st.segIdx, { nowBucket, nowMs });
     for (const r of Object.keys(stopCodeOf)) {
       const b = live.get(`${r}@${stopCodeOf[r]}`)?.nearest ?? null;
-      out[r] = b ? `还有 ${b.stopsAway} 站 · ${rangeText(b.loSec, b.hiSec)}` : "暂无班次信息";
+      out[r] = b ? `还有 ${b.stopsAway} 站 · ${etaTextOf(b)}` : "暂无班次信息";
     }
   } catch {
     /* 实时不可用 → 收敛为空（折叠栏仍显示线路标签） */

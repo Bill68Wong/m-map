@@ -429,6 +429,16 @@ export interface BusArrival {
   loSec: number;
   /** 到用户站的区间上限（秒） */
   hiSec: number;
+  /**
+   * ★ v3.5.0：到用户站的**单值点估计**（秒）——依据（优先级）：
+   *   ① 在途 + 位置可用（区间进度模型）→ 首跳位置剩余 + 后续静态跳；
+   *   ② 在途无位置 → sum − 首跳×0.5（区间中点的期望）；
+   *   ③ 在站停靠 → sum。
+   * 显示层统一用 `etaTextOf`：估时车（estimated）走区间，其余走「约 X 分钟」单值。
+   */
+  etaSec?: number;
+  /** ★ v3.5.0：true = 该值来自「未发车·班距估算」（无在途车）——显示保持「约 X~Y 分」 */
+  estimated?: boolean;
   /** 区间下限对应的「跳数」（用于文案） */
   hopMin: number[];
 }

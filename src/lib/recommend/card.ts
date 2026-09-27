@@ -18,6 +18,7 @@
  */
 import type { Pool } from "pg";
 import { nowBucketOf } from "@/lib/rebuild/buckets";
+import { etaTextOf } from "./catch-up";
 import { modelOption } from "./model";
 import { optionsFor, contextFor, loadStatics, type RecStatic } from "./query";
 import { lookupHop } from "./segment-lookup";
@@ -231,7 +232,7 @@ async function buildReports(
       if (lv && !lv.empty) {
         live = true;
         const n = lv.nearest;
-        liveText = n ? `还有 ${n.stopsAway} 站 · 约 ${Math.max(1, Math.round(n.loSec / 60))}~${Math.max(1, Math.round(n.hiSec / 60))} 分` : "有车";
+        liveText = n ? `还有 ${n.stopsAway} 站 · ${etaTextOf(n)}` : "有车";
         // ★ 只把该线自己的 live 注入模型，避免其它线的实时数据污染（model.ts 的取用键是 route）
         if (seed) {
           const m = modelOption(seed, { ...ctx, live: new Map([[r.route, lv]]) as never });

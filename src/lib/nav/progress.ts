@@ -37,6 +37,20 @@ export interface VehicleProgress {
   segLenM: number;
 }
 
+/** ★ v3.5.0（等车场景）：**自动定位**车辆所在区间——无需已知 from/to（供「还有 N 站」位置修正） */
+export interface VehicleSegmentLocation {
+  /** 区间起点站（主码，= 车刚离开的站） */
+  fromMain: string;
+  /** 区间终点站（主码，= 车的下一站） */
+  toMain: string;
+  /** 相对进度 0-1 */
+  p: number;
+  /** 该区间中位时长（秒） */
+  mdSec: number;
+  /** 位置模型「到下一站」剩余（秒）= md × h[段型][1−p] */
+  remainSecD: number;
+}
+
 interface ShapeRec {
   pts: [number, number][];
   cum: number[];
@@ -193,4 +207,52 @@ export async function attachProgress(
       segLenM: Math.round(segLenM),
     };
   }
+}
+
+/**
+ * ★ v3.5.0：**自动定位**单车所在区间（等车场景 · 「还有 N 站」的位置修正用）。
+ *   与 `attachProgress` 的区别：无需已知 from/to——直接拿「线路全部站里程链」找包含车辆里程的最小间隔。
+ *   环线安全：排序后仅取「间隔 ≥ 60m」的相邻对；坐标/数据异常 → 返回 null（调用方降级，宁缺勿错）。
+ */
+export async function locateSegmentOf(
+  pool: Pool,
+  route: string,
+  dir: string,
+  lat: number,
+  lng: number,
+): Promise<VehicleSegmentLocation | null> {
+  const [shape, miles, hops] = await Promise.all([getShape(pool, route, dir), getMiles(pool, route, dir), getHops(pool, route)]);
+  if (!shape || !miles.size || !hops.size) return null;
+
+  const stations: { m: number; main: string }[] = [];
+  for (const [main, arr] of miles) for (const m of arr) stations.push({ m, main });
+  stations.sort((a, b) => a.m - b.m);
+  if (stations.length < 2) return null;
+
+  const m = projectMile(shape, [lng, lat]);
+  let best: { from: string; to: string; mf: number; mt: number } | null = null;
+  for (let i = 0; i + 1 < stations.length; i++) {
+    const a = stations[i]!;
+    const b = stations[i + 1]!;
+    const gap = b.m - a.m;
+    if (gap < 60) continue; // 同站双行/退化间隔 → 跳过
+    if (m >= a.m - 80 && m <= b.m + 80) {
+      if (!best || gap < best.mt - best.mf) best = { from: a.main, to: b.main, mf: a.m, mt: b.m };
+    }
+  }
+  if (!best) return null;
+
+  const md = hops.get(`${best.from}|${best.to}`);
+  if (!md || md <= 0) return null;
+  const segLenM = best.mt - best.mf;
+  const p = Math.min(1, Math.max(0, (m - best.mf) / segLenM));
+  const type = progressTypeOf(segLenM, md);
+  const bi = Math.min(19, Math.max(0, Math.floor((1 - p) * 20)));
+  return {
+    fromMain: best.from,
+    toMain: best.to,
+    p: Math.round(p * 1000) / 1000,
+    mdSec: Math.round(md),
+    remainSecD: Math.round(md * PROGRESS_H[type][bi]!),
+  };
 }

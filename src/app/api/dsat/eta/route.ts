@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { queryEta } from "@/lib/dsat/eta";
+import { queryEta, type EtaBus } from "@/lib/dsat/eta";
+import { getPool } from "@/lib/db";
+import { nowBucketOf } from "@/lib/rebuild/buckets";
+import { loadStatics } from "@/lib/recommend/query";
+import { collectMoving, fetchLocSegments, toBusArrival } from "@/lib/recommend/live";
 
 /** 就近部署：Supabase 新加坡池化器 → sin1 */
 export const preferredRegion = "sin1";
@@ -41,5 +45,53 @@ export async function GET(req: NextRequest) {
     }
   }
   const data = await queryEta(station, routes, dir, dest, force, stationByRoute);
+
+  // ★ v3.5.0：「还有 N 站」全面量化——对在途/在站车补单值「约 X 分钟」（含区间进度位置修正）。
+  //   整体 try/catch：任何一环失败 → 只返回原 data（旧行为，前端自动降级不显示分钟）。
+  try {
+    const pool = getPool();
+    const st = await loadStatics(pool);
+    const nowBucket = nowBucketOf(Date.now());
+    const results = data.results as unknown as {
+      route: string;
+      ok: boolean;
+      dir?: string;
+      nearest?: EtaBus;
+      second?: EtaBus;
+      rest?: EtaBus[];
+      eta?: unknown;
+      eta2?: unknown;
+    }[];
+    const moving = collectMoving(results);
+    const locOf = await fetchLocSegments(pool, moving);
+    for (const r of results) {
+      if (!r.ok || !r.nearest) continue;
+      const plate = r.nearest.plate ?? null;
+      r.eta = toBusArrival(
+        st.routeIdx,
+        st.segIdx,
+        r.route,
+        r.dir ?? dir,
+        r.nearest,
+        nowBucket,
+        plate ? (locOf.get(`${r.route}|${plate}`) ?? null) : null,
+      );
+      if (r.second) {
+        const p2 = r.second.plate ?? null;
+        r.eta2 = toBusArrival(
+          st.routeIdx,
+          st.segIdx,
+          r.route,
+          r.dir ?? dir,
+          r.second,
+          nowBucket,
+          p2 ? (locOf.get(`${r.route}|${p2}`) ?? null) : null,
+        );
+      }
+    }
+  } catch {
+    /* 量化增强失败 → 保持原响应（前端不显示分钟） */
+  }
+
   return NextResponse.json(data);
 }

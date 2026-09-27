@@ -59,7 +59,7 @@
 import { PLACE_SHORT } from "@/lib/home-plans-shared";
 import { hhmmOf } from "@/lib/lrt/eta";
 import type { AmapPlanSeed, WalkResolver } from "@/lib/nav/types";
-import { pickCatchTier, rangeText, tierHintOf, tierTextOf, type TierSpeedOverride } from "./catch-up";
+import { etaTextOf, pickCatchTier, tierHintOf, tierTextOf, type TierSpeedOverride } from "./catch-up";
 import { conservativeWaitMin, headwayAt, headwayMedian, type HeadwayIndex } from "./headway";
 import { cmpByPref, PREF_DEFAULTS, type Prefs } from "./score";
 import { mainCodeOf, rideOfHops, type SegmentIndex } from "./segment-lookup";
@@ -499,7 +499,7 @@ export function modelOption(seed: OptionSeed, ctx: ModelContext): ModeledOption 
       }
       boardAtMs = nowMs + chosen.loSec * 1000;
       tier = t0;
-      liveText = `还有 ${chosen.stopsAway} 站 · ${rangeText(chosen.loSec, chosen.hiSec)}`;
+      liveText = `还有 ${chosen.stopsAway} 站 · ${etaTextOf(chosen)}`;
       waitMin0 = Math.max(0, (boardAtMs - cursor) / 60_000);
     }
   } else {
@@ -792,7 +792,7 @@ export function modelOption(seed: OptionSeed, ctx: ModelContext): ModeledOption 
         // ★ v2.3.0（A3）：打上所属线路码（并行线后续班次合并后按 route 分组）
         route: first.route,
         stopsAway: b.stopsAway,
-        waitText: rangeText(b.loSec, b.hiSec),
+        waitText: etaTextOf(b),
         tier: t,
         tierText: tierTextOf(t),
         totalMin: Math.round(((b.loSec * 1000 + restMs) / 60_000) * 10) / 10,

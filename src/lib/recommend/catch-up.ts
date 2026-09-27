@@ -131,3 +131,20 @@ export function rangeText(loSec: number, hiSec: number): string {
   if ((hi > lo * 2 && hi - lo >= 15) || hi > 45) return `约 ${lo} 分起`;
   return `约 ${lo}~${hi} 分`;
 }
+
+/**
+ * ★ v3.5.0：**报站剩余的统一显示口径**（「还有 N 站」的分钟部分）。
+ *
+ *   · 在途/在站**实车**（`etaSec` 可用）→ **单值「约 X 分钟」**——
+ *     区间进度模型已消解「车在区间的哪一段」这层不确定性（实测：过半场景误差 −42%、将到 −59%），
+ *     单值比宽区间更有决策价值（用户 2026-09-27 口径：「有把握的结果应是约 X 分钟」）。
+ *   · **未发车估算**（`estimated`）或 `etaSec` 缺失 → 区间 `rangeText`——
+ *     发车间隔本质上是一个区间，此处保留「约 X~Y 分」。
+ */
+export function etaTextOf(a: { etaSec?: number | null; loSec: number; hiSec: number; estimated?: boolean }): string {
+  if (!a.estimated && a.etaSec != null && a.etaSec >= 0) {
+    const m = Math.max(1, Math.round(a.etaSec / 60));
+    return `约 ${m} 分钟`;
+  }
+  return rangeText(a.loSec, a.hiSec);
+}
