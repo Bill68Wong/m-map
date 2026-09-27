@@ -61,7 +61,7 @@ import { hhmmOf } from "@/lib/lrt/eta";
 import type { AmapPlanSeed, WalkResolver } from "@/lib/nav/types";
 import { pickCatchTier, rangeText, tierHintOf, tierTextOf, type TierSpeedOverride } from "./catch-up";
 import { conservativeWaitMin, headwayAt, headwayMedian, type HeadwayIndex } from "./headway";
-import { cmpByPref, PREF_DEFAULTS, TRANSFER_SAFETY_MIN, type Prefs } from "./score";
+import { cmpByPref, PREF_DEFAULTS, type Prefs } from "./score";
 import { mainCodeOf, rideOfHops, type SegmentIndex } from "./segment-lookup";
 import {
   LRT_HOP_FALLBACK_SEC,
@@ -677,10 +677,14 @@ export function modelOption(seed: OptionSeed, ctx: ModelContext): ModeledOption 
         ctx.excluded.push(next.route);
         return null;
       }
-      // ★ B4 顺延闸门（§h.3）：取「到达换乘站 + 安全余量」之后**能赶上**的第一班；
+      // ★ B4 顺延闸门（§h.3）：取「到达换乘站」之后**能赶上**的第一班；
       //   赶不上最近一班 ⇒ 顺延到能赶上的下一班（并计入等待）；
       //   末班（无后续）→ 剔除该换乘方案。
-      const need = cursor + TRANSFER_SAFETY_MIN * 60_000;
+      // ★ 2026-09-27（用户口径）：**轻轨换乘不再叠加安全余量**——缓冲已由
+      //   「进站等效距离（1.5 min）」与「换乘步行（協和 4 / 蓮花 5 min）」承担，
+      //   旧值 `need = cursor + TRANSFER_SAFETY_MIN`（+3 min）会让明明能赶上的早班被跳过
+      //   ⇒ 现直接以精算到达时刻（`cursor` = 到站 + 换乘步行）作为选班起点。
+      const need = cursor;
       const depMs = lv.departures.find((d) => d >= need);
       if (depMs === undefined) {
         ctx.excluded.push(next.route);
