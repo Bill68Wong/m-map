@@ -16,7 +16,7 @@
  *     失败一律收敛为空，不阻塞。
  */
 import type { Pool } from "pg";
-import { nowBucketOf } from "@/lib/rebuild/buckets";
+import { nowBucketOfHolidayAware } from "@/lib/rebuild/holidays";
 import { fetchStationLive } from "@/lib/recommend/live";
 import { etaTextOf } from "@/lib/recommend/catch-up";
 import { mainCodeOf } from "@/lib/recommend/segment-lookup";
@@ -50,7 +50,7 @@ export async function foldLiveAt(
   routes: string[],
   nowMs: number,
 ): Promise<Record<string, string>> {
-  const nowBucket = nowBucketOf(nowMs);
+  const nowBucket = await nowBucketOfHolidayAware(pool, nowMs);
   const jobs: { station: string; dest: string; routes: string[] }[] = [];
   const stopCodeOf: Record<string, string> = {};
   for (const r of routes) {

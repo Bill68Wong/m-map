@@ -30,7 +30,7 @@
  */
 import type { Pool } from "pg";
 import { gcj02ToWgs84, haversineM } from "@/lib/amap/coord";
-import { nowBucketOf } from "@/lib/rebuild/buckets";
+import { nowBucketOfHolidayAware } from "@/lib/rebuild/holidays";
 import { fixWalkDistance, walkMinutes } from "@/lib/amap/walk-fix";
 import { fetchTransitPlans, type RawPlan, type TransitCacheIo, type AmapTransitRawResponse } from "@/lib/amap/transit";
 import { fetchLive } from "@/lib/recommend/live";
@@ -495,7 +495,7 @@ export async function planNav(pool: Pool, input: NavInput): Promise<NavOutput> {
 
   // ⑥ 实时（两来源共用一次）
   const tLive = Date.now();
-  const nowBucket = nowBucketOf(nowMs);
+  const nowBucket = await nowBucketOfHolidayAware(pool, nowMs);
   // ★ B4（需求 7）：发车间隔索引 —— 既供 `fetchLive` 做「未发车估算」（旧行为），
   //   **也注入 `ModelContext.headway`** 供 `model.ts` 第 2 段巴士等车按到达时刻查班距（§h.2）。
   //   失败/表不存在 ⇒ `loadHeadway` 内部兜底（空索引）⇒ 第 2 段等车明示降级（waitMin=null）。
@@ -512,7 +512,7 @@ export async function planNav(pool: Pool, input: NavInput): Promise<NavOutput> {
   // ★ v2.4.1：`destLabel` = 目的地展示名 —— 供 `model.ts` 把末段步行文案写成
   //   「步行 N 分 → 目的地」。**必须由这里显式传入**：本链路的 `toSlug` 对非预设地点
   //   会兜底成 `"place"`，模型层靠 slug 反查只能得到 slug 原文。
-  const baseCtx = { ...contextFor(st, nowMs, zone, batch.live), tierOverride, destLabel: dest.label, headway };
+  const baseCtx = { ...contextFor(st, nowMs, zone, batch.live, nowBucket), tierOverride, destLabel: dest.label, headway };
 
   // ⑦ 建模
   const tModel = Date.now();

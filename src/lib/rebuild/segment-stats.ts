@@ -43,6 +43,7 @@
  */
 import type { Pool } from "pg";
 import { bucketOf, bucketOfRoute, macauParts } from "./buckets";
+import { getHolidays, macauDayOf } from "./holidays";
 
 /**
  * ★ v3.4.0：`bucketOf` / `macauParts` 已迁移至 `./buckets`（零依赖共享层）——
@@ -507,6 +508,8 @@ export async function rebuildSegmentStats(
   //   桶从**观测时刻重算**（events 与 samples 两路统一口径；不信任样本携带的 bucket 值）。
   //   不再生成 weekday 精确行（实验⑦b/⑦c：星期维度无增益、周一可并入工作日池）。
   const keys = new Map<string, number[]>(); // route|from|to|weekday|bucket|kind -> minutes[]
+  // ★ v3.5.5：澳门公众假期集合（lrt_holidays——分桶的「节假日按周末同款」判定；缓存 TTL 6h）
+  const holidays = await getHolidays(pool);
   const push = (route: string, from: string, to: string, w: number, b: string, k: string, min: number) => {
     const key = `${route}|${from}|${to}|${w}|${b}|${k}`;
     if (!keys.has(key)) keys.set(key, []);
@@ -514,7 +517,8 @@ export async function rebuildSegmentStats(
   };
   for (const s of aggSamples) {
     const mp = macauParts(new Date(s.t));
-    const b2 = bucketOfRoute(mp.weekday, mp.hour);
+    // ★ v3.5.5：节假日按周末同款处理（澳门公众假期 ≈ 周末形态——数据源 lrt_holidays）
+    const b2 = bucketOfRoute(mp.weekday, mp.hour, holidays.has(macauDayOf(s.t)));
     push(s.route, s.from, s.to, -1, b2, s.arriveKind, s.minutes); // 新桶 + 档位
     push(s.route, s.from, s.to, -1, "all", s.arriveKind, s.minutes); // 兜底 + 档位
     push(s.route, s.from, s.to, -1, "all", "all", s.minutes); // 兜底 + 合并

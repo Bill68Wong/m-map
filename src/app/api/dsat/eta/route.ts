@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { queryEta, type EtaBus } from "@/lib/dsat/eta";
 import { getPool } from "@/lib/db";
-import { nowBucketOf } from "@/lib/rebuild/buckets";
+import { nowBucketOfHolidayAware } from "@/lib/rebuild/holidays";
 import { loadStatics } from "@/lib/recommend/query";
 import { headwayAt, loadHeadway } from "@/lib/recommend/headway";
 import { collectMoving, fetchLocSegments, toBusArrival } from "@/lib/recommend/live";
@@ -52,7 +52,7 @@ export async function GET(req: NextRequest) {
   try {
     const pool = getPool();
     const st = await loadStatics(pool);
-    const nowBucket = nowBucketOf(Date.now());
+    const nowBucket = await nowBucketOfHolidayAware(pool, Date.now());
     const results = data.results as unknown as {
       route: string;
       ok: boolean;

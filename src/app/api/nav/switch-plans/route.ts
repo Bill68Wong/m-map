@@ -37,7 +37,7 @@
 import { NextResponse } from "next/server";
 import { getPool } from "@/lib/db";
 import { gcj02ToWgs84 } from "@/lib/amap/coord";
-import { nowBucketOf } from "@/lib/rebuild/buckets";
+import { nowBucketOfHolidayAware } from "@/lib/rebuild/holidays";
 import { contextFor, loadStatics } from "@/lib/recommend/query";
 import { loadHeadway } from "@/lib/recommend/headway";
 import { fetchLive } from "@/lib/recommend/live";
@@ -248,7 +248,7 @@ export async function POST(req: Request) {
     });
 
     // ── ⑦ 实时（全候选一次性批量：DSAT 巴士 + 本库轻轨时刻表）──
-    const nowBucket = nowBucketOf(nowMs);
+    const nowBucket = await nowBucketOfHolidayAware(pool, nowMs);
     // 发车间隔索引失败不影响出卡（fetchLive 传 null = 不估算，退化为旧行为）
     const headway = await loadHeadway(pool).catch(() => null);
     const batch = await fetchLive(pool, seeds, st.routeIdx, st.segIdx, {
@@ -262,7 +262,7 @@ export async function POST(req: Request) {
     //   ★ B4（需求 7）：`headway` 同时注入模型上下文 —— 第 2 段巴士等车按到达时刻查班距（§h.2）。
     //   ⚠️ **偏好（prefs）不进本端点**：组内排序仍按 `totalMin`（07 §i.3 契约硬约束）。
     const baseCtx = {
-      ...contextFor(st, nowMs, null, batch.live),
+      ...contextFor(st, nowMs, null, batch.live, nowBucket),
       destLabel: destName || undefined,
       headway: headway ?? undefined,
     };

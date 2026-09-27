@@ -17,7 +17,7 @@
  *   3. 折叠栏那一批实时数据加**软闸**：整体超时 → `reports: []` + `liveDegraded: true`，绝不造假数据。
  */
 import type { Pool } from "pg";
-import { nowBucketOf } from "@/lib/rebuild/buckets";
+import { nowBucketOfHolidayAware } from "@/lib/rebuild/holidays";
 import { etaTextOf } from "./catch-up";
 import { modelOption } from "./model";
 import { optionsFor, contextFor, loadStatics, type RecStatic } from "./query";
@@ -96,7 +96,7 @@ export async function cardDetail(
   const st: RecStatic = await loadStatics(pool);
   const nowMs = input.nowMs ?? Date.now();
   // ★ v3.4.0：查询上下文由「星期」升级为「时段桶」（bucketOfRoute 五桶）——见 segment-lookup 头注
-  const nowBucket = nowBucketOf(nowMs);
+  const nowBucket = await nowBucketOfHolidayAware(pool, nowMs);
 
   // ④ 站条：每段载具一条。逐跳站点取 **seed 自己的 hops**（见文件头事实 1）
   const seeds = optionsFor(st, input.fromSlug, input.toSlug);
@@ -201,7 +201,7 @@ async function buildReports(
   thresholdMin: number,
 ): Promise<ReachReport[]> {
   const out: ReachReport[] = [];
-  const ctx = contextFor(st, nowMs, input.zone, liveMap as Map<string, never>);
+  const ctx = contextFor(st, nowMs, input.zone, liveMap as Map<string, never>, nowBucket);
 
   for (const r of reachable) {
     const alight = r.alights[0]!;

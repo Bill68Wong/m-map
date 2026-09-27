@@ -19,7 +19,7 @@
  *     这正是项目铁律「学校不同座 = 不同目的地」在缓存层的落实。
  */
 import type { Pool } from "pg";
-import { nowBucketOf } from "@/lib/rebuild/buckets";
+import { nowBucketOfHolidayAware } from "@/lib/rebuild/holidays";
 import { fetchLive, type LiveBatch } from "./live";
 import { loadHeadway } from "./headway";
 import { modelOption, sortCards, type ModeledOption } from "./model";
@@ -130,8 +130,9 @@ export async function recommend(
   const tLive = Date.now();
   // ★ B4（需求 7）：发车间隔索引注入实时层（未发车估算）与模型上下文（第 2 段巴士等车）
   const headway = await loadHeadway(pool);
+  const nowBucket = await nowBucketOfHolidayAware(pool, nowMs);
   const batch = await fetchLive(pool, seeds, st.routeIdx, st.segIdx, {
-    nowBucket: nowBucketOf(nowMs),
+    nowBucket,
     nowMs: input.nowMs,
     lrtPre: st.lrtPre,
     headway,
@@ -140,7 +141,7 @@ export async function recommend(
 
   // ④ 逐条建模
   const tModel = Date.now();
-  const ctx = { ...contextFor(st, nowMs, zone, batch.live), headway };
+  const ctx = { ...contextFor(st, nowMs, zone, batch.live, nowBucket), headway };
   const modeled: ModeledOption[] = [];
   for (const seed of seeds) {
     const m = modelOption(seed, ctx);

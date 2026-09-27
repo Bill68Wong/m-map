@@ -27,7 +27,7 @@
 import { NextResponse } from "next/server";
 import type { Pool } from "pg";
 import { getPool } from "@/lib/db";
-import { nowBucketOf } from "@/lib/rebuild/buckets";
+import { nowBucketOfHolidayAware } from "@/lib/rebuild/holidays";
 import { buildStrips } from "@/lib/nav/strips";
 import { foldDataOfCard } from "@/lib/nav/detail-fold";
 import { loadStatics } from "@/lib/recommend/query";
@@ -168,7 +168,7 @@ export async function POST(req: Request) {
     // ★ 静态索引与 leg 几何互相独立 ⇒ 并行（缩短 p95）；leg 内部查询也各自降级
     const [st, legs] = await Promise.all([loadStatics(pool), buildOverviewLegs(pool, card.rides)]);
     const nowMs = Date.now();
-    const nowBucket = nowBucketOf(nowMs);
+    const nowBucket = await nowBucketOfHolidayAware(pool, nowMs);
     const strips = buildStrips(card, {
       routeIdx: st.routeIdx,
       segIdx: st.segIdx,

@@ -33,16 +33,41 @@ export function bucketOf(h: number): string {
   return "night";
 }
 
-/** ★ v3.4.0 新五桶（数据驱动版；聚合与查询链的唯一口径）。 */
-export function bucketOfRoute(weekday: number, hour: number): string {
-  if (hour >= 7 && hour < 9) return weekday >= 1 && weekday <= 5 ? "am_work" : "am_weekend";
+/** ★ 聚合桶（重建 segment_stats 时每样本的归属）。
+ *
+ *  设计依据（2026-09-27 深夜 · 滚动原点 CV ①⑧/⑧b/⑧c，20.2 万段）：
+ *  · **am 按日型分池**（工作日/周末晨间差异 21%——必须隔离，防周末样本污染工作日晨间池）；
+ *  · **其余四桶不分日型**（CV 实证：混合池比「纯工作日池」更稳，工作日样本上 0.522 vs 0.534）；
+ *  · ★ v3.5.5：**节假日按「周末同款」处理**（澳门公众假期 ≈ 周末形态——`isHoliday` 由调用方判定，
+ *    数据源 = `lrt_holidays` 表，见 `./holidays`）。
+ */
+export function bucketOfRoute(weekday: number, hour: number, isHoliday = false): string {
+  const weekendLike = weekday === 0 || weekday === 6 || isHoliday;
+  if (hour >= 7 && hour < 9) return weekendLike ? "am_weekend" : "am_work";
   if (hour >= 9 && hour < 16) return "day";
   if (hour >= 16 && hour < 20) return "pm";
   return "night";
 }
 
-/** 查找上下文：由 epoch ms 构造（供 lookupHop 等消费方一键取桶）。 */
-export function nowBucketOf(ms: number): string {
+/** ★ 查询桶（运行时按「用户当前时刻」选池 · v3.5.4；★ v3.5.5 加节假日）。
+ *
+ *  设计依据（同上实验）：
+ *  · 工作日 → 五桶（与聚合桶一致：am_work/day/pm/night）；
+ *  · **周末与节假日 → 仅晨间独立池（am_weekend），其余时段走 `"all"`（全周池）**——
+ *    CV 实证周末分时段**有害**（周末样本 MADE 0.487 → 不分 0.442）；节假日同款处理。
+ */
+export function queryBucketOf(weekday: number, hour: number, isHoliday = false): string {
+  const weekendLike = weekday === 0 || weekday === 6 || isHoliday;
+  if (weekendLike) {
+    if (hour >= 7 && hour < 9) return "am_weekend";
+    return "all";
+  }
+  return bucketOfRoute(weekday, hour);
+}
+
+/** 查找上下文：由 epoch ms 构造（供 lookupHop 等消费方一键取桶）——查询口径。
+ *  ⚠️ 节假日感知版见 `./holidays` 的 `nowBucketOfHolidayAware`（server 侧，自动查假期表）。 */
+export function nowBucketOf(ms: number, isHoliday = false): string {
   const mp = macauParts(new Date(ms));
-  return bucketOfRoute(mp.weekday, mp.hour);
+  return queryBucketOf(mp.weekday, mp.hour, isHoliday);
 }

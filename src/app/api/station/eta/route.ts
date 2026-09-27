@@ -30,7 +30,7 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { getPool } from "@/lib/db";
-import { nowBucketOf } from "@/lib/rebuild/buckets";
+import { nowBucketOfHolidayAware } from "@/lib/rebuild/holidays";
 import {
   type BiasIndex,
   type BiasLineRow,
@@ -409,7 +409,7 @@ export async function GET(req: NextRequest) {
     } else {
       const st = await loadStatics(pool);
       const idx = st.routeIdx;
-      const nowBucket = nowBucketOf(nowMs);
+      const nowBucket = await nowBucketOfHolidayAware(pool, nowMs);
 
       // ② 枚举该主码出现的全部 (线路 × 方向)，构造「本站 → 下一站」查询作业
       const jobs: { station: string; dest: string; routes: string[] }[] = [];

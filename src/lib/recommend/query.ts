@@ -20,7 +20,6 @@
 import type { Pool } from "pg";
 import { unstable_cache } from "next/cache";
 import { getPool } from "@/lib/db";
-import { nowBucketOf } from "@/lib/rebuild/buckets";
 import {
   buildRouteIndexFromRows,
   queryRouteIndexRows,
@@ -295,14 +294,15 @@ export function optionsFor(st: RecStatic, fromSlug: string, toSlug: string): Opt
   return out;
 }
 
-/** 组装模型上下文（live 由调用方注入） */
+/** 组装模型上下文（live 由调用方注入；nowBucket 由调用方用 `nowBucketOfHolidayAware` 算好） */
 export function contextFor(
   st: RecStatic,
   nowMs: number,
   zone: SchoolZone | null,
   live: ModelContext["live"],
+  /** ★ v3.5.5：节假日感知查询桶（调用方 `await nowBucketOfHolidayAware(pool, nowMs)` 传入） */
+  nowBucket: string,
 ): ModelContext {
-  // ★ v3.4.0：查询上下文只用到「时段桶」（bucketOfRoute 五桶）——星期维度已废弃
   return {
     nowMs,
     segIdx: st.segIdx,
@@ -314,7 +314,7 @@ export function contextFor(
     live,
     excluded: [],
     missed: [],
-    nowBucket: nowBucketOf(nowMs),
+    nowBucket,
   };
 }
 
