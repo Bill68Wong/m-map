@@ -4370,6 +4370,27 @@ html[data-sheet-dragging="on"] .nav-locate-fab {
   flex: none;
   font-size: 12px;
 }
+/* ★ 2026-09-27（用户口径）：搜索结果条目统一两行布局 —— 左：地点名（大字）+ 地址（小字）；右：直线距离 */
+.ssheet__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.ssheet__addr {
+  font-size: var(--text-2xs, 11px);
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ssheet__dist {
+  flex: none;
+  font-size: var(--text-2xs, 11px);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
 .ssheet__empty {
   padding: 24px 14px;
   text-align: center;

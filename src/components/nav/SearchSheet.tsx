@@ -76,6 +76,20 @@ export interface SearchSheetProps {
 }
 
 /** 球面距离（米）—— 与 `coord.ts#haversineM` 同口径；此处**内联**，避免客户端拉进服务端模块 */
+/** 澳门行政区划词（用于地址清洗；**不含**「氹仔/路环」这类地名——它们可作为地址开头）
+ * ★ 2026-09-27（用户口径）：搜索结果统一「地点名 + 地址（小字）」，不显示行政区划。 */
+const MACAU_ZONE_WORDS =
+  "澳门|澳門|花地玛堂区|花地瑪堂區|圣安多尼堂区|聖安多尼堂區|大堂区|大堂區|望德堂区|望德堂區|风顺堂区|風順堂區|嘉模堂区|嘉模堂區|圣方济各堂区|聖方濟各堂區|路氹填海区|路氹填海區";
+const MACAU_ZONE_RE = new RegExp(`^(${MACAU_ZONE_WORDS})[·\\s]*`);
+
+/** 地址清洗：剥离区划前缀（最多 3 层）；清洗后为空 ⇒ 返回空串（该条目不显示地址行） */
+function cleanAddr(a?: string | null): string {
+  if (!a) return "";
+  let s = a.trim();
+  for (let i = 0; i < 3 && MACAU_ZONE_RE.test(s); i++) s = s.replace(MACAU_ZONE_RE, "");
+  return s.replace(/[·\s]+$/g, "");
+}
+
 function distMeters(a: { lng: number; lat: number }, b: { lng: number; lat: number }): number {
   const R = 6371008.8;
   const rad = (d: number) => (d * Math.PI) / 180;
@@ -305,8 +319,10 @@ export default function SearchSheet({
                     }
                   >
                     <span className="ssheet__type ssheet__type--station">公交站</span>
-                    <span className="ssheet__name">{`${s.code} ${s.name}`.trim()}</span>
-                    <span className="ssheet__meta t-muted">{s.distM} m</span>
+                    <span className="ssheet__main">
+                      <span className="ssheet__name">{`${s.code} ${s.name}`.trim()}</span>
+                    </span>
+                    <span className="ssheet__dist">{s.distM} m</span>
                   </button>
                 ))}
               </div>
@@ -344,16 +360,21 @@ export default function SearchSheet({
         {/* ── 已输入：结果列表 ── */}
         {q.trim() && (
           <div className="ssheet__list">
-            {results.map((r, i) => (
-              <button key={`${r.name}-${i}`} type="button" className="ssheet__item" onClick={() => pick(r)}>
-                <span className={`ssheet__type ssheet__type--${r.kind}`}>{TYPE_LABEL[r.kind] ?? "地点"}</span>
-                <span className="ssheet__name">{displayName(r)}</span>
-                {/* ★ v3.3.0（AC-104）：来源字串去「来自」→ 仅「高德」；搜索结果**不显示区名**（district 不渲染） */}
-                {r.source !== "local" && <span className="ssheet__badge">高德</span>}
-                {r.address && <span className="ssheet__meta t-muted">{r.address}</span>}
-                {typeof r.distM === "number" && <span className="ssheet__meta t-muted">{r.distM} m</span>}
-              </button>
-            ))}
+            {results.map((r, i) => {
+              /* ★ 2026-09-27（用户口径）：两行布局——左列「地点名（大字）+ 地址（小字）」；右侧直线距离；
+                 「高德」来源标签与行政区划不再展示（地址已剥离区划前缀）。 */
+              const addr = cleanAddr(r.address);
+              return (
+                <button key={`${r.name}-${i}`} type="button" className="ssheet__item" onClick={() => pick(r)}>
+                  <span className={`ssheet__type ssheet__type--${r.kind}`}>{TYPE_LABEL[r.kind] ?? "地点"}</span>
+                  <span className="ssheet__main">
+                    <span className="ssheet__name">{displayName(r)}</span>
+                    {addr && <span className="ssheet__addr t-muted">{addr}</span>}
+                  </span>
+                  {typeof r.distM === "number" && <span className="ssheet__dist">{r.distM} m</span>}
+                </button>
+              );
+            })}
 
             {pending.map((p, i) => (
               <button

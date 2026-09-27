@@ -336,14 +336,28 @@ function walkView(ctx: ModelContext, slug: string, station: string, dir: "out" |
   // ★ v3.3.0（AC-106）：**轻轨站**的进/出站步行**按距离常量折算**（不写死分钟）——
   //   dir="out"（出发地→上车站）= 进站 ⇒ `inM`；dir="in"（下车站→目的地）= 出站 ⇒ `outM`。
   //   分钟 = 米 ÷ 基准速度（84）；**分档缩放由 `catch-up.ts#requiredSec` 单一负责**（此处禁再乘 SPEED_RATIO）。
+  // ⚠️ 2026-09-27 修正（线上实测：「石排灣→科大」的走協和卡步行显示 2 分/168 米，实际 ~1.3km）：
+  //   「站内进/出站常量」**必须叠加在站外真实步行之上**，**不得替换**站外段——
+  //   石排灣站→協和站 的站外步行曾因本分支被整体吞掉（石排灣线 100 秒车程 vs 走路 1.3km）。
+  //   结构：站外步行（`ctx.walkResolver` 真实几何；无 ⇒ 0，覆盖「起点=本站」场景）＋ 站内常量。
   if (station.startsWith("LRT-")) {
-    const meters = lrtStationWalkM(dir === "out" ? "in" : "out");
+    const inDoorM = lrtStationWalkM(dir === "out" ? "in" : "out");
+    let outMin = 0;
+    let outMet = 0;
+    let outEst = false;
+    if (ctx.walkResolver) {
+      const info = dir === "out" ? ctx.walkResolver.out(mainCodeOf(station)) : ctx.walkResolver.in(mainCodeOf(station));
+      outMin = info.minutes;
+      outMet = info.distanceM ?? 0;
+      outEst = info.estimated;
+    }
+    const meters = Math.round(outMet) + inDoorM;
     return {
-      minutes: Math.round((meters / WALK_BASE_M_PER_MIN) * 10) / 10,
+      minutes: Math.round((outMin + inDoorM / WALK_BASE_M_PER_MIN) * 10) / 10,
       toLabel: destName || labelOf(ctx, station),
-      // level 2 = 有几何/常量依据（非估算）⇒ UI 不标「估算」；也是覆盖度闸门「实测」判据（ADR-105）
-      level: 2,
-      estimated: false,
+      // level 语义：站外为几何（估否随源）；站内为常量 ⇒ 无站外数据时 level 2（有常量依据）
+      level: outEst ? 3 : 2,
+      estimated: outEst,
       samples: 0,
       distanceM: meters,
     };
