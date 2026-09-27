@@ -6,7 +6,7 @@
  *   node node_modules/tsx/dist/cli.mjs scripts/import-segment-samples.ts --apply    # 写库
  *   ... --runs=N         只导入最近 N 轮（默认全部）
  *   ... --from-file=路径  只导入某个 derived.json
- *   ... --keep=N         滚动窗口保留轮数（默认 30；track 只留最近 N 轮，timer 永不删）
+ *   ... --keep=N         滚动窗口保留轮数（**默认 0 = 不清理**，2026-09-27 起；传正数才启用窗口；track 只留最近 N 轮，timer 永不删）
  *   ... --no-timer       跳过手动实测（source='timer'）导入
  *   # 或 npm run db:segsamples -- [--apply] [...]（npm script 只负责转发参数）
  *
@@ -34,7 +34,8 @@ const apply = process.argv.includes("--apply");
 const runsArg = arg("runs");
 const runs = runsArg ? Number(runsArg) : undefined;
 const keepArg = arg("keep");
-const keepRuns = keepArg ? Number(keepArg) : 30;
+// 2026-09-27 起默认 **0 = 不清理**（用户要求「保留所有轮」）；需要窗口时显式传 --keep=N。
+const keepRuns = keepArg ? Number(keepArg) : 0;
 const fromFile = arg("from-file") ?? undefined;
 const noTimer = process.argv.includes("--no-timer");
 
