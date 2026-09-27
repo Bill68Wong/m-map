@@ -40,6 +40,7 @@ import { headwayAt, type HeadwayIndex } from "./headway";
 import { lookupHop, type SegmentIndex } from "./segment-lookup";
 import {
   HOP_HI_FACTOR,
+  HOP_LO_FACTOR,
   type BusArrival,
   type BusLive,
   type LrtLive,
@@ -167,14 +168,16 @@ function toBusArrival(
 
   const sum = hopMin.reduce((a, b) => a + b, 0);
   const first = hopMin[0] ?? 0;
-  const lo = e.status === "0" ? sum - first : sum;
-  const loSec = Math.max(0, Math.round(lo * 60));
+  // ★ v3.4.1 实测标定：剩余点估计 base（已离站扣第一跳）→ 区间 [0.6×base, 1.4×base]
+  //   （旧口径 [1.00×, 1.25×] 实测覆盖率仅 34.7% → 新口径 84.9%；依据 accuracy-report.txt）
+  const base = e.status === "0" ? Math.max(0, sum - first) : sum;
+  const loSec = Math.max(0, Math.round(base * 60 * HOP_LO_FACTOR));
   return {
     stopsAway: e.stopsAway,
     atStation: e.atStation,
     status: e.status,
     loSec,
-    hiSec: Math.max(loSec, Math.round(sum * 60 * HOP_HI_FACTOR)),
+    hiSec: Math.max(loSec, Math.round(base * 60 * HOP_HI_FACTOR)),
     hopMin,
   };
 }

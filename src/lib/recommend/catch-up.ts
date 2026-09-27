@@ -125,6 +125,9 @@ export function rangeText(loSec: number, hiSec: number): string {
   const lo = Math.max(0, Math.floor(loSec / 60));
   const hi = Math.max(lo, Math.ceil(hiSec / 60));
   if (lo === hi) return `约 ${lo} 分`;
-  if (hi > lo * 2 && hi - lo >= 5) return `约 ${lo} 分起`;
+  // ★ v3.4.x：区间口径放宽到 [0.6×, 1.4×]（实测标定 · 覆盖率 34.7%→84.9%）后，
+  //   原降级条件（hi>2×lo 且宽≥5 分）触发过频（hi/lo 恒约 2.3）——多数行程被降级成「X 分起」。
+  //   放宽为：仅「非常宽」（宽 ≥15 分）或「超长」（hi>45 分）时降级（保留上限信息优先）。
+  if ((hi > lo * 2 && hi - lo >= 15) || hi > 45) return `约 ${lo} 分起`;
   return `约 ${lo}~${hi} 分`;
 }
