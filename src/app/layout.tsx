@@ -4,7 +4,7 @@ import { SpeedInsights } from "@vercel/speed-insights/next";
 import "./globals.css";
 
 /** 与 README 线上地址一致；`metadataBase` 只用于把相对 OG 图 URL 解析成绝对地址 */
-const SITE_URL = "https://musttoukou.vercel.app";
+const SITE_URL = "https://macaomap.vercel.app";
 
 export const metadata: Metadata = {
   title: { default: "M Map", template: "%s · M Map" },

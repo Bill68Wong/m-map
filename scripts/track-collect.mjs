@@ -112,7 +112,7 @@ const ROOT = path.resolve(process.cwd());
 // ❌ 不伪装成浏览器 · ❌ 不写 bot/crawler/spider 字样 · ❌ 不放中文或 emoji · ❌ 不放个人邮箱
 // 依据：docs/数据来源合规备忘-20260914.md §七 #1 —— **改格式时两处都要改**。
 const PKG_VERSION = JSON.parse(fs.readFileSync(path.resolve(ROOT, "package.json"), "utf8")).version;
-const USER_AGENT = `MUSTDengxiao/${PKG_VERSION} (+https://musttoukou.vercel.app; personal non-commercial)`;
+const USER_AGENT = `MUSTDengxiao/${PKG_VERSION} (+https://macaomap.vercel.app; personal non-commercial)`;
 
 const CFG = {
   minutes: Number(arg("minutes", "30")),

@@ -26,7 +26,7 @@
 import pkg from "../../../package.json";
 
 /** 项目说明页（对外可识别的身份入口） */
-export const DSAT_PROJECT_URL = "https://musttoukou.vercel.app";
+export const DSAT_PROJECT_URL = "https://macaomap.vercel.app";
 
 /**
  * 唯一的 DSAT 请求 UA。

@@ -255,8 +255,8 @@ export default function HelpPage() {
         </P>
         <P>
           专案网址：
-          <a href="https://musttoukou.vercel.app" style={{ color: "var(--primary)" }}>
-            musttoukou.vercel.app
+          <a href="https://macaomap.vercel.app" style={{ color: "var(--primary)" }}>
+            macaomap.vercel.app
           </a>
         </P>
       </section>

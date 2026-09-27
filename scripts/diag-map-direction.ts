@@ -25,7 +25,7 @@ try {
   /* noop */
 }
 
-const BASE = process.env.DIAG_BASE ?? "https://musttoukou.vercel.app";
+const BASE = process.env.DIAG_BASE ?? "https://macaomap.vercel.app";
 const ORIGIN = { lng: 113.5566, lat: 22.2001 }; // 待覆盖：脚本参数
 const DEST = { lng: 113.545883, lat: 22.194627 }; // 大三巴牌坊（高德 GCJ-02）
 
