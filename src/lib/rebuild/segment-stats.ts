@@ -35,28 +35,25 @@
  *   all —— 合并兜底
  * （board 作为起点归 stop 档：上客本身即停站。）
  *
- * ── 分层 ───────────────────────────────────────────────────────
- * weekday 0-6 + time_bucket am_peak|day|pm_peak|night（澳门时间）
- * 另写 weekday=-1 / time_bucket='all' 的兜底行（该 (route, from, to, kind) 全量样本）。
+ * ── 分层（★ v3.4.0 升级）────────────────────────────────────────
+ * weekday=-1 + time_bucket ∈ {am_work|am_weekend|day|pm|night}（`bucketOfRoute` 新五桶，
+ *   从观测时刻重算）+ arrive_kind（stop|pass）
+ * 另写 weekday=-1 / time_bucket='all' 的兜底行（kind 分层 + 合并）。
+ * 依据：docs/量化方案-导航站间时长-20260927.md §6（实验⑦a~⑦c 数据驱动推导）。
  */
 import type { Pool } from "pg";
+import { bucketOf, bucketOfRoute, macauParts } from "./buckets";
+import { getHolidays, macauDayOf } from "./holidays";
+
+/**
+ * ★ v3.4.0：`bucketOf` / `macauParts` 已迁移至 `./buckets`（零依赖共享层）——
+ *   此处 re-export 保持既有消费方（导入脚本等）的导入路径不变。
+ */
+export { bucketOf, macauParts } from "./buckets";
 
 /** 站码主码归一（剥掉站台号后缀：C690/3 → C690）。★ 导出供入库脚本复用，勿另起一套。 */
 export const mainCode = (code: string) => /^[A-Za-z]+\d+/.exec(code)?.[0] ?? code;
 const r1 = (n: number) => Math.round(n * 10) / 10;
-
-/** 时段分档（澳门时间小时 → am_peak|day|pm_peak|night）。★ 导出供入库脚本复用，勿另起一套。 */
-export function bucketOf(h: number): string {
-  if (h >= 7 && h < 10) return "am_peak";
-  if (h >= 10 && h < 17) return "day";
-  if (h >= 17 && h < 20) return "pm_peak";
-  return "night";
-}
-/** 澳门时间分量（GMT+8）。★ 导出供入库脚本复用，勿另起一套。 */
-export const macauParts = (t: Date) => {
-  const m = new Date(t.getTime() + 8 * 3600e3);
-  return { weekday: m.getUTCDay(), hour: m.getUTCHours() };
-};
 
 /** 归一化后的站点事件类型 */
 type Kind = "arrive" | "pass" | "skip" | "board" | "alight" | "pre";
@@ -507,14 +504,22 @@ export async function rebuildSegmentStats(
   }
 
   // ================= ④ 聚合 =================
+  // ★ v3.4.0：分层键升级为「-1 | bucketOfRoute 新五桶 | kind」——
+  //   桶从**观测时刻重算**（events 与 samples 两路统一口径；不信任样本携带的 bucket 值）。
+  //   不再生成 weekday 精确行（实验⑦b/⑦c：星期维度无增益、周一可并入工作日池）。
   const keys = new Map<string, number[]>(); // route|from|to|weekday|bucket|kind -> minutes[]
+  // ★ v3.5.5：澳门公众假期集合（lrt_holidays——分桶的「节假日按周末同款」判定；缓存 TTL 6h）
+  const holidays = await getHolidays(pool);
   const push = (route: string, from: string, to: string, w: number, b: string, k: string, min: number) => {
     const key = `${route}|${from}|${to}|${w}|${b}|${k}`;
     if (!keys.has(key)) keys.set(key, []);
     keys.get(key)!.push(min);
   };
   for (const s of aggSamples) {
-    push(s.route, s.from, s.to, s.weekday, s.bucket, s.arriveKind, s.minutes); // 分层 + 档位
+    const mp = macauParts(new Date(s.t));
+    // ★ v3.5.5：节假日按周末同款处理（澳门公众假期 ≈ 周末形态——数据源 lrt_holidays）
+    const b2 = bucketOfRoute(mp.weekday, mp.hour, holidays.has(macauDayOf(s.t)));
+    push(s.route, s.from, s.to, -1, b2, s.arriveKind, s.minutes); // 新桶 + 档位
     push(s.route, s.from, s.to, -1, "all", s.arriveKind, s.minutes); // 兜底 + 档位
     push(s.route, s.from, s.to, -1, "all", "all", s.minutes); // 兜底 + 合并
   }

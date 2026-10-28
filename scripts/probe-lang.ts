@@ -10,7 +10,7 @@ try {
 }
 
 async function main() {
-  for (const lang of ["zh_tw", "zh_hk", "zh", "zh_cn"]) {
+  for (const _lang of ["zh_tw", "zh_hk", "zh", "zh_cn"]) {
     const r = await getRouteData("50", "0");
     // 注意：getRouteData 固定 zh_cn，这里手动改不了 —— 直接打印对比即可
     void r;

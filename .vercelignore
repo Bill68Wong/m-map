@@ -1,0 +1,20 @@
+# Vercel CLI 本地部署（vercel --prod）时排除的目录。
+#
+# 为什么需要它：vercel 上传的是「本机目录」。实测未生效时会传 269.8MB / 4357 个文件
+# （含 backups 数据库 dump、.workbuddy 项目记忆、data 采集产物）——这些都不该上传。
+#
+# ⚠️ 两条铁律（都实际踩过）：
+#   ① 每条规则必须带 / 前缀 —— 裸 data 会连带排除 db/data/（内含 lrt-api-stations.ts
+#      与 lrt-holidays.ts，是源码数据）⇒ 线上构建报
+#      "Type error: Cannot find module './data/lrt-api-stations'" 直接失败。
+#   ② 规则行尾不要写注释 —— gitignore 语法里 # 只有位于行首才是注释，
+#      行尾的 #... 会被当成模式的一部分 ⇒ 整条规则失效（本次实测）。
+
+/.verify
+/.workbuddy
+/.backups
+/.data
+/.docs
+/.tools
+/.next
+/.next-v213

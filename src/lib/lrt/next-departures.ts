@@ -10,17 +10,32 @@
  * ⚠️ 不依赖 DSAT；日期/假期基准均 GMT+8 本地判定。
  */
 import type { Pool } from "pg";
+import {
+  type BiasIndex,
+  type BiasLineRow,
+  type BiasStationRow,
+  buildBiasIndex,
+  emptyBiasIndex,
+  fixDeparture,
+} from "./apply-bias";
 import { type DayType, dayTypeOf, macauNowParts, shiftYmd } from "./day-type";
+import { type LrtTimetableMinutes, hhmmOf, hhmmOfMinutes, rowCandidateSec, rowOffsetsOf } from "./eta";
 import { LRT_LINE_TO_ROUTE_NO, destLabelOf, directionOfTravel, isLrtLineCode, isLrtStationCode } from "./map";
-import { type LrtTimetableMinutes, hhmmOf, hhmmOfMinutes, nextN, rowCandidateSec } from "./eta";
+import { LRT_PATTERN_ROUTE_NO, deriveStationPatterns, lrtPatternKey } from "./pattern";
 
 const DAY_MS = 86_400_000;
 
 export interface LrtDepartureRow {
-  /** 'HH:MM' */
+  /** 'HH:MM'（**已叠偏差**的实际发车时钟） */
   clock: string;
-  /** 绝对毫秒（服务日 D 00:00 + 偏移；可跨午夜） */
+  /** 绝对毫秒（服务日 D 00:00 + 偏移；可跨午夜；**已叠偏差**） */
   depMs: number;
+  /** ★ v3.2.0：true = 本班有秒级偏差数据（氹仔线模式命中 / 石排湾·横琴线路级） */
+  secPrecise?: boolean;
+  /** ★ v3.2.0：氹仔线命中的站间模式串（未命中/非氹仔线 = null） */
+  pattern?: string | null;
+  /** ★ v3.2.0：本班实际叠加的偏差（秒）；未命中 = 0 */
+  biasSec?: number;
 }
 
 export interface LrtDeparturesOk {
@@ -77,6 +92,17 @@ export interface LrtPreload {
   holidays: Set<string>;
   /** `${apiStation}|${routeNo}|${apiDir}|${dayType}` → 时刻行 */
   tt: Map<string, LrtTimetableMinutes>;
+  /**
+   * ★ v3.2.0（ADR-101 方案 C）：`${api_station}|${route_no}|${direction}|${day_type}|${dep_min}` → 模式。
+   *   **内存派生、0 额外 DB 往返**（由 `buildLrtPreload` 调 `deriveStationPatterns` 生成）。
+   */
+  patterns: Map<string, string>;
+  /**
+   * ★ v3.2.0：偏差索引（逐站/逐模式 + 线路级兜底）。
+   *   同折进预载（小静态表）⇒ 推荐链路的 pre 路径**零额外往返**即可读秒。
+   *   ⚠️ 新表不存在时为空索引 ⇒ 全量回落分钟级（不抛错）。
+   */
+  bias: BiasIndex;
 }
 
 /** 预载时刻表的键（构建方与查询方必须一致） */
@@ -103,6 +129,10 @@ export function buildLrtPreload(args: {
     day_type: string;
   })[];
   dirStopsAll: Map<string, string[]>;
+  /** ★ v3.2.0：`lrt_station_biases` 全量行（小表）；缺省 = 空（回落分钟级） */
+  biasRows?: BiasStationRow[];
+  /** ★ v3.2.0：`lrt_route_params` 行（线路级兜底）；缺省 = 空 */
+  lineParamRows?: BiasLineRow[];
 }): LrtPreload {
   const dirStops = new Map<string, string[]>();
   for (const [k, v] of args.dirStopsAll) if (k.startsWith("LRT-")) dirStops.set(k, v);
@@ -126,7 +156,11 @@ export function buildLrtPreload(args: {
     });
   }
 
-  return { dirStops, apiIdOf, nameOf, holidays, tt };
+  // ★ v3.2.0：模式映射在**内存派生**（同一纯函数，零额外 DB 往返）；偏差索引折进本结构
+  const patterns = deriveStationPatterns(args.ttRows);
+  const bias = buildBiasIndex(args.biasRows ?? [], args.lineParamRows ?? []);
+
+  return { dirStops, apiIdOf, nameOf, holidays, tt, patterns, bias };
 }
 
 export interface LrtDeparturesInput {
@@ -158,6 +192,51 @@ export interface LrtDeparturesInput {
 /** 后续第 n 班（严格晚于 atMs 的最近一班） */
 export function nextAfter(departures: LrtDepartureRow[], atMs: number): LrtDepartureRow | null {
   return departures.find((d) => d.depMs > atMs) ?? null;
+}
+
+/**
+ * ★ v3.2.0：**旧 DB 路径**（无 `pre`，即 `/api/lrt/eta`）的偏差 + 模式小查询。
+ *
+ * 与预载路径**共用同一纯函数**（`buildBiasIndex` / `fixDeparture`）⇒ 两路由 depMs 同源（AC-67）。
+ * ⚠️ 表尚未建/查询失败 → 返回空索引 + 空模式表 ⇒ 全量回落分钟级，**不抛错**
+ *    （保证代码与数据可分先后上线）。
+ */
+async function loadBiasAndPatterns(
+  pool: Pool,
+  apiStation: string,
+  routeNo: string,
+  directionApi: string,
+): Promise<{ biasIndex: BiasIndex; patterns: Map<string, string> }> {
+  const empty = Promise.resolve({ rows: [] as unknown[] });
+  const [bs, lp, pr] = await Promise.all([
+    pool
+      .query(
+        `SELECT route_code, direction, pattern, api_station, dep_bias_sec
+           FROM lrt_station_biases WHERE api_station = $1`,
+        [apiStation],
+      )
+      .catch(() => empty),
+    pool.query(`SELECT route_code, dep_bias_sec FROM lrt_route_params`).catch(() => empty),
+    routeNo === LRT_PATTERN_ROUTE_NO
+      ? pool
+          .query(
+            `SELECT day_type, dep_min, pattern FROM lrt_station_patterns
+              WHERE api_station = $1 AND route_no = $2 AND direction = $3`,
+            [apiStation, routeNo, directionApi],
+          )
+          .catch(() => empty)
+      : empty,
+  ]);
+
+  const biasIndex = (bs.rows.length || lp.rows.length)
+    ? buildBiasIndex(bs.rows as BiasStationRow[], lp.rows as BiasLineRow[])
+    : emptyBiasIndex();
+
+  const patterns = new Map<string, string>();
+  for (const r of pr.rows as { day_type: string; dep_min: number; pattern: string }[]) {
+    patterns.set(`${r.day_type}|${r.dep_min}`, r.pattern);
+  }
+  return { biasIndex, patterns };
 }
 
 /**
@@ -275,17 +354,72 @@ export async function queryLrtDepartures(
       prevRow = prevRes.rows[0] as LrtTimetableMinutes | undefined;
     }
 
-    // 5) 合并候选（「服务日 D 00:00 起秒」单轴）→ 后续 n 班
-    const candSec: number[] = [];
-    if (todayRow) candSec.push(...rowCandidateSec(todayRow, false));
-    if (prevRow) candSec.push(...rowCandidateSec(prevRow, true));
+    // ★ v3.2.0：偏差索引 + 模式查表函数（pre 走内存；无 pre 走小查询，新表不存在 → 空索引不抛错）
+    let biasIndex: BiasIndex;
+    let patternLookup: (dt: DayType, depMin: number) => string | null;
+    if (pre) {
+      biasIndex = pre.bias;
+      patternLookup = (dt, dm) =>
+        routeNo === LRT_PATTERN_ROUTE_NO
+          ? (pre.patterns.get(lrtPatternKey(stationApi, routeNo, directionApi, dt, dm)) ?? null)
+          : null;
+    } else {
+      const loaded = await loadBiasAndPatterns(pool, stationApi, routeNo, directionApi);
+      biasIndex = loaded.biasIndex;
+      patternLookup = (dt, dm) => loaded.patterns.get(`${dt}|${dm}`) ?? null;
+    }
+
+    // 5) 合并候选（「服务日 D 00:00 起分钟偏移」单轴）→ 逐班叠加偏差 → 取后续 n 班
+    //    ★ v3.2.0：候选带**原始 depMin**（模式查表键）与**所属班别**（今日/昨日行各异）；
+    //      由 `fixDeparture` 统一产出 depMs/biasSec/secPrecise ⇒ 两路由 depMs 同源（AC-67）。
     const nowMs = nowMsRef;
     const dayStartUtcMs = nowMs - ((nowMs + 8 * 3_600_000) % DAY_MS); // 澳门今日 00:00
-    const next = nextN(candSec, now.daySec, take);
+    // ★ v3.3.0（修 v3.2.0 回归）：候选须带**其所属服务日的 00:00**（`dayStartMs`）——
+    //   昨日行的跨午夜续班（offset ≥ 1440）= **昨日** 00:00 + offset*60 ⇒ 落在**今日凌晨**；
+    //   旧写法对昨/今两行同用「今日 00:00」⇒ 该班被**整整推迟一天**（state 由表定秒判为 running，
+    //   而 departures 却给次日晨班 —— QA 于澳门 00:07 复现的「次日首班被当成 running」即此：
+    //   昨日 24:09/24:15 的末班被算成「次日 00:09/00:15」而挤出 departures）。
+    //   模式查表键仍用**原始** `depMin`（与 `lrt_station_patterns.dep_min` 同轴）。
+    const cands: { depMin: number; dayStartMs: number; dayType: DayType }[] = [];
+    if (todayRow) for (const o of rowOffsetsOf(todayRow.minutes)) cands.push({ depMin: o, dayStartMs: dayStartUtcMs, dayType });
+    if (prevRow)
+      for (const o of rowOffsetsOf(prevRow.minutes))
+        if (o >= 1440) cands.push({ depMin: o, dayStartMs: dayStartUtcMs - DAY_MS, dayType: prevDayType });
+
+    const selected: { tableSec: number; fix: ReturnType<typeof fixDeparture> }[] = [];
+    for (const c of cands) {
+      const fix = fixDeparture({
+        lineCode: route,
+        routeNo,
+        directionApi,
+        apiStation: stationApi,
+        dayType: c.dayType,
+        tableMin: c.depMin,
+        dayStartMs: c.dayStartMs,
+        pattern: patternLookup(c.dayType, c.depMin),
+        biasIndex,
+      });
+      if (fix.depMs > nowMs) selected.push({ tableSec: c.depMin * 60, fix });
+    }
+    selected.sort((a, b) => a.fix.depMs - b.fix.depMs);
+
+    const departures: LrtDepartureRow[] = [];
+    for (const x of selected) {
+      // 同分重复（叠加偏差后）自动折叠
+      if (departures.length && x.fix.depMs === departures[departures.length - 1].depMs) continue;
+      departures.push({
+        clock: hhmmOf(x.tableSec + x.fix.biasSec),
+        depMs: x.fix.depMs,
+        secPrecise: x.fix.secPrecise,
+        pattern: x.fix.pattern,
+        biasSec: x.fix.biasSec,
+      });
+      if (departures.length >= take) break;
+    }
 
     // 6) 空态判定
-    // ★ v1.0.2 修正判定顺序：`nextN` 取的是「今日 00:00 起秒」这条轴上的候选，**不跨日**。
-    //   所以「今日首班还没到点」时，next 里装的是**今天早上**的首班 → 旧的「先判 next 非空」
+    // ★ v1.0.2 修正判定顺序：候选只取「今日 00:00 起」这条轴上的班次，**不跨日**。
+    //   所以「今日首班还没到点」时，departures 里装的是**今天早上**的首班 → 旧的「先判非空」
     //   会直接给出 running，使 `before_first` 沦为**永远走不到的死代码**
     //   （而前端 `LrtEta.tsx:274` 明明实现了「首班 06:30 開出 · 往X」文案）。
     //   线上实测后果：凌晨 00:13 查石排湾线，state=running 且下一班 = 06:30 →
@@ -296,7 +430,7 @@ export async function queryLrtDepartures(
     let state: LrtDeparturesOk["state"] = "no_data";
     if (prevRunning) state = "running";
     else if (todayRow && now.daySec < todayRow.first_min * 60) state = "before_first";
-    else if (next.length > 0) state = "running";
+    else if (departures.length > 0) state = "running";
     else if (todayRow) state = "after_last";
 
     return {
@@ -312,7 +446,7 @@ export async function queryLrtDepartures(
       serviceDay: now.ymd,
       firstClock: todayRow ? hhmmOfMinutes(todayRow.first_min) : null,
       lastClock: todayRow ? hhmmOfMinutes(todayRow.last_min) : null,
-      departures: next.map((s) => ({ clock: hhmmOf(s), depMs: dayStartUtcMs + s * 1000 })),
+      departures,
       serverNow: new Date(nowMs).toISOString(),
     };
   } catch (err) {

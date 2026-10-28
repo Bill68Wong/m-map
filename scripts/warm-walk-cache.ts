@@ -24,7 +24,7 @@ import path from "node:path";
 import { Pool } from "pg";
 import { haversineM, wgs84ToGcj02 } from "../src/lib/amap/coord";
 import { walkRouteGcj } from "../src/lib/amap/client";
-import { fixWalkDistance, walkCacheKey, encodeGeohash } from "../src/lib/amap/walk-fix";
+import { fixWalkDistance, walkCacheKey } from "../src/lib/amap/walk-fix";
 
 try {
   process.loadEnvFile("D:/Projects/University/Studio/musttoukou/.env");

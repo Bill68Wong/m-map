@@ -30,7 +30,6 @@ const EE = 0.00669342162296594323;
 const R_EARTH_M = 6371008.8;
 
 const rad = (d: number) => (d * Math.PI) / 180;
-const deg = (r: number) => (r * 180) / Math.PI;
 
 export interface LatLng {
   lat: number;

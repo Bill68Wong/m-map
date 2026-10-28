@@ -73,6 +73,15 @@ export interface SearchOpts {
   anchorFromMain?: string;
   /** ★ v2.3.0：**终点吸附锚站主码** —— 同上，作用于 `DST` */
   anchorToMain?: string;
+  // ── ★ 2026-09-21：绕路治理（四项几何闸门，详见文件内 long comment）──
+  /** 乘车里程 ÷ 起终点直线距离 的**上限**（超过即剔除）；默认 2.5 */
+  maxDetourRatio?: number;
+  /** 首段「上车站→下车站」方位与「起点→终点」方位的**最大夹角**（度）；默认 120 */
+  maxFirstLegAngleDeg?: number;
+  /** 换乘枢纽必须落在「起终点椭圆走廊」内，长轴 = 直线 × 此系数；默认 2.0 */
+  corridorRatio?: number;
+  /** 同一「首末站 × 线路序列」最多保留几条变体；默认 1 */
+  perFamilyLimit?: number;
 }
 
 export interface RidePath {
@@ -94,6 +103,11 @@ const DEFAULTS: Required<Omit<SearchOpts, "anchorFromMain" | "anchorToMain">> = 
   hubLimit: 25,
   perChainLimit: 12,
   stage1Share: 0.6,
+  // ★ 2026-09-21 绕路治理默认值（依据实测 240 条候选的倍率分布，见文件内注释）
+  maxDetourRatio: 2.5,
+  maxFirstLegAngleDeg: 120,
+  corridorRatio: 2.0,
+  perFamilyLimit: 1,
 };
 
 /** ★ v2.3.0 软吸附：把锚站去重**前置**到首位（命中则移前；不在列表内则**追加**） */
@@ -180,6 +194,90 @@ function makeReachabilityBack(routeIdx: RouteIndex) {
 const pathKey = (p: StationPath): string =>
   p.rides.map((r) => `${r.route}@${mainCodeOf(r.board)}>${mainCodeOf(r.alight)}`).join("|");
 
+// ─────────────────── ★ 2026-09-21：绕路治理（四项几何判据）───────────────────
+//
+// 背景（实测事故）：本地枚举 240 条候选里，**96 条（40%）的乘车里程是直线距离的 5 倍以上**，
+//   最严重的一条「黑沙海滩 → 十月初五马路」（直线 2115m）绕到 **27,795m / 13.14 倍** ——
+//   它先坐 21A 到 C687、再坐 26A 一路往北到半岛的 **M172 亞馬喇前地**、最后坐 50 往回环市区。
+//   根因：BFS 的 hub 判据**只保证「连通」，完全不看 hub 在哪、方向对不对**。
+// ⇒ 本轮加四道几何闸门（**只作用于本地候选，不影响高德主路径**）。
+
+/** 站点地理索引（主码 → 坐标） */
+type GeoMap = Map<string, { lat: number; lng: number }>;
+
+/** 一条候选的「乘车里程」（米）＝ 逐跳球面距离之和 */
+function rideMeters(rides: RidePath[], geoOf: GeoMap): number {
+  let m = 0;
+  for (const r of rides) {
+    for (const [a, b] of r.hops) {
+      const pa = geoOf.get(mainCodeOf(a));
+      const pb = geoOf.get(mainCodeOf(b));
+      if (pa && pb) m += haversineM(pa, pb);
+    }
+  }
+  return m;
+}
+
+/** 方位角（度，0=正北，顺时针） */
+function bearingOf(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
+  const rad = (d: number) => (d * Math.PI) / 180;
+  const y = Math.sin(rad(b.lng - a.lng)) * Math.cos(rad(b.lat));
+  const x =
+    Math.cos(rad(a.lat)) * Math.sin(rad(b.lat)) -
+    Math.sin(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.cos(rad(b.lng - a.lng));
+  return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
+}
+
+/** 两个方位角的夹角（0~180°） */
+function angleBetween(a: number, b: number): number {
+  const d = Math.abs(a - b) % 360;
+  return d > 180 ? 360 - d : d;
+}
+
+/**
+ * 椭圆走廊判据：点 `p` 是否落在以「起点 a、终点 b」为焦点、
+ * 长轴 = `straight × maxRatio` 的椭圆内（`|a→p| + |p→b| ≤ 长轴`）。
+ *
+ * 用途：约束换乘枢纽（hub）不得离「起终点之间」太远 ⇒ 从源头阻断
+ * 「绕到半岛再坐回来」这类往返绕圈（实测那条 13 倍绕路，hub 就是半岛的 M172）。
+ */
+function inCorridor(
+  p: { lat: number; lng: number },
+  a: { lat: number; lng: number },
+  b: { lat: number; lng: number },
+  straight: number,
+  maxRatio: number,
+): boolean {
+  return haversineM(a, p) + haversineM(p, b) <= straight * maxRatio;
+}
+
+/** 同族站阈值（米）：马路两侧站台一般相距 20~60m；120m 足够合并同族而不误并相邻站 */
+const FAMILY_RADIUS_M = 120;
+
+/**
+ * ★ D 同族站归并：把距离 < `FAMILY_RADIUS_M` 的站视为**同一站族**（马路两侧 / 多站台），
+ *   只保留列表中**靠前**的那个（调用方已按「离目标点距离升序」传入）。
+ *
+ * 解决什么：澳门巴士「马路两侧站名不同」，两侧都能上下车 —— 若两侧各生成一整批候选，
+ *   既浪费名额、又容易出现「这侧上车、对面下车」的绕圈。归并后每族只出一个代表。
+ */
+function dedupeByFamily(list: string[], geoOf: GeoMap): string[] {
+  const out: string[] = [];
+  for (const m of list) {
+    const p = geoOf.get(m);
+    if (!p) {
+      out.push(m);
+      continue;
+    }
+    const dup = out.some((k) => {
+      const q = geoOf.get(k);
+      return q ? haversineM(p, q) < FAMILY_RADIUS_M : false;
+    });
+    if (!dup) out.push(m);
+  }
+  return out;
+}
+
 /**
  * ★ 链键 = 乘车段的**线路序列**（与上/下车站、换乘点无关）。
  *   同一条链的多个「上车站 × 换乘点 × 下车站」组合 = 该链的**变体**，共享一个名额池
@@ -203,10 +301,25 @@ export function searchStationPaths(
   opts: SearchOpts = {},
 ): StationPath[] {
   const o = { ...DEFAULTS, ...opts };
+  const geoOf: GeoMap = new Map(geo.map((g) => [g.main, { lat: g.lat, lng: g.lng }]));
+  /** 起终点直线距离（几何闸门的分母）；为 0 时全部闸门自动放行 */
+  const straight = haversineM(fromWgs, toWgs);
+  /** 「起点→终点」期望方位（首段方向一致性判据用） */
+  const wantBearing = straight > 0 ? bearingOf(fromWgs, toWgs) : 0;
+
   // ★ v2.3.0：软吸附 —— 同名站锚站去重前置（即使超出半径也纳入，§3.7）
-  const SRC = withAnchor(nearestMains(geo, fromWgs, o.k, o.radiusM), o.anchorFromMain);
-  const DST = withAnchor(nearestMains(geo, toWgs, o.k, o.radiusM), o.anchorToMain);
+  // ★ 2026-09-21 D：**同族站归并** —— 距离 < 120m 视为同一站族（马路两侧 / 多站台），每族只留最近的一个
+  const SRC = dedupeByFamily(withAnchor(nearestMains(geo, fromWgs, o.k, o.radiusM), o.anchorFromMain), geoOf);
+  const DST = dedupeByFamily(withAnchor(nearestMains(geo, toWgs, o.k, o.radiusM), o.anchorToMain), geoOf);
   if (!SRC.length || !DST.length) return [];
+
+  /** ★ C hub 走廊约束：枢纽必须落在「起终点椭圆走廊」内（缺坐标 ⇒ 放行） */
+  const hubInCorridor = (main: string): boolean => {
+    if (straight <= 0) return true;
+    const p = geoOf.get(main);
+    if (!p) return true;
+    return inCorridor(p, fromWgs, toWgs, straight, o.corridorRatio);
+  };
 
   const routesAt = buildRoutesAt(routeIdx);
   const reachAfter = makeReachability(routeIdx);
@@ -239,14 +352,56 @@ export function searchStationPaths(
    *          `false` = **全局名额已满**（`results.length >= maxCandidates`，调用方应停止）。
    *   ★ 语义理顺：原实现把「重复」也返回 `false`，会被调用方误判成「停止搜索」。
    */
+  /** ★ 2026-09-21 E：同「首末站 × 线路序列」已保留的变体数（候选限流用） */
+  const familyCount = new Map<string, number>();
+
   const add = (rides: RidePath[], transfers: { at: string; to: string }[]): boolean => {
     const full = (): boolean => results.length >= o.maxCandidates;
+    // ★ 2026-09-21 新增：剔除「同一线路被重复乘坐」的候选。
+    //
+    //   实测事故（黑沙海滩 → 十月初五马路，22:00）：本地枚举产出
+    //   `21A → 15T → 21A` —— 先坐 21A 一站，再乘 15T 折返回去，最后又坐回 21A；
+    //   全程 40~47 分。而当高德的直达方案（26A，28 分）因**该时段已收班**被剔除后，
+    //   这个荒谬组合竟成了**唯一结果** ⇒ 用户看到的就是「一堆绕路的怪方案」。
+    //
+    //   在澳门巴士网络里，同一线路在同一方案里出现两次几乎必然是坏解
+    //   （真实换乘不会「坐回去再坐回来」）⇒ 宁可少给候选，也不给这种解 ✗
+    const routes = rides.map((r) => r.route);
+    if (new Set(routes).size !== routes.length) return !full();
+
+    // ★ 2026-09-21 A：**几何绕路过滤** —— 乘车里程 ÷ 起终点直线距离 超过 `maxDetourRatio` 即剔。
+    //   实测依据：本场景 240 条候选里 **96 条（40%）≥5×**，最严重一条达 **13.14×**
+    //   （直线 2115m，却坐了 27,795m —— 先北上到半岛亞馬喇前地再南返回环）。
+    if (straight > 0) {
+      const dm = rideMeters(rides, geoOf);
+      if (dm > straight * o.maxDetourRatio) return !full();
+    }
+
+    // ★ 2026-09-21 B：**首段方向一致性** —— 首段「上车站→下车站」的方位与「起点→终点」
+    //   期望方位的夹角超过 `maxFirstLegAngleDeg`（默认 120°）即剔
+    //   ⇒ 干掉「一上车就往反方向坐」的候选（实测有 15 条偏离 135° 以上）。
+    if (straight > 0) {
+      const f = rides[0];
+      const pb = geoOf.get(mainCodeOf(f.board));
+      const pa = geoOf.get(mainCodeOf(f.alight));
+      if (pb && pa && angleBetween(bearingOf(pb, pa), wantBearing) > o.maxFirstLegAngleDeg) return !full();
+    }
+
+    // ★ 2026-09-21 E：**候选限流** —— 同一「首末站 × 线路序列」只保留 `perFamilyLimit` 条，
+    //   避免同一走法的上百种变体（仅仅是换乘点微调）吃光全局名额。
+    //   名额应装进「**不同走法**」，而不是同一走法的变体。
+    const firstRide = rides[0];
+    const lastRide = rides[rides.length - 1];
+    const famKey = `${mainCodeOf(firstRide.board)}>${mainCodeOf(lastRide.alight)}|${chainKeyOf(rides)}`;
+    if ((familyCount.get(famKey) ?? 0) >= o.perFamilyLimit) return !full();
+
     const k = pathKey({ rides, transfers });
     if (seen.has(k)) return !full(); // 重复：不新增，按当前是否满载决定续/停
     const ck = chainKeyOf(rides);
     if ((chainCount.get(ck) ?? 0) >= o.perChainLimit) return !full(); // 链级超限：跳过本变体（不终止搜索）
     seen.add(k);
     chainCount.set(ck, (chainCount.get(ck) ?? 0) + 1);
+    familyCount.set(famKey, (familyCount.get(famKey) ?? 0) + 1);
     results.push({ rides, transfers });
     return !full();
   };
@@ -301,6 +456,9 @@ export function searchStationPaths(
   stage1: for (const [hub, froms] of reachFrom) {
     const tos = reachTo.get(hub);
     if (!tos) continue;
+    // ★ 2026-09-21 C：**hub 走廊约束** —— 换乘枢纽若落在「起终点走廊」外（如跑到半岛），
+    //   几乎必然意味着往返绕圈（实测那条 13 倍绕路的 hub 就是半岛的 M172 亞馬喇前地）⇒ 跳过。
+    if (!hubInCorridor(hub)) continue;
     // 变体优度：同一链优先产生「近上车站 × 近下车站」组合（SRC/DST 升序 ⇒ 位次即优度）。
     const fromsSorted = [...froms].sort((x, y) => byRank(srcRank)(x.from, y.from));
     const tosSorted = [...tos].sort((x, y) => byRank(dstRank)(x.to, y.to));
@@ -324,6 +482,8 @@ export function searchStationPaths(
   outer: for (const h1 of hub1) {
     for (const h2 of hub2) {
       if (h1 === h2) continue;
+      // ★ 2026-09-21 C：两个枢纽都必须在「起终点走廊」内（同 1 换乘的判据）
+      if (!hubInCorridor(h1) || !hubInCorridor(h2)) continue;
       const s1 = routesAt.get(h1);
       const s2 = routesAt.get(h2);
       if (!s1 || !s2) continue;

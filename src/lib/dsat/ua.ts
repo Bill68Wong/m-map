@@ -14,7 +14,9 @@
  *   ❌ 不伪装成浏览器（`Mozilla/5.0…`）——一旦被识破，性质就从「透明的小客户端」
  *      变成「故意隐瞒的爬虫」，且与我们真实的行为特征（无 Referer、恒定节律）自相矛盾
  *   ❌ 不写 bot / crawler / spider / scraper —— 很多 WAF 见词即拦；而且我们**本来就不是**
- *      搜索引擎爬虫，「MUST登校客户端」才是准确的描述（这是「更准确」而非「更隐蔽」）
+ *      搜索引擎爬虫 —— 准确的描述是「M Map（澳搭車）客户端」（这是「更准确」而非「更隐蔽」）。
+ *      UA 身份串沿用 `MUSTDengxiao` 不变：那是对 DSAT／WAF 的**稳定识别记号**（v0.27.3 起已备案），
+ *      与对用户的产品名「M Map」是两回事，改名不改串以免破坏对方的流量归组与追溯。
  *   ❌ 不放中文 / emoji —— HTTP 头历史上是 latin-1，非 ASCII 可能乱码或被服务器拒收
  *   ❌ 不放个人邮箱 / 姓名 —— UA 会被对方与中间设备完整记录且公开可见；改用项目网址，
  *      真正的联系方式留在我们自己能控制的页面（「關於」页）上
@@ -24,7 +26,7 @@
 import pkg from "../../../package.json";
 
 /** 项目说明页（对外可识别的身份入口） */
-export const DSAT_PROJECT_URL = "https://musttoukou.vercel.app";
+export const DSAT_PROJECT_URL = "https://macaomap.vercel.app";
 
 /**
  * 唯一的 DSAT 请求 UA。

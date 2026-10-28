@@ -27,6 +27,8 @@ export default async function RecordsPage() {
     `);
     records = res.rows as RecordRow[];
   } catch (err) {
+    // ★ v3.1.1 #5：原始错误只进服务端日志（界面走用户语言）
+    console.error("[records] 通勤记录加载失败：", err);
     dbError = (err as Error).message;
   }
 

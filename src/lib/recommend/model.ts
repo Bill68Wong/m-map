@@ -8,7 +8,7 @@
  *
  * 关键口径：
  *   · `ride`（巴士）= 逐跳累加 `segment_stats`（**离开口径** = t(离B) − t(离A) = run + dwell_B）
- *   · `ride`（轻轨）= 跳数 × `LRT_MIN_PER_HOP`（表定逐跳恒 2 分钟）
+ *   · `ride`（轻轨）= 氹仔线 `LRT_HOP_SEC` 逐段累加（未收录跳回落 120s）；石排湾/横琴走固定秒数
  *   · `wait_1`：巴士取 DSAT 实时「区间下限」；**无在途车 → 整条方案排除**（不在运营时间）
  *   · `wait_2+`：**按「到达换乘站的时刻」取班次**（轻轨查时刻表本地算；巴士按间隔 ÷ 2 估）
  *     —— 不能用「现在最近的在途车」，否则换乘方案总耗时被系统性低估
@@ -45,7 +45,7 @@
  *
  *   ★ 结论：**保留本条 ①「首段赶不上 → 整条剔除」不动**；「后续车次」一律走 `altBuses`。
  *
- * ⚠️ zone（澳门科技大学座区）判据是 `slug === "school"`，**与方向无关** ——
+ * ⚠️ zone（澳門科技大學座区）判据是 `slug === "school"`，**与方向无关** ——
  *    去程的 `walkIn` 与回程的 `walkOut` 都会吃到它（`walk_times` 本来就是
  *    `(place, 站主码, zone)` 合并键、不分出发/到达）。
  *
@@ -59,14 +59,19 @@
 import { PLACE_SHORT } from "@/lib/home-plans-shared";
 import { hhmmOf } from "@/lib/lrt/eta";
 import type { AmapPlanSeed, WalkResolver } from "@/lib/nav/types";
-import { pickCatchTier, rangeText, tierHintOf, tierTextOf, type TierSpeedOverride } from "./catch-up";
+import { etaTextOf, pickCatchTier, tierHintOf, tierTextOf, waitRangeText, type TierSpeedOverride } from "./catch-up";
+import { conservativeWaitMin, headwayAt, headwayMedian, type HeadwayIndex } from "./headway";
+import { cmpByPref, PREF_DEFAULTS, type Prefs } from "./score";
 import { mainCodeOf, rideOfHops, type SegmentIndex } from "./segment-lookup";
 import {
-  BUS_HEADWAY_FALLBACK_SEC,
-  LRT_MIN_PER_HOP,
+  LRT_HOP_FALLBACK_SEC,
+  LRT_HOP_SEC,
   LRT_RIDE_SEC_FIXED,
   TRANSFER_FALLBACK_MIN,
+  WALK_BASE_M_PER_MIN,
   WALK_FALLBACK_MIN,
+  lrtStationWalkM,
+  lrtTransferWalkM,
   type AltBusView,
   type BusArrival,
   type BusLive,
@@ -228,10 +233,29 @@ export interface ModelContext {
   placeIds: Record<string, number>;
   /** 站码 → 显示名（巴士带站号前缀） */
   nameOf: Map<string, string>;
-  /** 澳门科技大学座区（★ 只要**任一侧**是 school 就生效，与出发/到达方向无关） */
+  /** 澳門科技大學座区（★ 只要**任一侧**是 school 就生效，与出发/到达方向无关） */
   zone: SchoolZone | null;
+  /**
+   * ★ v2.4.1：**目的地的展示名**（如「澳門科技大學（B/C 座）」、任意 POI 名）。
+   *
+   * 为什么需要它：末段步行（`walkIn`）的终点文案必须写**目的地**而不是下车站，
+   * 而目的地名**不能靠 slug 反查** —— 全澳导航链路对非预设地点会把它兜底成
+   * `"place"`（见 `nav-service.ts#slugOf`），`PLACE_SHORT["place"]` 查不到，
+   * 结果会把 slug 原文 `"place"` 直接印到卡片上（实测已复现）。
+   * ⇒ 由调用方（导航 / 推荐服务）显式传入真实地名；缺省时回落 `placeLabelOf(slug)`。
+   */
+  destLabel?: string;
   /** route → 实时视图 */
   live: Map<string, RouteLive>;
+  /**
+   * ★ B4（需求 7）：**发车间隔索引**（`route_frequency`，`headway.ts#loadHeadway` 产物）。
+   *
+   * 用途：**第 2 段起巴士等车**按「到达换乘站的时刻」查 `headwayAt` 取偏保守值
+   *   `(lo + 2·hi)/3`（见 §h.1）；未命中 → `headwayMedian`（该线全时段中位数）→ 仍无 ⇒ `null`。
+   * **缺省**（undefined）⇒ 第 2 段巴士等车按「无数据」处理（`waitMin = null`，明示降级）——
+   *   不再回落到写死常量（旧「第 2 段巴士等车恒 180s」已废除，AC-61）。
+   */
+  headway?: HeadwayIndex;
   /** 被排除的线路（无在途车 / 已收车 / 站序缺失）→ 静默剔除计数器 */
   excluded: string[];
   /**
@@ -240,8 +264,8 @@ export interface ModelContext {
    * 合成一个数组会让文案与诊断都失真。
    */
   missed: string[];
-  /** 今天星期（0 = 周日 … 6 = 周六） */
-  todayWeekday: number;
+  /** ★ v3.4.0：查询时段桶（bucketOfRoute 五桶之一）——替代旧 todayWeekday（星期维度已废弃） */
+  nowBucket: string;
   /**
    * ★ v1.3.0（全澳导航接缝，设计 §C.8）：**可选**的步行解析器。
    *
@@ -291,15 +315,60 @@ function pickBoardable(lv: BusLive, walkMin: number, walkDistM?: number | null, 
 
 /**
  * 步行视图。
- * @param dir 'out'（起点→上车站）/ 'in'（下车站→目的地）—— 仅 `walkResolver` 分支用到
+ * @param dir 'out'（起点→上车站）/ 'in'（下车站→目的地）
  */
 function walkView(ctx: ModelContext, slug: string, station: string, dir: "out" | "in"): WalkLegView {
+  /**
+   * ★ v2.4.1 修复（用户实测：「下车站之后的步行显示成『步行 → 车站』，应为『步行 → 终点』」）
+   *
+   * `toLabel` 必须**按方向**取名字：
+   *   · `out`（出发地 → 上车站）→ 这段步行走向**车站** ⇒ 车站名；
+   *   · `in` （下车站 → 目的地）→ 这段步行走向**目的地** ⇒ `placeLabelOf(slug)`（学校侧带座区）。
+   *
+   * ❌ 原实现两条分支都取车站侧（`info.toLabel` 与 `labelOf(ctx, station)` **都是车站名**），
+   *   故末行渲染为「步行 5 分 → C653 金峰南岸」而非目的地。
+   * ⚠️ 目的地名**优先取 `ctx.destLabel`**（调用方传入的真实地名），
+   *   仅在缺省时才回落 `placeLabelOf(slug)` —— 因为导航链路的 slug 可能是 `"place"` 这类
+   *   兜底值，直接查表会把 slug 原文印上卡片（实测复现过 `步行 6 分 → place`）。
+   */
+  const destName = dir === "in" ? ctx.destLabel || placeLabelOf(ctx, slug) : null;
+
+  // ★ v3.3.0（AC-106）：**轻轨站**的进/出站步行**按距离常量折算**（不写死分钟）——
+  //   dir="out"（出发地→上车站）= 进站 ⇒ `inM`；dir="in"（下车站→目的地）= 出站 ⇒ `outM`。
+  //   分钟 = 米 ÷ 基准速度（84）；**分档缩放由 `catch-up.ts#requiredSec` 单一负责**（此处禁再乘 SPEED_RATIO）。
+  // ⚠️ 2026-09-27 修正（线上实测：「石排灣→科大」的走協和卡步行显示 2 分/168 米，实际 ~1.3km）：
+  //   「站内进/出站常量」**必须叠加在站外真实步行之上**，**不得替换**站外段——
+  //   石排灣站→協和站 的站外步行曾因本分支被整体吞掉（石排灣线 100 秒车程 vs 走路 1.3km）。
+  //   结构：站外步行（`ctx.walkResolver` 真实几何；无 ⇒ 0，覆盖「起点=本站」场景）＋ 站内常量。
+  if (station.startsWith("LRT-")) {
+    const inDoorM = lrtStationWalkM(dir === "out" ? "in" : "out");
+    let outMin = 0;
+    let outMet = 0;
+    let outEst = false;
+    if (ctx.walkResolver) {
+      const info = dir === "out" ? ctx.walkResolver.out(mainCodeOf(station)) : ctx.walkResolver.in(mainCodeOf(station));
+      outMin = info.minutes;
+      outMet = info.distanceM ?? 0;
+      outEst = info.estimated;
+    }
+    const meters = Math.round(outMet) + inDoorM;
+    return {
+      minutes: Math.round((outMin + inDoorM / WALK_BASE_M_PER_MIN) * 10) / 10,
+      toLabel: destName || labelOf(ctx, station),
+      // level 语义：站外为几何（估否随源）；站内为常量 ⇒ 无站外数据时 level 2（有常量依据）
+      level: outEst ? 3 : 2,
+      estimated: outEst,
+      samples: 0,
+      distanceM: meters,
+    };
+  }
+
   // ★ v1.3.0 接缝：有 walkResolver（全澳导航）→ 用高德几何（短距修正后 ÷84）
   if (ctx.walkResolver) {
     const info = dir === "out" ? ctx.walkResolver.out(mainCodeOf(station)) : ctx.walkResolver.in(mainCodeOf(station));
     return {
       minutes: Math.round(info.minutes * 10) / 10,
-      toLabel: info.toLabel || labelOf(ctx, station),
+      toLabel: destName || info.toLabel || labelOf(ctx, station),
       level: info.estimated ? 3 : 1,
       estimated: info.estimated,
       samples: info.samples,
@@ -315,7 +384,7 @@ function walkView(ctx: ModelContext, slug: string, station: string, dir: "out" |
   return {
     // 取一位小数：样本均值是原始浮点（5.8388888888888895），直接上屏破坏可读性
     minutes: Math.round(r.minutes * 10) / 10,
-    toLabel: labelOf(ctx, station),
+    toLabel: destName || labelOf(ctx, station),
     level: r.level,
     estimated: r.level >= 3,
     samples: r.samples,
@@ -325,7 +394,7 @@ function walkView(ctx: ModelContext, slug: string, station: string, dir: "out" |
 
 /** place 展示名：学校侧带上座区（起点/终点都用它，保证两个方向都能看到座区） */
 function placeLabelOf(ctx: ModelContext, slug: string): string {
-  if (slug === "school" && ctx.zone) return `澳门科技大学（${ctx.zone} 座）`;
+  if (slug === "school" && ctx.zone) return `澳門科技大學（${ctx.zone} 座）`;
   return PLACE_SHORT[slug] ?? slug;
 }
 
@@ -370,6 +439,17 @@ export function modelOption(seed: OptionSeed, ctx: ModelContext): ModeledOption 
   let liveText: string;
   let liveDepartures: number[] | undefined;
   let liveClocks: string[] | undefined;
+  /** ★ v3.2.0：与 `liveDepartures` 一一对应的秒级精准标记（首段轻轨透传 `LrtLive.precise`） */
+  let livePrecise: boolean[] | undefined;
+  /** ★ 2026-09-27（用户需求 2）：本段**主班时刻**（ms）——前端据此定位主班，数组内早于它的项 = 「前一班」 */
+  let liveMainMs: number | undefined;
+  /** ★ 2026-09-27（用户需求 1）：**后续段**（换乘后轻轨）的班次数据——由上一轮换乘块备好 */
+  let liveDeparturesNext: number[] | undefined;
+  let liveClocksNext: string[] | undefined;
+  let livePreciseNext: boolean[] | undefined;
+  let liveMainMsNext: number | undefined;
+  /** ★ v3.3.0（AC-107）：首段轻轨的保守赶车提示（档 1/2 且有真实时刻时产出；否则 undefined） */
+  let lrtCatchHint: string | undefined;
   /**
    * ★ v1.1.5：首段巴士的**全部可赶候选**（本班 + 后续），供卡内列出后续班次用。
    * 轻轨不填（其后续班次由 `liveDepartures` 表达）。
@@ -380,36 +460,60 @@ export function modelOption(seed: OptionSeed, ctx: ModelContext): ModeledOption 
 
   if (first.kind === "bus") {
     const lv = ctx.live.get(first.route);
-    if (!lv || lv.kind !== "bus" || lv.empty) {
+    if (!lv || lv.kind !== "bus") {
       ctx.excluded.push(first.route);
       return null;
     }
-    busPool = [lv.nearest, lv.second, ...(lv.more ?? [])].filter((x): x is BusArrival => x !== null);
-    const chosen = pickBoardable(lv, wOut.minutes, wOut.distanceM, ctx.tierOverride);
-    chosenBus = chosen;
-    const t0 = chosen ? pickCatchTier(wOut.minutes, chosen.loSec, wOut.distanceM, ctx.tierOverride) : null;
-    if (!chosen || t0 === null) {
-      // 最近两辆在途车都赶不上（连冲刺也不行）→ 不显示这张卡。
-      // 旧行为是「按班距 ÷ 2 估一个等车值」，但卡面同时又写「还有 0 站 · 约 0 分」
-      // 与「本班赶不上」→ 三个数字互相打架，且总用时偏小会把它排到很前面。
-      ctx.missed.push(first.route);
-      return null;
+    if (lv.empty) {
+      // ★ 2026-09-21 新增：本方向**无任何在途车** —— 不再一律剔除。
+      //
+      //   实测事故：在**起点站**等车时，本方向的车都已发出去 ⇒ `empty` ⇒ 整条方案被剔
+      //   （26A 黑沙海灘的 28 分直达被剔，只剩 70~83 分的绕路方案）。
+      //   现在若「未发车估算」（发车间隔 ＋ 已过站班车反推）可用，就用它继续出卡；
+      //   估算不可用（该线此刻无班次基准，如 N2 白天 / 15T 平日）⇒ 维持旧行为（剔除）。
+      const est = lv.waitEstimate;
+      if (!est) {
+        ctx.excluded.push(first.route);
+        return null;
+      }
+      // 等待时间取**区间上限**（产品口径 2026-09-21：宁可信其长，别让用户错过车）
+      boardAtMs = nowMs + est.hiMin * 60_000;
+      // 未发车 ⇒ 不涉及「赶车档位」，按常速（档 3；SPEED_RATIO[3] === 1）
+      tier = 3;
+      liveText = `未发车 · ${waitRangeText(est.loMin, est.hiMin)}`;
+      // 无实车可列 ⇒ 后续班次留空（卡片不展示 altBuses）
+      busPool = [];
+      chosenBus = null;
+      waitMin0 = Math.max(0, (boardAtMs - cursor) / 60_000);
+    } else {
+      busPool = [lv.nearest, lv.second, ...(lv.more ?? [])].filter((x): x is BusArrival => x !== null);
+      const chosen = pickBoardable(lv, wOut.minutes, wOut.distanceM, ctx.tierOverride);
+      chosenBus = chosen;
+      const t0 = chosen ? pickCatchTier(wOut.minutes, chosen.loSec, wOut.distanceM, ctx.tierOverride) : null;
+      if (!chosen || t0 === null) {
+        // 最近两辆在途车都赶不上（连冲刺也不行）→ 不显示这张卡。
+        // 旧行为是「按班距 ÷ 2 估一个等车值」，但卡面同时又写「还有 0 站 · 约 0 分」
+        // 与「本班赶不上」→ 三个数字互相打架，且总用时偏小会把它排到很前面。
+        ctx.missed.push(first.route);
+        return null;
+      }
+      boardAtMs = nowMs + chosen.loSec * 1000;
+      tier = t0;
+      liveText = `还有 ${chosen.stopsAway} 站 · ${etaTextOf(chosen)}`;
+      waitMin0 = Math.max(0, (boardAtMs - cursor) / 60_000);
     }
-    boardAtMs = nowMs + chosen.loSec * 1000;
-    tier = t0;
-    liveText = `还有 ${chosen.stopsAway} 站 · ${rangeText(chosen.loSec, chosen.hiSec)}`;
-    waitMin0 = Math.max(0, (boardAtMs - cursor) / 60_000);
   } else {
     const lv = ctx.live.get(first.route);
     if (!lv || lv.kind !== "lrt" || lv.state !== "running") {
       ctx.excluded.push(first.route);
       return null;
     }
-    const depMs = lv.departures.find((d) => d > cursor);
-    if (depMs === undefined) {
+    const depIdx = lv.departures.findIndex((d) => d > cursor);
+    if (depIdx < 0) {
       ctx.excluded.push(first.route);
       return null;
     }
+    const depMs = lv.departures[depIdx];
     boardAtMs = depMs;
     waitMin0 = Math.max(0, (depMs - cursor) / 60_000);
     // ★ 判据必须取「**从现在起**车还有多久到站」（与巴士侧的 `chosen.loSec` 同语义）。
@@ -422,6 +526,11 @@ export function modelOption(seed: OptionSeed, ctx: ModelContext): ModeledOption 
       return null;
     }
     tier = t0;
+    // ★ v3.3.0（AC-107）：档 1/2 = 正常速赶不上、提速档可赶上 ⇒ 生产**保守**赶车提示。
+    //   仅在**有真实时刻**（`lv.clocks`）时产出；措辞保守（禁「一定」）。
+    if ((t0 === 1 || t0 === 2) && lv.clocks[depIdx]) {
+      lrtCatchHint = `走快一点可赶上 ${lv.clocks[depIdx]} 那班`;
+    }
     // ★ 首段倒计时**只由客户端**每秒重算（`<LrtEtaInline>` 消费 `liveDepartures`）：
     //   服务端再下发一份冻结文案，同一行就会出现两个数字 —— 而且两者参照系不同
     //   （冻结那份用 `cursor` = 你走到站台的时刻，客户端那份用「现在」）→ 会互相矛盾。
@@ -431,11 +540,18 @@ export function modelOption(seed: OptionSeed, ctx: ModelContext): ModeledOption 
     //   → 显示的是「马上就要开、但你还在路上」的那班，与 `waitMin`（按 `cursor` 之后第一班算）
     //     自相矛盾。实测：步行出门 4.6 分，却显示「1.8 分后开」→ 用户怀疑「显示的不是能赶上的班次」。
     //   现在只下发 `> cursor` 的班次，客户端的第一班 ≡ 模型用的那一班。
-    const afterWalk = lv.departures
-      .map((d, k) => ({ d, c: lv.clocks[k] ?? "" }))
-      .filter((x) => x.d > cursor);
-    liveDepartures = afterWalk.map((x) => x.d);
-    liveClocks = afterWalk.map((x) => x.c);
+    // ★ 2026-09-27（用户需求 2）：**前班（到达站台前最近一班）一并下发**——
+    //   用户口径「前面一班车（如有）……赶不上的前班车也允许显示」⇒ 保留 `cursor` 前最近一班；
+    //   客户端以 `liveMainMs` 定位主班，数组内早于主班的项即「前一班」。
+    const stamped = lv.departures.map((d, k) => ({ d, c: lv.clocks[k] ?? "", p: lv.precise?.[k] ?? false }));
+    const beforeWalk = stamped.filter((x) => x.d <= cursor).slice(-1);
+    const afterWalk = stamped.filter((x) => x.d > cursor);
+    const chain = [...beforeWalk, ...afterWalk];
+    liveDepartures = chain.map((x) => x.d);
+    liveClocks = chain.map((x) => x.c);
+    // ★ v3.2.0：与班次同步过滤 —— 首段轻轨的秒级精准标记（供 `<LrtEtaInline>` 窗口/文案）
+    livePrecise = chain.map((x) => x.p);
+    liveMainMs = depMs;
   }
 
   cursor = boardAtMs;
@@ -453,18 +569,29 @@ export function modelOption(seed: OptionSeed, ctx: ModelContext): ModeledOption 
     const waitMin = waitNext;
     const legText = liveTextNext;
 
-    // ★ v2.3.0（B5.2）：轻轨固定乘车秒数（石排湾 100s / 横琴 135s；氹仔 = 跳数×120s）
+    // ★ v2.3.0（B5.2）/ ★ v3.2.0（需求 3 / AC-71/72）：轻轨乘车秒数
+    //   · 石排湾/横琴：`LRT_RIDE_SEC_FIXED`（100 / 135 s，单跳）；
+    //   · 氹仔线：`LRT_HOP_SEC` **逐段求和**（站对索引，db_code 域）；未收录跳段回落 120 s/跳。
     let rideSecText: string | undefined;
     let ride: { minutes: number; levels: number[] };
     if (seg.kind === "lrt") {
-      const lrtSec = LRT_RIDE_SEC_FIXED[seg.route] ?? seg.hops.length * LRT_MIN_PER_HOP * 60;
+      const lrtSec =
+        LRT_RIDE_SEC_FIXED[seg.route] ??
+        seg.hops.reduce((s, [f, t]) => s + (LRT_HOP_SEC[`${f}|${t}`] ?? LRT_HOP_FALLBACK_SEC), 0);
       ride = { minutes: lrtSec / 60, levels: [] };
-      // 仅「固定秒数线」下发秒级展示串（氹仔线按整分、不下发）
+      // 仅「固定秒数线」（石排湾/横琴）下发秒级展示串；氹仔线维持整分展示（不下发）
       if (LRT_RIDE_SEC_FIXED[seg.route] !== undefined) rideSecText = fmtRideSec(lrtSec);
     } else {
-      ride = rideOfHops(ctx.segIdx, seg.route, seg.hops, ctx.todayWeekday);
+      ride = rideOfHops(ctx.segIdx, seg.route, seg.hops, ctx.nowBucket);
     }
     cursor += ride.minutes * 60_000;
+
+    // ★ v3.3.0（AC-103）：轻轨段方向名（终点站展示名）—— 取自该段线路的 `LrtLive.directionName`；
+    //   巴士段为 null。供前端渲染 `{終點}方向`（推荐卡副行 / 导航站条）。
+    const segLv = ctx.live.get(seg.route);
+    const segDirectionName = seg.kind === "lrt" && segLv?.kind === "lrt" ? segLv.directionName : null;
+    // ★ v3.3.0（AC-105）：轻轨段实时状态（供轻轨优先判「当前营运中」；bus 段 undefined）
+    const segLrtState = seg.kind === "lrt" && segLv?.kind === "lrt" ? segLv.state : undefined;
 
     rides.push({
       route: seg.route,
@@ -473,6 +600,8 @@ export function modelOption(seed: OptionSeed, ctx: ModelContext): ModeledOption 
       alight: seg.alight,
       boardLabel: labelOf(ctx, seg.board),
       alightLabel: labelOf(ctx, seg.alight),
+      directionName: segDirectionName,
+      lrtState: segLrtState,
       // ★ B5.2：轻轨保留秒级精度（不取整）；巴士照常 1 位小数
       minutes: seg.kind === "lrt" ? ride.minutes : Math.round(ride.minutes * 10) / 10,
       rideSecText,
@@ -482,8 +611,13 @@ export function modelOption(seed: OptionSeed, ctx: ModelContext): ModeledOption 
       levels: ride.levels,
       waitMin: Math.round(waitMin * 10) / 10,
       liveText: legText,
-      liveDepartures: i === 0 ? liveDepartures : undefined,
-      liveClocks: i === 0 ? liveClocks : undefined,
+      /* ★ 2026-09-27（用户需求 1）：每段都带班次数据 —— 首段用本轮变量、后续段用换乘块备好的 */
+      liveDepartures: i === 0 ? liveDepartures : liveDeparturesNext,
+      liveClocks: i === 0 ? liveClocks : liveClocksNext,
+      livePrecise: i === 0 ? livePrecise : livePreciseNext,
+      liveMainMs: i === 0 ? liveMainMs : liveMainMsNext,
+      // ★ v3.3.0（AC-107）：首段轻轨的保守赶车提示（仅档 1/2 且有时刻时非空）
+      catchHint: i === 0 ? lrtCatchHint : undefined,
       tier: i === 0 ? tier : null,
       tierText: i === 0 ? tierTextOf(tier) : "",
       // ★ v1.1.2：档 1~2（要比常速更快）时补一句「需較常速快 X 分」——
@@ -507,7 +641,18 @@ export function modelOption(seed: OptionSeed, ctx: ModelContext): ModeledOption 
         sameField: true,
       });
     } else {
-      const info = transferMinutes(ctx.transferIdx, seg.alight, next.board);
+      // ★ v3.3.0（AC-106）：**轻轨站内换乘**按距离常量折算（協和 336m / 蓮花 420m）；
+      //   未收录该站 ⇒ 沿用原口径（高德几何 / `transfer_walks`）。分钟 = 米 ÷ 84（缩放交 catch-up）。
+      const lrtTrM = lrtTransferWalkM(mainCodeOf(seg.alight)) ?? lrtTransferWalkM(mainCodeOf(next.board));
+      const info =
+        lrtTrM !== null
+          ? {
+              minutes: Math.round((lrtTrM / WALK_BASE_M_PER_MIN) * 10) / 10,
+              samples: 0,
+              source: "lrt-const",
+              estimate: false,
+            }
+          : transferMinutes(ctx.transferIdx, seg.alight, next.board);
       cursor += info.minutes * 60_000;
       transfers.push({
         at: seg.alight,
@@ -523,26 +668,76 @@ export function modelOption(seed: OptionSeed, ctx: ModelContext): ModeledOption 
     //   在 push 那一段时一并写入 —— 旧代码在这里直接改 `rides[i + 1]`，而下标 `i+1`
     //   此刻还不存在 → 赋值静默失效 → 第 2 段等车「算了却看不到」。
     //   ⚠️ `cursor` 的推进顺序与旧版完全一致，因此**总用时数值不变**，只是卡面显示补全。
+    // ★ B4（需求 7）：第 2 段等车同时写进**刚 push 的换乘项** `transfers[i]`
+    //   （= `transfers[transfers.length - 1]`），供卡面明细对账（AC-61）。
+    const transferCur = transfers[transfers.length - 1];
     if (next.kind === "lrt") {
       const lv = ctx.live.get(next.route);
       if (!lv || lv.kind !== "lrt" || lv.state !== "running") {
         ctx.excluded.push(next.route);
         return null;
       }
-      const depMs = lv.departures.find((d) => d > cursor);
+      // ★ B4 顺延闸门（§h.3）：取「到达换乘站」之后**能赶上**的第一班；
+      //   赶不上最近一班 ⇒ 顺延到能赶上的下一班（并计入等待）；
+      //   末班（无后续）→ 剔除该换乘方案。
+      // ★ 2026-09-27（用户口径）：**轻轨换乘不再叠加安全余量**——缓冲已由
+      //   「进站等效距离（1.5 min）」与「换乘步行（協和 4 / 蓮花 5 min）」承担，
+      //   旧值 `need = cursor + TRANSFER_SAFETY_MIN`（+3 min）会让明明能赶上的早班被跳过
+      //   ⇒ 现直接以精算到达时刻（`cursor` = 到站 + 换乘步行）作为选班起点。
+      const need = cursor;
+      const depMs = lv.departures.find((d) => d >= need);
       if (depMs === undefined) {
         ctx.excluded.push(next.route);
         return null;
       }
-      waitNext = Math.max(0, (depMs - cursor) / 60_000);
+      const gapMin = Math.max(0, (depMs - cursor) / 60_000);
+      waitNext = gapMin;
       cursor = depMs;
+      // ★ 2026-09-27（用户需求 1/2）：备好**下一段**的班次数据（参照 = `need`：到达换乘站 + 安全余量）——
+      //   前班（need 前最近一班）一并带上（同首段口径）；`liveMainMsNext` = 模型选中的那班。
+      {
+        const stampedN = lv.departures.map((d, k) => ({ d, c: lv.clocks[k] ?? "", p: lv.precise?.[k] ?? false }));
+        const chainN = [
+          ...stampedN.filter((x) => x.d < need).slice(-1),
+          ...stampedN.filter((x) => x.d >= need),
+        ];
+        liveDeparturesNext = chainN.map((x) => x.d);
+        liveClocksNext = chainN.map((x) => x.c);
+        livePreciseNext = chainN.map((x) => x.p);
+        liveMainMsNext = depMs;
+      }
       // 轻轨第 2 段拿到的是**真实班次时刻** → 文案用绝对时刻（就是你会坐的那一班）
       liveTextNext = `${hhmmOf(((depMs + 8 * 3_600_000) % 86_400_000) / 1000)} 开出`;
+      if (transferCur) {
+        // slackMin = 到站→发车 的余量（恒 ≥ 安全余量，否则上面已顺延/剔除）
+        transferCur.waitMin = Math.round(gapMin * 10) / 10;
+        transferCur.slackMin = Math.round(gapMin * 10) / 10;
+      }
     } else {
-      waitNext = BUS_HEADWAY_FALLBACK_SEC / 2 / 60;
-      cursor += (BUS_HEADWAY_FALLBACK_SEC / 2) * 1000;
-      // 巴士第 2 段没有第二路实时数据源 → 明说是估算（口径见 types.ts 常量注释）
-      liveTextNext = "按班次间隔推算";
+      // ★ B4（需求 7 / AC-61）：巴士第 2 段**无逐车/时刻表** ⇒ 按「到达换乘站的时刻」
+      //   查 `route_frequency`（`headwayAt`），取**偏保守**值 `(lo + 2·hi)/3`；
+      //   未命中 → 该线全时段班距中位数（`headwayMedian`）→ 仍无 ⇒ `null`（**明示降级**）。
+      //   ⚠️ **不再回落写死常量**（旧「第 2 段巴士等车恒 180s」已废除，AC-61）。
+      let waitBusMin: number | null = null;
+      if (ctx.headway) {
+        const hit = headwayAt(ctx.headway, next.route, cursor);
+        if (hit) waitBusMin = conservativeWaitMin(hit);
+        else waitBusMin = headwayMedian(ctx.headway, next.route) ?? headwayMedian(ctx.headway);
+      }
+      if (waitBusMin !== null) {
+        waitNext = waitBusMin;
+        cursor += waitBusMin * 60_000;
+        liveTextNext = "按班次间隔推算";
+      } else {
+        // 数据缺失 ⇒ **不计等待、不拍脑袋设默认值**（卡面明示「等车时间暂无数据」）
+        waitNext = 0;
+        liveTextNext = "等车时间暂无数据";
+      }
+      if (transferCur) {
+        // 巴士无逐车时刻表 ⇒ 无 slack（换乘可行性按 `yes` 计，见观测钩子 H8）
+        transferCur.waitMin = waitBusMin === null ? null : Math.round(waitBusMin * 10) / 10;
+        transferCur.slackMin = null;
+      }
     }
   }
 
@@ -558,7 +753,7 @@ export function modelOption(seed: OptionSeed, ctx: ModelContext): ModeledOption 
   const hints: string[] = [];
   hints.push(
     seed.fromSlug === "school" && ctx.zone
-      ? `从澳门科技大学（${ctx.zone} 座）步行出发，在 ${labelOf(ctx, first.board)} 上车，乘 ${first.route}`
+      ? `从澳門科技大學（${ctx.zone} 座）步行出发，在 ${labelOf(ctx, first.board)} 上车，乘 ${first.route}`
       : `在 ${labelOf(ctx, first.board)} 上车，乘 ${first.route}`,
   );
   for (let i = 0; i + 1 < segs.length; i++) {
@@ -597,7 +792,7 @@ export function modelOption(seed: OptionSeed, ctx: ModelContext): ModeledOption 
         // ★ v2.3.0（A3）：打上所属线路码（并行线后续班次合并后按 route 分组）
         route: first.route,
         stopsAway: b.stopsAway,
-        waitText: rangeText(b.loSec, b.hiSec),
+        waitText: etaTextOf(b),
         tier: t,
         tierText: tierTextOf(t),
         totalMin: Math.round(((b.loSec * 1000 + restMs) / 60_000) * 10) / 10,
@@ -625,9 +820,13 @@ export function modelOption(seed: OptionSeed, ctx: ModelContext): ModeledOption 
   };
 }
 
-/** 方案排序：总耗时升序 → 计划 id 升序（稳定） */
-export function sortCards(cards: RecommendCard[]): RecommendCard[] {
-  return [...cards].sort((a, b) => a.totalMin - b.totalMin || a.planId - b.planId);
+/**
+ * 方案排序（B4 / 需求 8）：按用户偏好三档（`cmpByPref`），缺省 `balanced`（cost 升序）。
+ * 无 `prefs` ⇒ 等价于原来的「综合」档（cost = totalMin + α·换乘 + (β−1)·步行 + 风险）。
+ * ⚠️ 偏好**不进** `switch-plans`（其组内仍按 `totalMin`，见 `switch-plans-shared`）。
+ */
+export function sortCards(cards: RecommendCard[], prefs: Prefs = PREF_DEFAULTS.balanced): RecommendCard[] {
+  return [...cards].sort((a, b) => cmpByPref(a, b, prefs));
 }
 
 /* ══════════════════════════════════════════════════════════════════════════

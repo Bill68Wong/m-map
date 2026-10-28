@@ -17,6 +17,8 @@
  *   3. 折叠栏那一批实时数据加**软闸**：整体超时 → `reports: []` + `liveDegraded: true`，绝不造假数据。
  */
 import type { Pool } from "pg";
+import { nowBucketOfHolidayAware } from "@/lib/rebuild/holidays";
+import { etaTextOf } from "./catch-up";
 import { modelOption } from "./model";
 import { optionsFor, contextFor, loadStatics, type RecStatic } from "./query";
 import { lookupHop } from "./segment-lookup";
@@ -25,6 +27,7 @@ import { destCodesFor, reachableFrom, kindOfRoute } from "./station-routes";
 import { fetchStationLive } from "./live";
 import { queryLrtDepartures } from "@/lib/lrt/next-departures";
 import { buildCardHref } from "./card-link";
+import { boardRouteOf, stripDirLabelOf } from "@/lib/nav/strips";
 import type {
   CardDetailPayload,
   CatchTier,
@@ -92,7 +95,8 @@ export async function cardDetail(
   // ③ 静态层（Data Cache 命中，几乎零成本）
   const st: RecStatic = await loadStatics(pool);
   const nowMs = input.nowMs ?? Date.now();
-  const todayWeekday = new Date(nowMs + 8 * 3_600_000).getUTCDay();
+  // ★ v3.4.0：查询上下文由「星期」升级为「时段桶」（bucketOfRoute 五桶）——见 segment-lookup 头注
+  const nowBucket = await nowBucketOfHolidayAware(pool, nowMs);
 
   // ④ 站条：每段载具一条。逐跳站点取 **seed 自己的 hops**（见文件头事实 1）
   const seeds = optionsFor(st, input.fromSlug, input.toSlug);
@@ -110,7 +114,7 @@ export async function cardDetail(
     const stops: StripStop[] = [];
     for (let k = 0; k < hops.length; k++) {
       const [a, b] = hops[k]!;
-      const hit = ride.kind === "lrt" ? { minutes: LRT_MIN_PER_HOP, level: 2 } : lookupHop(st.segIdx, ride.route, a, b, todayWeekday);
+      const hit = ride.kind === "lrt" ? { minutes: LRT_MIN_PER_HOP, level: 2 } : lookupHop(st.segIdx, ride.route, a, b, nowBucket);
       sum += hit.minutes;
       stops.push({
         code: a,
@@ -133,6 +137,9 @@ export async function cardDetail(
       alight: ride.alight,
       boardLabel: ride.boardLabel,
       alightLabel: ride.alightLabel,
+      // ★ v3.3.0：AC-103 方向名 / AC-102 上车站实际可乘班车（与 `nav/strips.ts` 同源）
+      dirLabel: stripDirLabelOf(ride),
+      boardRoute: boardRouteOf(card, i),
       stops,
       // ⚠️ 用逐跳累加值；与卡片同源（hops 相同、lookupHop 相同）→ 断言相等
       rideMin: Math.round(sum * 10) / 10,
@@ -153,11 +160,11 @@ export async function cardDetail(
   let liveDegraded = false;
   try {
     const liveMap = await withDeadline(
-      fetchStationLive(pool, busJobs, st.routeIdx, st.segIdx, { todayWeekday, nowMs }),
+      fetchStationLive(pool, busJobs, st.routeIdx, st.segIdx, { nowBucket, nowMs }),
       REPORT_DEADLINE_MS,
       "report",
     );
-    reports = await buildReports(pool, st, input, card, reachable, liveMap, seeds, nowMs, todayWeekday, thresholdMin);
+    reports = await buildReports(pool, st, input, card, reachable, liveMap, seeds, nowMs, nowBucket, thresholdMin);
   } catch {
     liveDegraded = true;
     reports = [];
@@ -190,11 +197,11 @@ async function buildReports(
   liveMap: Awaited<ReturnType<typeof fetchStationLive>>,
   seeds: ReturnType<typeof optionsFor>,
   nowMs: number,
-  todayWeekday: number,
+  nowBucket: string,
   thresholdMin: number,
 ): Promise<ReachReport[]> {
   const out: ReachReport[] = [];
-  const ctx = contextFor(st, nowMs, input.zone, liveMap as Map<string, never>);
+  const ctx = contextFor(st, nowMs, input.zone, liveMap as Map<string, never>, nowBucket);
 
   for (const r of reachable) {
     const alight = r.alights[0]!;
@@ -215,6 +222,8 @@ async function buildReports(
     let liveText = "";
     let liveDepartures: number[] | undefined;
     let liveClocks: string[] | undefined;
+    /** ★ v3.2.0：与 liveDepartures 一一对应的秒级精准标记（折叠栏读秒同口径，AC-70） */
+    let livePrecise: boolean[] | undefined;
     let live = false;
     let href: string | null = null;
 
@@ -223,7 +232,7 @@ async function buildReports(
       if (lv && !lv.empty) {
         live = true;
         const n = lv.nearest;
-        liveText = n ? `还有 ${n.stopsAway} 站 · 约 ${Math.max(1, Math.round(n.loSec / 60))}~${Math.max(1, Math.round(n.hiSec / 60))} 分` : "有车";
+        liveText = n ? `还有 ${n.stopsAway} 站 · ${etaTextOf(n)}` : "有车";
         // ★ 只把该线自己的 live 注入模型，避免其它线的实时数据污染（model.ts 的取用键是 route）
         if (seed) {
           const m = modelOption(seed, { ...ctx, live: new Map([[r.route, lv]]) as never });
@@ -270,6 +279,7 @@ async function buildReports(
           live = true;
           liveDepartures = res.departures.map((d) => d.depMs);
           liveClocks = res.departures.map((d) => d.clock);
+          livePrecise = res.departures.map((d) => d.secPrecise ?? false);
           liveText = `${liveClocks[0]} 开出`;
         } else {
           liveText = "暂无实时报站";
@@ -291,6 +301,7 @@ async function buildReports(
       liveText,
       liveDepartures,
       liveClocks,
+      livePrecise,
       alightCandidates: r.alights,
       minutes,
       inPlan,

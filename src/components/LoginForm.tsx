@@ -68,9 +68,11 @@ export default function LoginForm({
         >
           <Icon name="bus" size={24} />
         </div>
+        {/* ★ v3.0.0 品牌更名：产品名「MUST登校」→ 英文「M Map」（中文品牌名「澳搭車」） */}
         <h1 className="h-headline t-center" style={{ marginBottom: 4 }}>
-          MUST登校
-        </h1>        <p className="t-label t-muted t-center" style={{ marginBottom: 28 }}>
+          M Map
+        </h1>
+        <p className="t-label t-muted t-center" style={{ marginBottom: 28 }}>
           请输入访问口令
           <br />
           <span style={{ opacity: 0.75 }}>开发者模式与数据页需要口令</span>

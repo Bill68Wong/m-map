@@ -1,23 +1,25 @@
 "use client";
 /**
- * 线路名标签组（src/components/RouteStack.tsx，v0.19.1；★ 修复包 v2.2.1-B2 增「分段 / 并列」）
+ * 线路名标签组（src/components/RouteStack.tsx，★ v3.2.0 回归 **v0.19.1「谷歌地图风格」**）
  *
- * ── 形态规范（03-设计方向 §G.1~G.4，用户直接定义）──────────────────────
- *   · **单码** → 主题色实心**圆角矩形**（radius 6px；白字；12–13px/700）
- *   · **段内并列**（同站上、同站下，任选其一）→ 各码仍是各自主题色圆角矩形，
- *     中间用**白斜杠 `/`** 分隔，**整体套一个墨色组胶囊承底**（§G.2 解法 A）——
- *     白斜杠落在墨色底上，**在任意背景上都清晰可见**（白卡上也成立）
- *   · **段间换乘**（先后推进）→ **箭头 `→`**，两侧留 `--space-2`(8px)，
- *     一眼看出"这是两段"而不是一条长组
- *   · **复合** `A/B → C/D` = 上面两者的组合（两个组胶囊 + 一个箭头），无新增视觉语汇
+ * ── 形态规范（v0.19.1 · 需求 13 定稿；权威 = `globals.css` 的 B2 段）──────────────
+ *   · **整「段」（组）= 一个圆角外框**（`--radius-chip` 6px + `overflow:hidden`，**逐组裁剪**）；
+ *   · **块** = 右倾平行四边形（`clip-path`，md 斜切 8px / sm 6px），白字 13px·700、水平垂直居中；
+ *   · **块间** = 相邻块 `margin-right: -5px`（sm -4px）**咬合** ⇒ 留出 3px（sm 2px）的
+ *     「/」形**负空间留白缝**（露出父级卡片底色，**不是 `/` 字符、不是黑块**）；
+ *   · **首块**左端竖直 / **尾块**右端竖直 ⇒ 保留组右上/左下的完整圆角；
+ *   · **单块** = 干净圆角矩形（`clip-path:none`），左右不斜切；
+ *   · **段间换乘**（先后推进）→ **箭头 `→`**，两侧各留 `--space-2`(8px)，一眼看出「这是两段」；
+ *   · 上限 3 条并列，第 4 条起折叠为中性尾块 `+N`（`--surface-2`/`--muted`）。
  *
- * ── 反例（§G.3，禁止）─────────────────────────────────────────────────
- *   ❌ 斜切梯形（旧 `clip-path: polygon(...)`）→ 组胶囊内**强制 `clip-path: none`**
- *   ❌ 多码写成 `25/MT4` 无间距（斜杠左右须各留 1–3px）
- *   ❌ 用斜杠表达"换乘"（斜杠=并列，箭头=先后，语义不同）
+ * ── 现代方案（根治历史缺陷）────────────────────────────────────────────
+ *   v2.2.1 曾为支持多段换行把**顶层容器** `overflow` 改 `visible` ⇒ 容器圆角失去裁剪对象
+ *   ⇒ **容器圆角碎裂**。本批把「圆角 + `overflow`」**下沉到每个 `__group`**（逐组独立裁剪）
+ *   ⇒ 单段 = 连续圆角外框；多段换行时每组各自成框、组间由 `→` 分隔，互不切角。
  *
- * ── 上限（§G.4）───────────────────────────────────────────────────────
- *   单段内并列 **≤3 条**，第 3 条起折叠为 `+N`（防胶囊过宽撑破 `.rc-head`）
+ * ── 反例（禁止）───────────────────────────────────────────────────────
+ *   ❌ 用 `/` 字符表达「并列」（缝是**负空间**，不是字）；❌ 用斜缝表达「换乘」（段间必须 `→`）；
+ *   ❌ 给单块加 `clip-path`；❌ 新增 `--tag-*` Token / 新形态。
  */
 import { Fragment } from "react";
 import { lineNameOf, sortRouteOptions } from "@/lib/route-label";
@@ -66,7 +68,11 @@ export default function RouteStack({
   if (!segs.length) return null;
 
   return (
-    <span className={`route-stack${size === "sm" ? " route-stack--sm" : ""} ${className}`}>
+    <span
+      className={`route-stack${size === "sm" ? " route-stack--sm" : ""} ${className}`}
+      /* ★ v3.2.0（Spec §2 / AC-89~91）：标签形状版本钩子（只读，QA 断言用） */
+      data-tag-shape="v0191"
+    >
       {segs.map((list, si) => (
         <Fragment key={si}>
           {/* ★ 段间 = 换乘箭头（§G.1 / §G.4）：粗一档 + muted，两侧 8px */}
@@ -75,22 +81,18 @@ export default function RouteStack({
               →
             </span>
           )}
-          <span className={`route-stack__group${list.length > 1 ? " route-stack__group--multi" : ""}`}>
-            {list.slice(0, MAX_PARALLEL).map((c, i) => (
-              <Fragment key={c}>
-                {i > 0 && (
-                  <span className="route-stack__slash" aria-hidden="true">
-                    /
-                  </span>
-                )}
-                <span
-                  className="route-stack__seg"
-                  style={{ background: resolve?.(c) || "var(--primary)" }}
-                  title={lineNameOf(c)}
-                >
-                  {lineNameOf(c)}
-                </span>
-              </Fragment>
+          <span className="route-stack__group">
+            {/* ★ v3.2.0（需求 13）：同段并列 = 块间 **「/」形负空间留白缝**（`margin-right:-5px`
+                咬合 + `clip-path` 斜切；**不是 `/` 字符、不是黑块**）—— 详见 globals.css B2 段。 */}
+            {list.slice(0, MAX_PARALLEL).map((c) => (
+              <span
+                key={c}
+                className="route-stack__seg"
+                style={{ background: resolve?.(c) || "var(--primary)" }}
+                title={lineNameOf(c)}
+              >
+                {lineNameOf(c)}
+              </span>
             ))}
             {list.length > MAX_PARALLEL && (
               <span

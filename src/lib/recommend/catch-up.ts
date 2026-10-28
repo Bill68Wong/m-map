@@ -125,6 +125,42 @@ export function rangeText(loSec: number, hiSec: number): string {
   const lo = Math.max(0, Math.floor(loSec / 60));
   const hi = Math.max(lo, Math.ceil(hiSec / 60));
   if (lo === hi) return `约 ${lo} 分`;
-  if (hi > lo * 2 && hi - lo >= 5) return `约 ${lo} 分起`;
+  // ★ v3.4.x：区间口径放宽到 [0.6×, 1.4×]（实测标定 · 覆盖率 34.7%→84.9%）后，
+  //   原降级条件（hi>2×lo 且宽≥5 分）触发过频（hi/lo 恒约 2.3）——多数行程被降级成「X 分起」。
+  //   放宽为：仅「非常宽」（宽 ≥15 分）或「超长」（hi>45 分）时降级（保留上限信息优先）。
+  if ((hi > lo * 2 && hi - lo >= 15) || hi > 45) return `约 ${lo} 分起`;
   return `约 ${lo}~${hi} 分`;
+}
+
+/**
+ * ★ v3.5.0：**报站剩余的统一显示口径**（「还有 N 站」的分钟部分）。
+ *
+ *   · 在途/在站**实车**（`etaSec` 可用）→ **单值「约 X 分钟」**——
+ *     区间进度模型已消解「车在区间的哪一段」这层不确定性（实测：过半场景误差 −42%、将到 −59%），
+ *     单值比宽区间更有决策价值（用户 2026-09-27 口径：「有把握的结果应是约 X 分钟」）。
+ *   · **未发车估算**（`estimated`）或 `etaSec` 缺失 → 区间 `rangeText`——
+ *     发车间隔本质上是一个区间，此处保留「约 X~Y 分」。
+ */
+export function etaTextOf(a: { etaSec?: number | null; loSec: number; hiSec: number; estimated?: boolean }): string {
+  if (!a.estimated && a.etaSec != null && a.etaSec >= 0) {
+    const m = Math.max(1, Math.round(a.etaSec / 60));
+    return `约 ${m} 分钟`;
+  }
+  return rangeText(a.loSec, a.hiSec);
+}
+
+/**
+ * ★ v3.5.1：**未发车等待**的统一显示口径（用户口径：约 X1~X2 分 · 整数 · 不用「到」）。
+ *   · 正常（lo < hi）：`约 X1~X2 分`
+ *   · 下界未知（lo ≤ 0）：`X2 分内`（「0~X 分」的诚实表达——快慢都有可能，0 会误导成「已到」）
+ *   · 单点（X1 === X2）：`约 X1 分`
+ *   · 上限被压到 ≤ 0（间隔推算异常）：`约 1 分内`（最小正值兜底）
+ */
+export function waitRangeText(loMin: number, hiMin: number): string {
+  const x1 = Math.floor(loMin);
+  const x2 = Math.ceil(hiMin);
+  if (x2 <= 0) return "约 1 分内";
+  if (x1 <= 0) return `${x2} 分内`;
+  if (x1 >= x2) return `约 ${x1} 分`;
+  return `约 ${x1}~${x2} 分`;
 }

@@ -143,7 +143,6 @@ async function main() {
   }
 
   const rows = rowsFromCsv(parseCsv(fs.readFileSync(CSV, "utf8"))).data;
-  const flagged = rows.filter((r) => r.flag !== "");
   const fillable = rows.filter((r) => r.ourCode !== "" && Number.isFinite(r.lng) && Number.isFinite(r.lat));
   // ★ 安全闸：默认**跳过仍带「待人工确认」标记**的行 —— 防止把「自动猜测」误当「人工已复核」写库。
   const toWrite = INCLUDE_FLAGGED ? fillable : fillable.filter((r) => r.flag === "");

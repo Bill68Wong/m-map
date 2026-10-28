@@ -22,7 +22,9 @@
  * ★ v1.3.0：segment_stats 改为**新旧合并**口径（`sampleFrom: "both"`）——
  *   事件(timer+free) + segment_samples 的 track 原始样本。**必须用 both**，
  *   否则每日 Cron 会把合采后的结果**静默回退**成事件-only（track 数据白入）✗。
- *   另新增「滚动窗口清理」步骤：segment_samples 只保留最近 30 轮 track（timer 永不删）。
+ * ★ 2026-09-27：滚动窗口清理**已关闭**（`trimSegmentSampleWindow(pool, 0)` ⇒ 只回报不删除）。
+ *   原行为为「只保留最近 30 轮 track」（timer 永不删）；关闭原因 = 用户要求「保留所有轮」。
+ *   如需恢复窗口，把下面的 0 改回具体轮数（如 100），并同步 `import-segment-samples.ts` 的默认值。
  *
  * 幂等：可重复调用。
  */
@@ -102,10 +104,13 @@ async function handle(req: NextRequest) {
     const results: StepResult[] = [];
 
     // 顺序执行：各步骤都读 timer_events / segment_samples，串行可避免 DB 连接竞争
-    // ⓪ 滚动窗口：先清理 segment_samples（只留最近 30 轮 track），让 segment_stats 依保留窗口重算
+    // ⓪ 滚动窗口：**自动清理已关闭**（2026-09-27 用户要求「保留所有轮」）——
+    //    keepRuns=0 ⇒ trim 只回报现状、**不删除任何行**（timer 本就不删）。
+    //    ⚠️ 若未来需要重新启用窗口（如容量/性能考量），把 0 改回具体轮数即可（如 100）。
+    //    保留此步骤是为了让返回体继续报告剩余轮数（监控用）。
     results.push(
       await step("segment_samples_window", async () => {
-        const r = await trimSegmentSampleWindow(pool, 30);
+        const r = await trimSegmentSampleWindow(pool, 0);
         return { deleted: r.deleted, remaining: r.remaining, remainingRuns: r.remainingRuns };
       }),
     );

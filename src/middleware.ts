@@ -27,9 +27,8 @@ const PUBLIC_PAGES = new Set([
   "/card",
   "/about",
   "/login",
-  // ★ v1.3.0 全澳导航（公众功能，R-10）—— 不加则路人用不了（fail-closed）
-  "/nav", // 导航结果页
-  "/nav/detail", // 导航详情页
+  // ⚠️ 2026-09-23 改版：`/nav`、`/nav/detail` 独立页**已删除**（功能并入首页全屏弹窗）。
+  //    旧链接由下方 middleware 顶部 **308 重定向**兜底 → 首页。故从白名单移除（fail-closed）。
   "/commute", // 旧首页（原 `/` 的 HomeClient 原样迁此）
   // ★ M Map 改版 S4：路线收藏页（新增公开页；fail-closed 必须显式加入）
   "/favorites", // 路线收藏
@@ -44,13 +43,48 @@ const PUBLIC_PREFIXES = [
   "/api/nav", // ★ 全澳导航·路线结果（公众可用；设计 §2.E）
   "/api/stations", // ★ v2.1.0 首页地图·全量巴士站点（公众图层数据）
   "/api/station/eta", // ★ v2.1.0 首页地图·站点实时报站（信息卡）
+  // ★ 2026-09-22 路线收藏·「查看路线」页：读库路线（GET）+ 保存前校验（POST）
+  //   ⚠️ 该前缀同时覆盖 POST 保存接口 —— 与公开页 `/favorites` 同一信任级别
+  //   （用户在自己浏览器里编辑并落库；非商业个人项目，接受此放宽）。
+  "/api/fav-routes",
+  // ★ 2026-09-22 公共交通路线：线路清单 + 线路走向（地图画线用）
+  //   ⚠️⚠️ **fail-closed 下每新增一个 API 都必须显式加白名单** —— 忘加 = 线上 401。
+  //     本项目已因此踩过**两次**（`/api/fav-routes` 与本次 `/api/route-*`）⇒ 记牢。
+  "/api/route-lines",
+  "/api/route-shapes",
+  // ★ v2.10.0 路线查看模式·在途车辆实时位置（GET）—— 与 route-lines/shapes 同一信任级别
+  //   ⚠️ 第三次记牢：fail-closed 下**每新增一个 API 都必须显式加白名单**，忘加 = 线上 401。
+  "/api/route-vehicles",
   "/_AMapService", // ★ 高德 JS API 安全代理（浏览器直连；密钥不下发前端，见 §2.D）
   "/api/amap-service", // ↑ 同一处理器的真实路由（`/_AMapService` 经 rewrite 指向它）
   "/_next", // 构建产物
+  // ★ v2.15.0 品牌资产目录（标志 / 横排字标 / 深色版）。纯静态图形，无任何敏感信息；
+  //   用**前缀**而非逐个列文件 —— 该目录以后新增资产（分享卡 / 关于页）不必再改本文件。
+  "/brand",
 ];
 
-/** ③ 完全公开的**精确路径**（静态文件） */
-const PUBLIC_FILES = new Set(["/favicon.ico", "/manifest.webmanifest", "/icon.svg"]);
+/** ③ 完全公开的**精确路径**（静态文件）
+ *  ⚠️⚠️ fail-closed：根级静态资源必须**逐个登记**，漏登 = 线上被 307 到 /login
+ *     （表现为「图标 / 地图钉不显示」，且**只在配了 ACCESS_PASSWORD 的生产环境复现**）。
+ *     本轮教训：`/pin-destination.svg` 由 v2.15「终点钉 SVQ 化」引入时漏登 —— 一并补齐。 */
+const PUBLIC_FILES = new Set([
+  "/favicon.ico",
+  "/manifest.webmanifest",
+  // ── 品牌 favicon / PWA 图标（v2.15.0 定稿六件套）──
+  "/icon.svg",
+  "/icon-16.png",
+  "/icon-32.png",
+  "/icon-192.png",
+  "/icon-512.png",
+  "/icon-maskable-512.png",
+  "/apple-touch-icon.png",
+  // ── 地图静态图形（CSS url() 引用）──
+  "/pin-destination.svg",
+  "/pin-destination-mono.svg",
+  /* ★ v3.1.1（#4 起点钉新增）：根级 `public/` 新文件必须显式登记 —— 漏登 = 线上被 307 到 /login，
+     起点钉在配口令的生产环境直接 404（本地无口令不复现；见铁律「fail-closed 每新增一文件都要登记」）。 */
+  "/pin-origin.svg",
+]);
 
 /** ④ 由自身 Bearer 鉴权、不受口令门约束（Vercel Cron 重算派生数据） */
 const SELF_AUTHED = new Set(["/api/cron/rebuild"]);
@@ -64,6 +98,19 @@ function isPublic(pathname: string): boolean {
 
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
+
+  // ★ 2026-09-23 改版：`/nav`、`/nav/detail` 两个独立页**已删除**（功能并入首页全屏弹窗）。
+  //   旧链接（书签 / 分享 / 收藏夹里的 `/nav/detail?...`）→ **308 永久重定向到首页**。
+  //   ⚠️ 必须放在**鉴权之前**：旧链接对「已登录」和「未登录」用户都应回到首页，
+  //      不能先被口令门拦去 `/login`（那样就把一个已删除的页面当成受保护页重定向了）。
+  //   ⚠️ query 保留（首页要从 fromLng…&toLng… 预填起终点进入「半屏可出发」态），
+  //      仅删除已废弃的 `plan`（旧版按 planId 定位方案卡，新首页不再使用）。
+  if (pathname === "/nav" || pathname === "/nav/detail") {
+    const url = req.nextUrl.clone();
+    url.pathname = "/";
+    url.searchParams.delete("plan");
+    return NextResponse.redirect(url, 308);
+  }
 
   // 公开区直接放行
   if (isPublic(pathname)) return NextResponse.next();

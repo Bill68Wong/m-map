@@ -18,7 +18,7 @@ import { useRouter } from "next/navigation";
 import { LrtEtaInline } from "@/components/LrtEta";
 import RouteStack from "@/components/RouteStack";
 import Icon from "@/components/ui/Icon";
-import { EtaText, macauClock, Row, TierBadge } from "@/components/RoutePieces";
+import { catchHintOf, directionNameOf, EtaText, macauClock, Row, TierBadge } from "@/components/RoutePieces";
 import StationStrip from "./StationStrip";
 import { lineNameOf } from "@/lib/route-label";
 import { DEFAULT_ZONE, SCHOOL_ZONES, type CardDetailPayload, type SchoolZone } from "@/lib/recommend/types";
@@ -113,6 +113,8 @@ export default function CardDetailClient({
 
   const card = data.card;
   const first = card.rides[0];
+  /** ★ v3.3.0（AC-107）：赶车提示（合并式）—— 后端 `catchHint` 优先、回落 `tierText` */
+  const firstHint = first ? catchHintOf(first) : { text: "", isHint: false };
   const colorOf = (c: string) => data.colors[c] ?? null;
   const zoneOr = zone ?? DEFAULT_ZONE;
   const zoneBadge = toSlug === "school" ? `（${zoneOr} 座）` : "";
@@ -189,7 +191,7 @@ export default function CardDetailClient({
               在 <b>{first?.boardLabel ?? card.walkOut.toLabel}</b> 上车
               <span className="rc-sub">
                 （站台 {first?.board ?? "—"} ·{" "}
-                {card.walkOut.samples ? `步行样本 ${card.walkOut.samples} 次` : "步行为兜底值"}）
+                {card.walkOut.samples ? `步行样本 ${card.walkOut.samples} 次` : "步行按默认值估算"}）
               </span>
             </>
           }
@@ -210,15 +212,25 @@ export default function CardDetailClient({
                   lineCode={first.route}
                   departuresMs={first.liveDepartures}
                   clocks={first.liveClocks}
+                  /* ★ v3.2.0（AC-68/69）：逐班 secPrecise（`RideLegView.livePrecise`） */
+                  precise={first.livePrecise}
                   state="running"
-                  directionName={null}
+                  /* ★ v3.3.0（AC-103）：接通轻轨方向（改前恒传 null） */
+                  directionName={directionNameOf(first)}
+                  /* ★ 2026-09-27（用户需求 2）：详情页 = 展开式邻班（同推荐卡） */
+                  neighbors="expanded"
+                  mainMs={first.liveMainMs}
+                  tierCtx={{ walkMin: card.walkOut.minutes, walkDistM: card.walkOut.distanceM }}
                 />
               ) : (
                 <span className="rc-fold__live">
-                  <EtaText text={first.liveText || `等 ${first.waitMin} 分`} />
+                  <EtaText text={first.liveText || `等 ${Math.round(first.waitMin)} 分`} />
                 </span>
               )}
-              <TierBadge tier={first.tier} tierText={first.tierText} />
+              {/* ★ v3.3.0（AC-107）：赶车提示（合并式 TierBadge，同推荐卡槽位） */}
+              {firstHint.text && (
+                <TierBadge tier={first.tier} tierText={firstHint.text} catchHint={firstHint.isHint} />
+              )}
             </div>
             <p className="rc-fold__meta">
               {first.boardLabel} → {first.alightLabel} · 车上{" "}

@@ -1,285 +1,148 @@
 "use client";
 
 /**
- * 收藏 · **组合卡**（src/components/favorites/FavoriteCard.tsx；★ v2.3.0 S2 重写 / S3 补「编辑编排」）
+ * 收藏扁卡片（src/components/favorites/FavoriteCard.tsx，v3.3.0 · 03 §3.2/§3.3 / AC-112/113）
  *
- * ── 规格（08 §C.2）────────────────────────────────────────────────────
- *   · 卡 = `--radius-card` 10px + **1.5px `--border-strong`** 框 + `--shadow-hard-sm`；**整卡可点**；
- *   · 左侧 **OD 图标对**（origin → arrowRight → destination，均已注册）；
- *   · 命名 = `--text-lg` 17px / 600 / -0.005em（超长单行省略）；
- *   · 摘要行 = `--text-sm` 13px / `--muted`：「**N 段编排 · 最近 X 分 · 线路标签**」；
- *   · 右侧 ⋯ 菜单（`.fav-menu` 复用）：**编辑编排** / 重命名 / 置顶 / 停用 / 删除组合。
- *   · 停用态：整体 `--meta` + 摘要显示「已停用」（**排序沉底由列表页负责**），点击提示去 ⋯ 里启用。
- *
- * ── ★ FA-A.4（关键）───────────────────────────────────────────────────
- *   **不得预展示易失的实时时长** —— 摘要里的「最近 X 分」取**已保存方案的快照**
- *   （`snapshot.totalMin`，文案标「最近」），**不是**实时重算值。
- *
- * ── ★ 删除确认弹窗（06 §3.6 / FA-A.13，必做）──────────────────────────
- *   显示 ① **组合名** ② **影响**（将删 N 条已保存方案 · 不可恢复）③ 危险按钮在右、
- *   **默认焦点在「取消」**（防误删）、Esc = 取消、点遮罩 = 取消。
- *
- * ⚠️ 文案一律**简体**；站名/线路名保留繁体。
+ * ── 形态（组合卡 / 地点卡**同构**）──────────────────────────────────────
+ *   `min-height: 56px`（旧卡 ~64~72px ⇒ 一屏多放 1~2 张）；`--radius-card` +
+ *   `1.5px --border-strong` + `--shadow-hard-sm`（站牌风沿用）。
+ *   · 组合卡：名称（`{起点} → {终点}` 或用户改名）+ 右「**编辑起点终点**」工具（44×44）+ ⋯ 菜单；
+ *   · 地点卡：左 `destination` 图标 + 名称 + ⋯ 菜单（**无**「编辑起终点」）。
+ *   · 已停用（组合）→ 名称转 `--meta` + 右侧小字「已停用」；置顶 → 名称前 `pinTop` 16px `--accent`。
+ *   · **hover 只换边框色**（不叠投影 ⇒ 避「幽灵卡」反模式）。
+ *   · ⋯ 菜单项由调用方给（设计：组合 = 重命名/置顶/停用/删除；地点 = 重命名/删除）—— **无「查看路线」**。
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Icon from "@/components/ui/Icon";
-import RouteStack from "@/components/RouteStack";
-import type { Combo } from "@/lib/favorites/types";
+
+export interface FavoriteMenuItem {
+  label: string;
+  onSelect: () => void;
+}
 
 export interface FavoriteCardProps {
-  combo: Combo;
-  colors: Record<string, string>;
-  readOnly: boolean;
-  onOpen: (combo: Combo) => void;
-  /** ★ S3：打开编排编辑器（⋯ 菜单「编辑编排」） */
-  onEdit: (combo: Combo) => void;
-  onRename: (id: string, name: string) => void;
-  onPin: (id: string, pinned: boolean) => void;
-  onToggleDisabled: (id: string, disabled: boolean) => void;
-  onRemove: (id: string) => void;
-}
-
-/** 组合默认名（与 `comboDefaultName` 同口径；此处内联避免再 import 一个纯函数） */
-const defaultName = (c: Combo) => `${c.from.label} → ${c.to.label}`;
-
-/** 摘要里的线路标签：取**最近一条已保存方案**快照的 legs 前缀 */
-function routeCodesOf(c: Combo): string[] {
-  const latest = [...c.plans].sort((a, b) => (b.snapshot.capturedAt ?? 0) - (a.snapshot.capturedAt ?? 0))[0];
-  if (!latest) return [];
-  return latest.snapshot.legs.map((l) => l.split(" ")[0]).filter(Boolean).slice(0, 3);
-}
-
-/** 最近一条已保存方案的时长（**快照值**，非实时） */
-function latestMinOf(c: Combo): number | null {
-  const latest = [...c.plans].sort((a, b) => (b.snapshot.capturedAt ?? 0) - (a.snapshot.capturedAt ?? 0))[0];
-  return latest ? Math.round(latest.snapshot.totalMin) : null;
+  kind: "combo" | "place";
+  /** 显示名（组合 = `name`；地点 = `name ?? endpoint.label`） */
+  title: string;
+  /** 组合 · 已停用 */
+  disabled?: boolean;
+  /** 已置顶 */
+  pinned?: boolean;
+  /** 点卡身 = 回放（组合 = 首页式规划；地点 = 首页式选点） */
+  onOpen: () => void;
+  /** 「编辑起点终点」工具（仅组合给） */
+  onEdit?: () => void;
+  /** ⋯ 菜单项 */
+  menu: FavoriteMenuItem[];
+  /** 只读（`localStorage` 不可用）⇒ 置灰禁点 */
+  readOnly?: boolean;
 }
 
 export default function FavoriteCard({
-  combo,
-  colors,
-  readOnly,
+  kind,
+  title,
+  disabled = false,
+  pinned = false,
   onOpen,
   onEdit,
-  onRename,
-  onPin,
-  onToggleDisabled,
-  onRemove,
+  menu,
+  readOnly = false,
 }: FavoriteCardProps) {
   const [menuOpen, setMenuOpen] = useState(false);
-  const [renaming, setRenaming] = useState(false);
-  const [draft, setDraft] = useState(combo.name);
-  const [confirming, setConfirming] = useState(false);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
 
-  // Esc 关闭确认弹窗（= 取消，06 §3.6）
+  /** 点外部 / Esc 关菜单 */
   useEffect(() => {
-    if (!confirming) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setConfirming(false);
+    if (!menuOpen) return;
+    const onDoc = (e: MouseEvent | TouchEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setMenuOpen(false);
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [confirming]);
-
-  const codes = routeCodesOf(combo);
-  const latestMin = latestMinOf(combo);
-  const segCount = combo.chain?.length ? combo.chain.length : 0;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMenuOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [menuOpen]);
 
   return (
-    <>
-      <div
-        className={`fav-combo${combo.pinned ? " is-pinned" : ""}${combo.disabled ? " is-off" : ""}`}
-        data-fav-id={combo.id}
+    <div
+      ref={wrapRef}
+      className={`fav-flat${disabled ? " is-off" : ""}${pinned ? " is-pinned" : ""}${readOnly ? " is-ro" : ""}`}
+      data-fav-kind={kind}
+    >
+      <button
+        type="button"
+        className="fav-flat__main"
+        onClick={onOpen}
+        disabled={readOnly}
+        title={title}
+        aria-label={`${kind === "combo" ? "按该组合规划" : "以该地点为目的地"}：${title}`}
       >
-        <button type="button" className="fav-combo__main" onClick={() => onOpen(combo)} aria-label={`打开组合 ${combo.name}`}>
-          <span className="fav-combo__name">{combo.name || defaultName(combo)}</span>
-          <span className="fav-combo__od">
-            <Icon name="origin" size={16} />
-            <span className="fav-combo__end">{combo.from.label}</span>
-            <Icon name="arrowRight" size={16} />
-            <Icon name="destination" size={16} />
-            <span className="fav-combo__end">{combo.to.label}</span>
+        {pinned && (
+          <span className="fav-flat__pin" aria-hidden="true">
+            <Icon name="pinTop" size={16} />
           </span>
-          <span className="fav-combo__summary">
-            {combo.disabled ? (
-              <span className="fav-combo__off">已停用</span>
-            ) : (
-              <>
-                <span>{segCount ? `${segCount} 段编排` : "未编排"}</span>
-                {/* ★ FA-A.4：这里只显示**已保存快照**的时长，且标「最近」——不是实时值 */}
-                {latestMin !== null && <span>· 最近 {latestMin} 分</span>}
-                {codes.length > 0 ? (
-                  <RouteStack codes={codes} colors={colors} size="sm" />
-                ) : (
-                  <span>· 暂无保存方案</span>
-                )}
-              </>
-            )}
+        )}
+        {kind === "place" && (
+          <span className="fav-flat__lead" aria-hidden="true">
+            <Icon name="destination" size={20} />
           </span>
+        )}
+        <span className="fav-flat__name">{title}</span>
+        {disabled && <span className="fav-flat__off">已停用</span>}
+      </button>
+
+      {/* 「编辑起点终点」工具（组合专属；44×44 命中区） */}
+      {kind === "combo" && onEdit && (
+        <button
+          type="button"
+          className="fav-flat__tool"
+          onClick={onEdit}
+          disabled={readOnly}
+          aria-label="编辑起点与终点"
+          title="编辑起点与终点"
+        >
+          <Icon name="edit" size={20} />
         </button>
+      )}
 
-        {/* ⋯ 菜单 */}
-        <div className="fav-menu">
-          <button
-            type="button"
-            className="fav-menu__btn"
-            aria-label="更多操作"
-            aria-expanded={menuOpen}
-            onClick={(e) => {
-              const next = !menuOpen;
-              /**
-               * ★ P2 二次修复（QA 实测驱动）：菜单 5 项约 220px 高，向下弹时若卡片靠近**视口底部**，
-               *   下半截会落在**视口之外**（实测 popRect.bottom 1074 > 视口 932 ⇒ 后 3 项点不到，
-               *   提高 z-index 也无效，因为点不到的是"屏幕外"而不是"被遮住"）。
-               *   ⇒ 下方空间不足以容纳菜单时，给 `.fav-menu` 打 `data-up="1"`，CSS 改为 `bottom:100%` **向上弹**。
-               *   用 DOM 属性而非 React state：避免新增状态与重渲染，判定发生在**打开那一刻**（就地量测）。
-               */
-              if (next) {
-                const r = e.currentTarget.getBoundingClientRect();
-                const need = 5 * 44 + 24; // 5 项 × 44 + 内边距
-                const up = window.innerHeight - r.bottom < need;
-                e.currentTarget.parentElement?.setAttribute("data-up", up ? "1" : "0");
-              }
-              setMenuOpen(next);
-              setRenaming(false);
-            }}
-          >
-            <Icon name="more" size={20} />
-          </button>
-          {menuOpen && (
-            <div className="fav-menu__pop" role="menu">
-              {renaming ? (
-                <form
-                  className="fav-menu__rename"
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    const v = draft.trim().slice(0, 24);
-                    if (v) onRename(combo.id, v);
-                    setRenaming(false);
-                    setMenuOpen(false);
-                  }}
-                >
-                  <input
-                    className="inp fav-menu__inp"
-                    value={draft}
-                    onChange={(e) => setDraft(e.target.value)}
-                    maxLength={24}
-                    placeholder="组合名称（≤24 字）"
-                    aria-label="组合名称"
-                    autoFocus
-                  />
-                  <button type="submit" className="btn btn--text btn--sm" disabled={readOnly}>
-                    保存
-                  </button>
-                </form>
-              ) : (
-                <>
-                  {/* ★ S3：编排编辑器入口（S2 故意留空的位置） */}
-                  <button
-                    type="button"
-                    className="fav-menu__item"
-                    onClick={() => {
-                      setMenuOpen(false);
-                      onEdit(combo);
-                    }}
-                    disabled={readOnly}
-                  >
-                    <Icon name="edit" size={16} />
-                    编辑编排
-                  </button>
-                  <button
-                    type="button"
-                    className="fav-menu__item"
-                    onClick={() => {
-                      setDraft(combo.name);
-                      setRenaming(true);
-                    }}
-                    disabled={readOnly}
-                  >
-                    重命名
-                  </button>
-                  <button
-                    type="button"
-                    className="fav-menu__item"
-                    onClick={() => {
-                      onPin(combo.id, !combo.pinned);
-                      setMenuOpen(false);
-                    }}
-                    disabled={readOnly}
-                  >
-                    {combo.pinned ? "取消置顶" : "置顶"}
-                  </button>
-                  <button
-                    type="button"
-                    className="fav-menu__item"
-                    onClick={() => {
-                      onToggleDisabled(combo.id, !combo.disabled);
-                      setMenuOpen(false);
-                    }}
-                    disabled={readOnly}
-                  >
-                    {combo.disabled ? "启用" : "停用"}
-                  </button>
-                  <button
-                    type="button"
-                    className="fav-menu__item fav-menu__item--danger"
-                    onClick={() => {
-                      setMenuOpen(false);
-                      setConfirming(true);
-                    }}
-                  >
-                    删除组合
-                  </button>
-                </>
-              )}
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* ── 删除确认弹窗（06 §3.6：真实有效 —— 组合名 + 实际影响 + 默认焦点在取消）── */}
-      {confirming && (
-        <div className="dialog-backdrop" role="presentation" onClick={() => setConfirming(false)}>
-          <div
-            className="dialog-card"
-            role="alertdialog"
-            aria-modal="true"
-            aria-label="删除组合确认"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2 className="fav-confirm__title">删除组合？</h2>
-            <p className="fav-confirm__name">「{combo.name || defaultName(combo)}」</p>
-            <p className="fav-confirm__impact">
-              {combo.plans.length > 0 ? (
-                <>
-                  · 其中的 <b>{combo.plans.length}</b> 条已保存方案会一起删除
-                  <br />
-                  · 这条组合下的收藏记录无法恢复
-                </>
-              ) : (
-                <>· 这条组合尚未保存任何方案；删除后无法恢复</>
-              )}
-            </p>
-            <div className="fav-confirm__acts">
-              {/* ★ 危险动作在主按钮位、但**默认焦点在「取消」**（防误删） */}
-              <button type="button" className="btn btn--outline" onClick={() => setConfirming(false)} autoFocus>
-                取消
-              </button>
+      {/* ⋯ 更多 */}
+      <div className="fav-flat__mwrap">
+        <button
+          type="button"
+          className="fav-flat__tool"
+          onClick={() => setMenuOpen((v) => !v)}
+          disabled={readOnly}
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
+          aria-label="更多操作"
+          title="更多操作"
+        >
+          <Icon name="more" size={20} />
+        </button>
+        {menuOpen && (
+          <div className="fav-flat__menu" role="menu">
+            {menu.map((m) => (
               <button
+                key={m.label}
                 type="button"
-                className="btn btn--danger"
-                disabled={readOnly}
+                role="menuitem"
+                className="fav-flat__mitem"
                 onClick={() => {
-                  setConfirming(false);
-                  onRemove(combo.id);
+                  setMenuOpen(false);
+                  m.onSelect();
                 }}
               >
-                删除
+                {m.label}
               </button>
-            </div>
+            ))}
           </div>
-        </div>
-      )}
-    </>
+        )}
+      </div>
+    </div>
   );
 }

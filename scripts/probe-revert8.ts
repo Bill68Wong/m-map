@@ -67,7 +67,7 @@ function ctxWith(live: Map<string, RouteLive>): ModelContext {
     live,
     excluded: [],
     missed: [],
-    todayWeekday: 1,
+    nowBucket: "day",
   };
 }
 

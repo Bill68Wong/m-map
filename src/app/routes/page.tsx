@@ -37,6 +37,8 @@ export default async function RoutesPage({
       plans = await queryPlans({ from, to });
       routeColors = await queryRouteColors();
     } catch (err) {
+      // ★ v3.1.1 #5：原始错误只进服务端日志（界面走用户语言）
+      console.error("[routes] 路线数据加载失败：", err);
       dbError = (err as Error).message;
     }
   }
@@ -63,7 +65,7 @@ export default async function RoutesPage({
         </h1>
         <p className="t-label t-muted" style={{ marginTop: 4, lineHeight: 1.6 }}>
           {dbError
-            ? `数据库未就绪：${dbError}`
+            ? "数据暂时无法加载，请稍后重试"
             : valid
               ? `共 ${plans.length} 条路线 · 点选一条开始计时`
               : "请从首页选择方向进入"}

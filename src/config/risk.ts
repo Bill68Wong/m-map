@@ -16,6 +16,15 @@ export const RISK = {
     enabled: true,
     timeoutMs: 1500,
   },
+  // ★ v2.10.0 实时车辆位置（手动刷新）：单独超时（3s，介于 recommend 1.5s 与计时 5s 之间——
+  //   位置接口响应体更大、含全线站表，给宽一点；但仍明显短于计时路径，保证刷新体验）。
+  //   **同样不参与熔断判定**（见 src/lib/risk.ts#guardDsatCall 的 purpose 过滤）——
+  //   否则用户连点几次刷新、一旦都超时就会撞开全局熔断，
+  //   把**计时器的自动车距快照一起静默 30 分钟**（副作用很阴、事后极难排查）。
+  livePos: {
+    enabled: true,
+    timeoutMs: 3000,
+  },
   // 通用保险（所有 DSAT 调用共用）
   circuitBreaker: {
     failThreshold: 3, // 连续失败 3 次 → 熔断

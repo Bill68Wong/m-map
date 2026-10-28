@@ -57,6 +57,47 @@ export interface BusPositionsPayload {
   [k: string]: unknown;
 }
 
+/**
+ * ★ v2.10.0：位置接口（`routestation/location → data.busInfoList[]`）的**单车条目**
+ * 实测仅 5 个字段、**无任何站点/航向信息**（见 docs/DSAT巴士接口调研.md §2.5.7）：
+ *   坐标是 WGS84（6 位小数）、`busType` 车型、`speed` 车速（与报站同款、仅展示参考）。
+ */
+export interface BusLocationItem {
+  latitude?: string | number; // WGS84
+  longitude?: string | number; // WGS84
+  busPlate?: string; // 车牌，用于与报站接口按 plate 合并
+  busType?: string; // 车型
+  speed?: string | number; // km/h（仅展示参考，禁参与状态判定）
+}
+
+/**
+ * ★ v2.10.0：`routestation/location` 载荷
+ *
+ * `busInfoList`   = 该线路**在途车辆**（车为骨架，含坐标）
+ * `stationInfoList` = 该线路**全线站点**（站码 + 坐标 + 站名 + 车道；顺序=行进顺序）
+ * 顶层还带末班车牌 / 车队色 / 异常车标记，供状态判定与合规溯源。
+ */
+export interface BusLocationsPayload {
+  busInfoList?: BusLocationItem[];
+  /** 全线站表（含坐标）；本接口只读车辆，站表字段按需取用 */
+  stationInfoList?: {
+    stationCode?: string;
+    stationName?: string;
+    laneName?: string;
+    latitude?: string | number;
+    longitude?: string | number;
+  }[];
+  /** 末班车车牌（状态判定：`isLast`） */
+  lastBusPlate?: string;
+  /** 末班车车型 */
+  lastBusType?: string;
+  /** 车队颜色：`Blue`=新福利 / `Orange`=澳巴 */
+  busColor?: string;
+  /** 异常车标记（信号丢失等） */
+  badCar?: unknown;
+  [k: string]: unknown;
+}
+
 /** DSAT 调用结果 */
 export interface DsatResult<T> {
   ok: boolean;

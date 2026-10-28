@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import RouteStack from "./RouteStack";
 import Icon from "./ui/Icon";
 
@@ -60,6 +61,11 @@ export default function StatsClient({
 }) {
   const width = (n: number) => Math.min(100, Math.round((n / GOAL) * 100));
 
+  /** ★ v3.1.1 #5：加载失败的原始错误只进控制台（界面只给用户语言） */
+  useEffect(() => {
+    if (dbError) console.error("[stats] 统计数据加载失败：", dbError);
+  }, [dbError]);
+
   return (
     <main className="page">
       <header style={{ marginBottom: 16, width: "100%", padding: "0 2px" }}>
@@ -67,15 +73,7 @@ export default function StatsClient({
           <h1 className="h-headline" style={{ margin: 0 }}>
             通勤统计
           </h1>
-          <a
-            className="btn btn--outline btn--sm"
-            style={{ fontWeight: 500, marginLeft: "auto" }}
-            href="/api/export"
-            download
-          >
-            <Icon name="download" size={20} />
-            导出 CSV
-          </a>
+          {/* 2026-09-27：CSV 导出入口已关闭（全站「下载数据」口径）；接口 /api/export 已移除 */}
         </div>
         <p className="t-label t-muted" style={{ marginTop: 6, lineHeight: 1.6 }}>
           {summary ? (
@@ -93,7 +91,7 @@ export default function StatsClient({
 
       {dbError && (
         <p className="t-error t-body" style={{ marginBottom: 12, width: "100%" }}>
-          数据库错误：{dbError}
+          数据暂时无法加载，请稍后重试
         </p>
       )}
 

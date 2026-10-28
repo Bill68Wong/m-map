@@ -16,6 +16,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getPool } from "@/lib/db";
 import { recommend } from "@/lib/recommend/service";
+import { parsePrefs } from "@/lib/recommend/score";
 import { DEFAULT_ZONE, SCHOOL_ZONES, type SchoolZone } from "@/lib/recommend/types";
 
 export const runtime = "nodejs";
@@ -43,8 +44,12 @@ export async function GET(req: NextRequest) {
   const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(20, Math.trunc(limitRaw)) : 5;
   const force = sp.get("force") === "1" || sp.get("force") === "true";
 
+  // ★ B4（需求 8）：可选参数 `prefs`（balanced | fewer_transfers | less_walk）；
+  //   **非法值回落 `balanced`**（不 400）。
+  const prefs = parsePrefs(sp.get("prefs"));
+
   try {
-    const r = await recommend(getPool(), { fromSlug: from, toSlug: to, zone, limit, force });
+    const r = await recommend(getPool(), { fromSlug: from, toSlug: to, zone, limit, force, prefs });
     return NextResponse.json(
       {
         ok: true,

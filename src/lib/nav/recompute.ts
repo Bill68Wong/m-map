@@ -172,16 +172,16 @@ export function overlayTransferIndex(seed: AmapPlanSeed, base: TransferIndex): T
 /**
  * 把「映射失败段」的高德时长补进卡片，并产出 `provenance`。
  *
- * @param card    由 `modelOption` 产出的卡片（`rides` 与 `seed.legs` **一一对应**）
- * @param seed    已桥接的方案骨架
- * @param segIdx  段统计索引（供逐跳层级/provenance）
- * @param weekday 今天星期（0=周日…6=周六）
+ * @param card      由 `modelOption` 产出的卡片（`rides` 与 `seed.legs` **一一对应**）
+ * @param seed      已桥接的方案骨架
+ * @param segIdx    段统计索引（供逐跳层级/provenance）
+ * @param nowBucket ★ v3.4.0：查询时段桶（bucketOfRoute 五桶之一）
  */
 export function patchAmapFallback(
   card: RecommendCard,
   seed: AmapPlanSeed,
   segIdx: SegmentIndex,
-  weekday: number,
+  nowBucket: string,
 ): RecomputeProvenance {
   const hopLevels: SegmentLevel[][] = [];
   let usedOur = 0;
@@ -199,7 +199,7 @@ export function patchAmapFallback(
     if (mapped) {
       usedOur++;
       const levels: SegmentLevel[] = [];
-      for (const [a, b] of leg.mappedHops!) levels.push(lookupHop(segIdx, leg.mappedRoute!, a, b, weekday).level);
+      for (const [a, b] of leg.mappedHops!) levels.push(lookupHop(segIdx, leg.mappedRoute!, a, b, nowBucket).level);
       hopLevels.push(levels);
 
       // §C.7 单段差异告警
@@ -243,18 +243,29 @@ export function patchAmapFallback(
 
 /**
  * 「用我们实测（L1~L4）的分钟数」占**门到门总时长**的比例。
- * 口径：轻轨段（表定）计为我们的数据；巴士段仅当**全部跳层级 ≤4** 才计入；
- *       换乘仅当 `estimated=false` 才计入。**保守近似**（宁低不高）✓
+ *
+ * ★ v3.3.0（AC-96 / ADR-105）：口径修正 —— 旧口径的分子**只含「乘车段 + 非估算换乘」**，
+ *   漏掉**轻轨等待**与**有依据的首末步行**，而分母（`totalMin`）含它们 ⇒ 班次稀疏的
+ *   轻轨/等待型方案被**系统性低估**（实测：全轻轨方案覆盖度 ≈0.4 < 0.5 ⇒ 被闸门误杀）。
+ *   现纳入：
+ *   · 轻轨段 `minutes + waitMin`（等待由**时刻表推导**，是我们的数据，非估算）；
+ *   · 首末步行中 `level ≤ 2`（有实测/几何依据）者。
+ *   巴士段仍仅当**全部跳层级 ≤4** 才计入；换乘仍仅当 `estimated=false`（保守近似，宁低不高）。
  */
 export function ourDataCoverage(card: RecommendCard): number {
   let ours = 0;
   for (const r of card.rides) {
     if (r.kind === "lrt") {
-      ours += r.minutes;
+      // ★ 轻轨：乘车 + 等待（时刻表推导 = 我们的数据）
+      ours += r.minutes + (r.waitMin ?? 0);
     } else if (r.levels.length && r.levels.every((l) => l <= 4)) {
       ours += r.minutes;
     }
   }
   for (const t of card.transfers) if (!t.estimated) ours += t.minutes;
-  return card.totalMin > 0 ? ours / card.totalMin : 0;
+  // ★ 首末步行：有实测/几何依据（level ≤ 2）者计入
+  for (const w of [card.walkOut, card.walkIn]) {
+    if (typeof w.level === "number" && w.level <= 2) ours += w.minutes;
+  }
+  return card.totalMin > 0 ? Math.min(1, ours / card.totalMin) : 0;
 }

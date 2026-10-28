@@ -146,6 +146,8 @@ export default async function StatsPage() {
       };
     }).filter((g) => g.dirs.length > 0);
   } catch (err) {
+    // ★ v3.1.1 #5：原始错误只进服务端日志（界面走用户语言）
+    console.error("[stats] 统计数据加载失败：", err);
     dbError = (err as Error).message;
   }
 

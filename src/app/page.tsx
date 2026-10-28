@@ -2,7 +2,7 @@
  * 首页 = 全屏地图 + 分步搜索（src/app/page.tsx，M Map 改版 S2 重构）
  *
  * ── 本次改造（Spec R1/R2/R4）───────────────────────────────────────────
- *   · **全屏地图**（`fixed`；底部让出「合规条 + 底部导航」带，保证高德 Logo/审图号可见）；
+ *   · **全屏地图**（`fixed`；底部让出「底部导航」带，保证高德 Logo/审图号可见）；
  *   · 顶部浮层 = 品牌字标 `M Map` + 定位按钮 + 目的地搜索条（点开分步弹层）；
  *   · **移除**旧大标题「澳门出行」与「通勤计时（旧版）」首页入口（旧计时改由 `/about` 进入）；
  *   · 底导两 tab（首页 / 路线收藏）。
@@ -15,7 +15,6 @@
  *   · 地图懒加载、失败不阻塞（§Q7）；站点图层、实时报站信息卡；「起点不记忆」（R5）。
  */
 import BottomNav from "@/components/BottomNav";
-import ComplianceBar from "@/components/nav/ComplianceBar";
 import NavShell from "@/components/nav/NavShell";
 import { getPool } from "@/lib/db";
 import { parseNavParams } from "@/lib/nav/nav-params";
@@ -44,19 +43,39 @@ export default async function Home({
 }) {
   // ★ JS Key 由服务端以 prop 传入（JS Key 本身可公开；安全密钥只在 /_AMapService 代理里）
   const jsKey = (process.env.AMAP_JS_KEY ?? "").trim();
+  // ★ AC-16：自定义地图样式 ID（隐藏底图自带公交站点）；**空字符串 = 用默认样式（降级安全）**
+  const mapStyleId = (process.env.AMAP_MAP_STYLE_ID ?? "").trim();
   const colors = await loadRouteColors();
 
   // 地点对收藏回放：URL 带 `fromLng…&toLng…` → 预填起终点（进「可出发」态）
   const sp = await searchParams;
   const parsed = parseNavParams(sp);
   const initialFrom: NavPoint | null = parsed?.origin ?? null;
-  const initialTo: NavPoint | null = parsed?.dest ?? null;
+  let initialTo: NavPoint | null = parsed?.dest ?? null;
+  /**
+   * ★ v3.3.0（AC-116 · 收藏地点回放）：**仅 `to…`** 的 URL（起点留空 ⇒ 首页默认「我的位置」）。
+   * `parseNavParams` 要求 from/to 同时存在 ⇒ 这里单独解析「只有终点」的形态，
+   * 让「点地点卡 = 首页式选点（目的地已设、不自动规划）」成立。
+   */
+  if (!initialTo) {
+    const first = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v) ?? "";
+    const toLng = Number(first(sp.toLng));
+    const toLat = Number(first(sp.toLat));
+    if (Number.isFinite(toLng) && Number.isFinite(toLat) && toLng !== 0 && toLat !== 0) {
+      const kindRaw = first(sp.toKind);
+      const kind = (["gps", "poi", "station", "place"].includes(kindRaw) ? kindRaw : "poi") as NavPoint["kind"];
+      const code = first(sp.toCode) || undefined;
+      initialTo = { kind, label: first(sp.toLabel) || "终点", lng: toLng, lat: toLat, code };
+    }
+  }
 
   return (
     <>
-      <NavShell jsKey={jsKey} colors={colors} initialFrom={initialFrom} initialTo={initialTo} />
+      <NavShell jsKey={jsKey} mapStyleId={mapStyleId} colors={colors} initialFrom={initialFrom} initialTo={initialTo} />
+      {/* ★ v2.10.0：底部合规条**已从地图页移除**（内容迁至 `/help`），
+          既解决「选线路弹窗被底部遮挡」，也避免与底导重复。
+          `/nav`、`/nav/detail`、`/favorites` 仍各自保留合规条（未受影响）。 */}
       <div className="home-chrome">
-        <ComplianceBar />
         <BottomNav />
       </div>
     </>

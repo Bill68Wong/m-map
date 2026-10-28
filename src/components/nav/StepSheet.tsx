@@ -343,13 +343,11 @@ export default function StepSheet({
               >
                 {going ? "正在规划…" : "出发"}
               </button>
+              {/* ★ v3.3.0（AC-115）：v3 起 = 只收藏「组合」（OD）；文案常量在组件内统一 */}
               {effectiveFrom && dest && (
                 <FavoriteButton
-                  kind="place"
-                  entry="home"
                   from={endpointOf(effectiveFrom)}
                   to={endpointOf(dest)}
-                  query={queryOf(effectiveFrom, dest)}
                   withLabel
                   className="fav-btn--block"
                 />

@@ -37,12 +37,13 @@ const eslintConfig = [
     //   `next-env.d.ts` = Next 自动生成（已 gitignore），其中的 triple-slash 是框架产物
     ignores: [
       "node_modules/**",
-      ".next/**",
+      ".next*/**", // .next 及一切 distDir 变体（如构建备用目录 .next-v213）——构建产物不参与 lint
       "out/**",
       "build/**",
       "backups/**",
       ".verify/**",
       ".workbuddy/**",
+      "docs/**", // 文档目录：设计过程资产与生成器脚本（非产品代码），与 .verify 同性质、不计入产品门禁
       "data/**",
       "next-env.d.ts",
     ],

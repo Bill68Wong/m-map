@@ -33,6 +33,7 @@
 
 import RouteStack from "./RouteStack";
 import Icon from "./ui/Icon";
+import { waitRangeText } from "@/lib/recommend/catch-up";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { smoothStopsAway, getSmoothMem } from "@/lib/eta-smooth";
 
@@ -52,6 +53,13 @@ interface EtaResult {
   nearest?: EtaNearest;
   /** v0.12.2：再下一班在途车（第二近；副行小字展示，站数不突出） */
   second?: EtaNearest;
+  /** ★ v3.5.0：服务端补的「约 X 分钟」量化（含区间进度位置修正） */
+  eta?: { etaSec?: number | null } | null;
+  /** ★ v3.5.0：第二班车的量化 */
+  eta2?: { etaSec?: number | null } | null;
+  /** ★ v3.5.1：未发车估算（发车间隔口径 · 分钟）——无在途车时的「下一班约 X~Y 分」 */
+  waitLo?: number | null;
+  waitHi?: number | null;
   busCount?: number;
   /** v0.13.x：等车站 = 本方向首站（总站/起点）——无车时显示「暂未发车」 */
   headTerminal?: boolean;
@@ -261,13 +269,14 @@ export default function LiveEta({
               <div key={r.route}>
                 {blockHead}
                 <p className="t-body t-muted" style={{ lineHeight: 1.7 }}>
-                  {r.headTerminal
+                  {(r.headTerminal
                     ? (r.busCount ?? 0) > 0
                       ? "暂未发车 · 总站暂无待发车"
                       : "暂未发车"
                     : (r.busCount ?? 0) > 0
                       ? "暂无车辆在途"
-                      : "暂无在线车辆"}
+                      : "暂无在线车辆") +
+                    (r.waitLo != null && r.waitHi != null ? ` · ${waitRangeText(r.waitLo, r.waitHi)}` : "")}
                 </p>
               </div>
             );
@@ -299,6 +308,7 @@ export default function LiveEta({
                 className="t-label t-muted"
                 style={{ textAlign: "center", lineHeight: 1.5, marginTop: 2 }}
               >
+                {r.eta?.etaSec != null ? `约 ${Math.max(1, Math.round(r.eta.etaSec / 60))} 分钟 · ` : ""}
                 {bus.plate ?? ""}
                 {bus.atStationName ? ` · 在${bus.atStationName}` : ""}
               </p>
@@ -309,6 +319,7 @@ export default function LiveEta({
                   style={{ textAlign: "center", lineHeight: 1.5, marginTop: 4 }}
                 >
                   再下一班：还有 {second.stopsAway} 站
+                  {r.eta2?.etaSec != null ? ` · 约 ${Math.max(1, Math.round(r.eta2.etaSec / 60))} 分钟` : ""}
                   {second.plate ? ` · ${second.plate}` : ""}
                   {second.atStationName ? ` · 在${second.atStationName}` : ""}
                 </p>

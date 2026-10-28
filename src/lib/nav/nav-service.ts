@@ -30,11 +30,14 @@
  */
 import type { Pool } from "pg";
 import { gcj02ToWgs84, haversineM } from "@/lib/amap/coord";
+import { nowBucketOfHolidayAware } from "@/lib/rebuild/holidays";
 import { fixWalkDistance, walkMinutes } from "@/lib/amap/walk-fix";
 import { fetchTransitPlans, type RawPlan, type TransitCacheIo, type AmapTransitRawResponse } from "@/lib/amap/transit";
 import { fetchLive } from "@/lib/recommend/live";
 import { amapPlanToSeed, modelOption, type ModeledOption } from "@/lib/recommend/model";
 import { contextFor, loadStatics, type RecStatic } from "@/lib/recommend/query";
+import { loadHeadway } from "@/lib/recommend/headway";
+import { PREF_DEFAULTS, type Prefs } from "@/lib/recommend/score";
 import { mainCodeOf } from "@/lib/recommend/segment-lookup";
 import type { AltBusView, OptionSeed, RecommendCard, SchoolZone } from "@/lib/recommend/types";
 import { candidatesToSeeds, chainToCandidates, pathsToCandidates, LOCAL_SUMMARY } from "./enumerate-nav";
@@ -46,6 +49,7 @@ import { loadStationMap, type BridgeContext, type StationMap } from "./map-stati
 import { mergeSources } from "./merge-sources";
 import { parseAndBridge } from "./parse-amap-plan";
 import { rankItems, type RankedItem } from "./rank";
+import { applyLrtPriority } from "@/lib/recommend/lrt-priority";
 import { makeCacheWalkResolver, makeWalkResolver, ourDataCoverage, overlayTransferIndex, patchAmapFallback, type WalkCacheMap } from "./recompute";
 import type { AmapPlanSeed, NavEmptyReason, NavPoint, RecomputeProvenance, SegmentLevel, WalkResolver } from "./types";
 
@@ -79,6 +83,18 @@ export interface NavInput {
   walk?: WalkOverride;
   /** ★ v2.3.0：五档覆盖（仅在 `chain` 非空时生效） */
   tiers?: TierOverride;
+  /**
+   * ★ B4（需求 8）：**用户偏好三档**（`balanced` 默认 / `fewer_transfers` / `less_walk`）。
+   *   缺省 ⇒ `PREF_DEFAULTS.balanced`（cost 升序，与「综合」档等价）。
+   *   ⚠️ 偏好只影响**排序**（`rankItems` / `sortCards`）；**不进** `switch-plans` 组内排序。
+   */
+  prefs?: Prefs;
+  /**
+   * ★ v3.3.0（AC-105 · `/api/nav?lrtFirst=1`）：**轻轨优先**开关。
+   *   true ⇒ 含轻轨段且总时长 ≤ 前 `limit` 张最慢 + 15min 的候选**稳定置顶**；
+   *   其余相对序不变、张数不变；未命中静默。缺省 = false（行为与旧版完全一致）。
+   */
+  lrtFirst?: boolean;
 }
 
 export interface NavStats {
@@ -88,7 +104,13 @@ export interface NavStats {
   transitFromCache: boolean;
   amapPlans: number;
   bridged: number;
-  dropped: { index: number; reason: string }[];
+  /**
+   * ★ v3.3.0（AC-119 / ADR-105 §3）：**合并**两类丢弃记录 ——
+   *   · 高德解析丢弃：`{ index, reason }`（如 `s7:unsolvable`）；
+   *   · 本地闸门丢弃：`{ key, reason }`（如 `low_coverage(0.42)` / `unsolvable_stops` / `duplicate_of_amap` / `suspect`）。
+   *   旧口径只记高德侧 ⇒ 本类「本地候选被闸门丢掉」的问题**长期不可见**。
+   */
+  dropped: { index?: number; key?: string; reason: string }[];
   localCandidates: number;
   localKept: number;
   /** 本地枚举来源：`"inline"` = 请求期现场跑；`"none"` = 未产出（无近站等） */
@@ -139,7 +161,7 @@ async function loadStationMapCached(pool: Pool, force = false): Promise<StationM
 }
 
 /** 站点地理（主码去重；**WGS84**，供本地图枚举的近站筛选） */
-async function loadStationGeoCached(pool: Pool, force = false): Promise<GeoStation[]> {
+export async function loadStationGeoCached(pool: Pool, force = false): Promise<GeoStation[]> {
   const c = g.__navCaches!.geo;
   if (!force && c && Date.now() - c.ts < TTL_MS) return c.data;
   const res = await pool.query(`SELECT code, lat, lng FROM stations WHERE lat IS NOT NULL AND lng IS NOT NULL`);
@@ -157,7 +179,7 @@ async function loadStationGeoCached(pool: Pool, force = false): Promise<GeoStati
 
 /** ★ P1-4：`walk_cache` 内存索引（供**本地/降级**路径的首末步行解析器；表小，整体载入） */
 const gWalk = globalThis as unknown as { __navWalkCache?: { ts: number; data: WalkCacheMap } };
-async function loadWalkCacheCached(pool: Pool, force = false): Promise<WalkCacheMap> {
+export async function loadWalkCacheCached(pool: Pool, force = false): Promise<WalkCacheMap> {
   const c = gWalk.__navWalkCache;
   if (!force && c && Date.now() - c.ts < TTL_MS) return c.data;
   const m: WalkCacheMap = new Map();
@@ -217,6 +239,15 @@ function makeTransitCacheIo(pool: Pool): TransitCacheIo {
  *   补查 s=7/s=8 以覆盖「路线太少」问题；否则只查 s=0（省配额）。
  */
 const MULTI_STRATEGY_WHEN_BELOW = 3;
+
+/**
+ * ★ 2026-09-21：高德 transit 失败后的**重试间隔**（毫秒）。
+ *
+ * 实测高德会「几十秒内时好时坏」（同一查询连测得 正常 / 0 方案 / 正常 三种结果）
+ * ⇒ 失败后稍等再试一次，即可消掉大部分此类抖动，用户不必手动刷新。
+ * 取 350ms：足够让瞬时故障过去，又不会明显拖长请求（Serverless 有 maxDuration 约束）。
+ */
+const TRANSIT_RETRY_DELAY_MS = 350;
 
 /** 补查使用的高德策略（产品指定：7/8） */
 const MULTI_STRATEGIES: readonly number[] = [7, 8];
@@ -338,6 +369,8 @@ export async function planNav(pool: Pool, input: NavInput): Promise<NavOutput> {
   const chain = input.chain && input.chain.length >= 2 ? input.chain : undefined;
   const chainMode = !!chain;
   const tierOverride = chainMode ? tierSpeedOverrideOf(input.tiers) : undefined;
+  // ★ B4（需求 8）：偏好三档（缺省 balanced）
+  const prefs = input.prefs ?? PREF_DEFAULTS.balanced;
 
   // ① 静态
   const tStatic = Date.now();
@@ -376,12 +409,28 @@ export async function planNav(pool: Pool, input: NavInput): Promise<NavOutput> {
       transitOk = amapTotal > 0;
       if (transitOk) strategiesUsed.push(0);
     } else {
-      const r = await fetchTransitPlans({ lng: origin.lng, lat: origin.lat }, { lng: dest.lng, lat: dest.lat }, {
-        cache: makeTransitCacheIo(pool),
-        noCache: input.noCache,
-        nowMs,
-        strategy: 0,
-      });
+      const callOnce = () =>
+        fetchTransitPlans(
+          { lng: origin.lng, lat: origin.lat },
+          { lng: dest.lng, lat: dest.lat },
+          {
+            cache: makeTransitCacheIo(pool),
+            noCache: input.noCache,
+            nowMs,
+            strategy: 0,
+          },
+        );
+      let r = await callOnce();
+      // ★ 2026-09-21 新增：高德失败 / 返回 0 方案时，**自动重试一次**。
+      //   实测（黑沙海滩 → 十月初五马路，22:2x）：**同一查询在几十秒内时好时坏** ——
+      //   连测三次分别得到「infocode=10000 正常 / 直接 0 方案 / 又一次正常」，
+      //   用户表现为「刷一下才有结果」。重试一次即可消掉大部分这类抖动。
+      //   成本：偶发多一次 transit 调用（高德 transit 配额充足，非搜索类 5,000/月 那种紧约束）。
+      //   ⚠️ 只重试**一次**：第二次仍失败就照旧降级，避免把请求时长拖爆（Serverless 有 maxDuration）。
+      if (!r.ok) {
+        await new Promise((res) => setTimeout(res, TRANSIT_RETRY_DELAY_MS));
+        r = await callOnce();
+      }
       if (r.ok) {
         transitOk = true;
         fromCache = r.fromCache;
@@ -446,14 +495,24 @@ export async function planNav(pool: Pool, input: NavInput): Promise<NavOutput> {
 
   // ⑥ 实时（两来源共用一次）
   const tLive = Date.now();
-  const weekday = new Date(nowMs + 8 * 3_600_000).getUTCDay();
+  const nowBucket = await nowBucketOfHolidayAware(pool, nowMs);
+  // ★ B4（需求 7）：发车间隔索引 —— 既供 `fetchLive` 做「未发车估算」（旧行为），
+  //   **也注入 `ModelContext.headway`** 供 `model.ts` 第 2 段巴士等车按到达时刻查班距（§h.2）。
+  //   失败/表不存在 ⇒ `loadHeadway` 内部兜底（空索引）⇒ 第 2 段等车明示降级（waitMin=null）。
+  const headway = await loadHeadway(pool);
   const batch = await fetchLive(pool, allSeeds, st.routeIdx, st.segIdx, {
-    todayWeekday: weekday,
+    nowBucket,
     nowMs,
     lrtPre: st.lrtPre,
+    // ★ 2026-09-21：发车间隔索引 ⇒ 让「本方向无在途车」的线路也能出卡（估算等待时间，见 live.ts）。
+    //   失败/表不存在 ⇒ loadHeadway 内部已兜底（返回空索引）⇒ 退化为旧行为，不影响出卡。
+    headway,
   });
   const liveMs = Date.now() - tLive;
-  const baseCtx = { ...contextFor(st, nowMs, zone, batch.live), tierOverride };
+  // ★ v2.4.1：`destLabel` = 目的地展示名 —— 供 `model.ts` 把末段步行文案写成
+  //   「步行 N 分 → 目的地」。**必须由这里显式传入**：本链路的 `toSlug` 对非预设地点
+  //   会兜底成 `"place"`，模型层靠 slug 反查只能得到 slug 原文。
+  const baseCtx = { ...contextFor(st, nowMs, zone, batch.live, nowBucket), tierOverride, destLabel: dest.label, headway };
 
   // ⑦ 建模
   const tModel = Date.now();
@@ -472,7 +531,7 @@ export async function planNav(pool: Pool, input: NavInput): Promise<NavOutput> {
     };
     const modeled1 = modelOption(opt, ctx);
     if (!modeled1) continue;
-    const prov = patchAmapFallback(modeled1.card, seed, st.segIdx, weekday);
+    const prov = patchAmapFallback(modeled1.card, seed, st.segIdx, nowBucket);
     provenance[opt.key] = prov;
     modeled.push(modeled1);
     amapItems.push({ card: modeled1.card, origin: "amap", key: opt.key, seed, provenance: prov });
@@ -518,17 +577,28 @@ export async function planNav(pool: Pool, input: NavInput): Promise<NavOutput> {
       provenance: prov,
       coverage: ourDataCoverage(card),
     });
+
+    // ★ v3.3.0（AC-95/120）：**本地种子也造 sibling** —— 组合内每条线都要有各自的后续班车
+    //   候选（`enumerate.ts` 已为本地的 `RideSegment` 补 `parallelRoutes`，此处据此建模）。
+    if (lseed.segments[0]?.parallelRoutes?.length) {
+      for (const sib of siblingSeedsOf(lseed, st.routeIdx)) {
+        const mSib = modelOption(sib.seed, ctx);
+        if (mSib) siblingAlts.push({ parentPlanId: lseed.planId, route: sib.route, alts: mSib.alts });
+      }
+    }
   }
 
-  // ⑧ 合并 + 排序
-  //   ★ chain 模式：站链由用户显式指定 ⇒ **不过本地补漏质量闸门**（覆盖度/补漏语义不适用），
+  // ⑧ 合并 + 排序：站链由用户显式指定 ⇒ **不过本地补漏质量闸门**（覆盖度/补漏语义不适用），
   //     直接把链候选送入统一排优；缺省模式仍走 `mergeSources` 闸门（口径不变）。
-  const rankedLocal = rankItems(localItems);
+  const rankedLocal = rankItems(localItems, prefs);
   const merged = chainMode
     ? { items: rankedLocal, dropped: [] as { key: string; reason: string }[], localCap: Number.POSITIVE_INFINITY }
     : mergeSources(amapItems, rankedLocal, {});
-  const ranked = rankItems(merged.items);
-  const cards = ranked.slice(0, limit).map((r) => r.card);
+  const ranked = rankItems(merged.items, prefs);
+  // ★ v3.3.0（AC-105）：**轻轨优先** —— 注入点 = `rankItems` 之后、`slice(limit)` **之前**；
+  //   只重排不增删（未开启/未命中则原样，静默）。
+  const ordered = applyLrtPriority(ranked, limit, input.lrtFirst ?? false);
+  const cards = ordered.slice(0, limit).map((r) => r.card);
 
   // ★ P2-a：回填「本班之外的后续班次」（**逐字复用旧 `service.ts` v1.1.5 口径**）
   //   ★ v2.3.0（A3）：并行线 sibling 的 alts 一并合并（按 route 分组）
@@ -549,7 +619,13 @@ export async function planNav(pool: Pool, input: NavInput): Promise<NavOutput> {
       const corrected = fixWalkDistance(straightM, null).correctedM;
       nearbyWalkMin = Math.max(1, Math.round(walkMinutes(corrected)));
     } else if (!transitOk) emptyReason = "amap_unavailable";
-    else if (batch.live.size === 0) emptyReason = "no_live";
+    // ★ 2026-09-21 修正：`batch.live.size > 0` 只说明「**至少有一条**线路有实时数据」，
+    //   并不代表候选能用。实测（黑沙海滩 → 十月初五马路，22:00）：live 里确实有 21A/15T，
+    //   但通往该方向的班次**全部收班**（`excluded` 里堆了 26A / 15T…）⇒ 候选被剔光，
+    //   旧逻辑却报 `no_candidate`（「找不到可用路线 · 试试更近的车站」）—— **归因错了** ✗
+    //   只要**有线路因「无在途车 / 已收班」被剔除**，就该报 `no_live`
+    //   （其文案本就写着「这个时段通往该方向的线路大多已收班，或暂时没有在途车辆」）✓
+    else if (batch.live.size === 0 || baseCtx.excluded.length > 0) emptyReason = "no_live";
     else emptyReason = "no_candidate";
   }
 
@@ -572,7 +648,8 @@ export async function planNav(pool: Pool, input: NavInput): Promise<NavOutput> {
       transitFromCache: fromCache,
       amapPlans: amapTotal,
       bridged: bridgedSeeds.length,
-      dropped,
+      // ★ v3.3.0（AC-119）：高德解析丢弃 + 本地闸门丢弃（mergeSources）**合并**上报
+      dropped: [...dropped, ...merged.dropped],
       localCandidates: localCandidates.length,
       localKept: merged.items.filter((i) => i.origin === "local").length,
       localSource,
@@ -610,6 +687,8 @@ export function backfillAltBuses(
   const topSet = new Set(cards);
   for (const m of modeled) {
     if (!topSet.has(m.card)) continue;
+    // ★ v3.3.0（AC-120）：**幂等** —— 先清空再重建（重复调用结果一致；防陈旧 altBuses 残留）
+    m.card.altBuses = undefined;
     const byThreshold = (a: AltBusView) => a.totalMin <= threshold + 1e-9;
     // 本线（主干线）后续
     const groups: AltBusView[] = m.alts.filter(byThreshold);
@@ -618,6 +697,14 @@ export function backfillAltBuses(
       const sib = siblings.find((s) => s.parentPlanId === m.card.planId && s.route === pr);
       if (sib) groups.push(...sib.alts.filter(byThreshold));
     }
-    if (groups.length) m.card.altBuses = groups;
+    // 去重（键 = `route + totalMin`）——sibling 与主干线可能给出同线同班次
+    const seen = new Set<string>();
+    const dedup = groups.filter((g) => {
+      const k = `${g.route}|${g.totalMin}`;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+    if (dedup.length) m.card.altBuses = dedup;
   }
 }

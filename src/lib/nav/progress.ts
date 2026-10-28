@@ -1,0 +1,258 @@
+/**
+ * 车辆区间进度（src/lib/nav/progress.ts，v3.4.0）
+ *
+ * 给「行驶中（status=moving）」的车辆计算**区间内相对进度 p** 与**位置模型剩余时间**：
+ *   车辆 GCJ 坐标 → 投影到线路几何（route_shapes）→ 沿线里程 m
+ *   → 用「区间两端站的里程锚」（route_station_mileage）求 p = (m − mFrom)/(mTo − mFrom)
+ *   → 剩余 = md × h[段型][1−p]（md 来自 route_hop_stats；h/W 来自 progress-params）
+ *
+ * ── 数据依赖（两张预计算表 + 一个参数文件）────────────────────────────
+ *   · route_station_mileage（npm run db:station-mileage）：站 → 沿线里程（多行制，环线同站两候选）
+ *   · route_hop_stats（npm run db:hop-stats）：线路×邻接站对 → 主码级中位秒数
+ *   · src/lib/nav/progress-params.ts（scripts/train-progress-model.mjs）：h 曲线 + 权重
+ *
+ * ── 设计要点（详见 docs/区间进度模型-调研报告-20260927.md）────────────
+ *   · 只对 moving 车算（停靠中无意义——区间未开始/已结束）；
+ *   · 环线消歧：同一站有多个里程候选 → 取「包含车辆里程的最小区间」；再不行取最近中点；
+ *   · 任何一环缺失（无几何/无里程/无 md）→ 该车**不出 progress 字段**（调用方降级）——
+ *     宁缺勿错，绝不猜；
+ *   · 缓存 TTL 10 分钟（几何/里程/时长三源；Serverless 实例级，重算后最多陈旧 10 分钟）。
+ */
+import type { Pool } from "pg";
+import { PROGRESS_H, PROGRESS_W, progressTypeOf } from "./progress-params";
+
+export interface VehicleProgress {
+  /** 区间内相对进度（0 = 刚离站，1 = 即将到站） */
+  p: number;
+  /** 位置模型剩余秒数（md × h[段型][1−p]）——客户端可与时间项融合 */
+  remainSecD: number;
+  /** 区间中位时长（秒）——客户端算时间项 max(md − u, 0) 用 */
+  mdSec: number;
+  /** 融合权重 w（pred = w·D + (1−w)·B，按段型） */
+  w: number;
+  /** 所在区间（主码） */
+  segFrom: string;
+  segTo: string;
+  /** 区间沿线路长度（米） */
+  segLenM: number;
+}
+
+/** ★ v3.5.0（等车场景）：**自动定位**车辆所在区间——无需已知 from/to（供「还有 N 站」位置修正） */
+export interface VehicleSegmentLocation {
+  /** 区间起点站（主码，= 车刚离开的站） */
+  fromMain: string;
+  /** 区间终点站（主码，= 车的下一站） */
+  toMain: string;
+  /** 相对进度 0-1 */
+  p: number;
+  /** 该区间中位时长（秒） */
+  mdSec: number;
+  /** 位置模型「到下一站」剩余（秒）= md × h[段型][1−p] */
+  remainSecD: number;
+}
+
+interface ShapeRec {
+  pts: [number, number][];
+  cum: number[];
+}
+
+const TTL = 10 * 60_000;
+const shapeCache = new Map<string, { at: number; rec: ShapeRec | null }>();
+const mileCache = new Map<string, { at: number; map: Map<string, number[]> }>();
+const hopCache = new Map<string, { at: number; map: Map<string, number> }>();
+
+const rad = (d: number) => (d * Math.PI) / 180;
+const R = 6371008.8;
+function havM(a: [number, number], b: [number, number]): number {
+  const dLat = rad(b[1] - a[1]), dLng = rad(b[0] - a[0]);
+  const s = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a[1])) * Math.cos(rad(b[1])) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(s)));
+}
+
+async function getShape(pool: Pool, route: string, dir: string): Promise<ShapeRec | null> {
+  const key = `${route}|${dir}`;
+  const hit = shapeCache.get(key);
+  if (hit && Date.now() - hit.at < TTL) return hit.rec;
+  let rec: ShapeRec | null = null;
+  try {
+    const r = await pool.query(`SELECT polyline FROM route_shapes WHERE route_code = $1 AND dsat_dir = $2 LIMIT 1`, [route, dir]);
+    const poly = (r.rows[0] as { polyline?: string } | undefined)?.polyline;
+    if (poly) {
+      const pts = poly.split(";").map((x) => x.split(",").map(Number) as [number, number]);
+      const cum = [0];
+      for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + havM(pts[i - 1], pts[i]));
+      rec = { pts, cum };
+    }
+  } catch (e) {
+    console.warn("[progress] route_shapes 读取失败：", (e as Error).message);
+  }
+  shapeCache.set(key, { at: Date.now(), rec });
+  return rec;
+}
+
+async function getMiles(pool: Pool, route: string, dir: string): Promise<Map<string, number[]>> {
+  const key = `${route}|${dir}`;
+  const hit = mileCache.get(key);
+  if (hit && Date.now() - hit.at < TTL) return hit.map;
+  const map = new Map<string, number[]>();
+  try {
+    const r = await pool.query(
+      `SELECT main_code, mile_m FROM route_station_mileage WHERE route_code = $1 AND dsat_dir = $2`,
+      [route, dir],
+    );
+    for (const row of r.rows as { main_code: string; mile_m: number }[]) {
+      const arr = map.get(row.main_code) ?? [];
+      arr.push(Number(row.mile_m));
+      map.set(row.main_code, arr);
+    }
+  } catch (e) {
+    console.warn("[progress] route_station_mileage 读取失败：", (e as Error).message);
+  }
+  mileCache.set(key, { at: Date.now(), map });
+  return map;
+}
+
+async function getHops(pool: Pool, route: string): Promise<Map<string, number>> {
+  const hit = hopCache.get(route);
+  if (hit && Date.now() - hit.at < TTL) return hit.map;
+  const map = new Map<string, number>();
+  try {
+    const r = await pool.query(
+      `SELECT from_main, to_main, p50_sec FROM route_hop_stats WHERE route_code = $1`,
+      [route],
+    );
+    for (const row of r.rows as { from_main: string; to_main: string; p50_sec: number }[]) {
+      map.set(`${row.from_main}|${row.to_main}`, Number(row.p50_sec));
+    }
+  } catch (e) {
+    console.warn("[progress] route_hop_stats 读取失败：", (e as Error).message);
+  }
+  hopCache.set(route, { at: Date.now(), map });
+  return map;
+}
+
+/** 点到折线的沿线里程（全局最近线段；shape ≤2k 点，毫秒级） */
+function projectMile(rec: ShapeRec, p: [number, number]): number {
+  const kx = Math.cos(rad(p[1])) * 111320, ky = 110540;
+  const px = p[0] * kx, py = p[1] * ky;
+  let bestD = Infinity, bestM = 0;
+  for (let i = 0; i + 1 < rec.pts.length; i++) {
+    const a = rec.pts[i], b = rec.pts[i + 1];
+    const ax = a[0] * kx, ay = a[1] * ky, bx = b[0] * kx, by = b[1] * ky;
+    const dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy;
+    let t = L2 > 0 ? ((px - ax) * dx + (py - ay) * dy) / L2 : 0;
+    t = Math.max(0, Math.min(1, t));
+    const d = Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+    if (d < bestD) {
+      bestD = d;
+      bestM = rec.cum[i] + t * (rec.cum[i + 1] - rec.cum[i]);
+    }
+  }
+  return bestM;
+}
+
+/** 给（moving 且有 interval 的）车辆**原地附加** progress 字段；任何一环缺失则跳过该车。 */
+export async function attachProgress(
+  pool: Pool,
+  route: string,
+  dir: string,
+  vehicles: { lat: number; lng: number; status: string; interval: { from: { code: string }; to: { code: string } } | null; progress?: VehicleProgress }[],
+): Promise<void> {
+  if (!vehicles.length) return;
+  const [shape, miles, hops] = await Promise.all([getShape(pool, route, dir), getMiles(pool, route, dir), getHops(pool, route)]);
+  if (!shape || !miles.size || !hops.size) return;
+
+  for (const v of vehicles) {
+    if (v.status !== "moving" || !v.interval) continue;
+    const fC = miles.get(v.interval.from.code);
+    const tC = miles.get(v.interval.to.code);
+    if (!fC?.length || !tC?.length) continue;
+    const md = hops.get(`${v.interval.from.code}|${v.interval.to.code}`);
+    if (!md || md <= 0) continue;
+
+    const m = projectMile(shape, [v.lng, v.lat]);
+    // 环线消歧：优先「包含车辆里程的最小区间」；否则取「中点最接近」的组合
+    let best: { mf: number; mt: number } | null = null;
+    for (const mf of fC) {
+      for (const mt of tC) {
+        if (mf + 40 >= mt) continue;
+        if (m >= mf - 80 && m <= mt + 80) {
+          if (!best || mt - mf < best.mt - best.mf) best = { mf, mt };
+        }
+      }
+    }
+    if (!best) {
+      let bestDiff = Infinity;
+      for (const mf of fC) {
+        for (const mt of tC) {
+          if (mf + 40 >= mt) continue;
+          const diff = Math.abs(m - (mf + mt) / 2);
+          if (diff < bestDiff) { bestDiff = diff; best = { mf, mt }; }
+        }
+      }
+    }
+    if (!best) continue;
+    const segLenM = best.mt - best.mf;
+    const p = Math.min(1, Math.max(0, (m - best.mf) / segLenM));
+    const type = progressTypeOf(segLenM, md);
+    const h = PROGRESS_H[type];
+    const b = Math.min(19, Math.max(0, Math.floor((1 - p) * 20)));
+    v.progress = {
+      p: Math.round(p * 1000) / 1000,
+      remainSecD: Math.round(md * h![b]!),
+      mdSec: Math.round(md),
+      w: PROGRESS_W[type],
+      segFrom: v.interval.from.code,
+      segTo: v.interval.to.code,
+      segLenM: Math.round(segLenM),
+    };
+  }
+}
+
+/**
+ * ★ v3.5.0：**自动定位**单车所在区间（等车场景 · 「还有 N 站」的位置修正用）。
+ *   与 `attachProgress` 的区别：无需已知 from/to——直接拿「线路全部站里程链」找包含车辆里程的最小间隔。
+ *   环线安全：排序后仅取「间隔 ≥ 60m」的相邻对；坐标/数据异常 → 返回 null（调用方降级，宁缺勿错）。
+ */
+export async function locateSegmentOf(
+  pool: Pool,
+  route: string,
+  dir: string,
+  lat: number,
+  lng: number,
+): Promise<VehicleSegmentLocation | null> {
+  const [shape, miles, hops] = await Promise.all([getShape(pool, route, dir), getMiles(pool, route, dir), getHops(pool, route)]);
+  if (!shape || !miles.size || !hops.size) return null;
+
+  const stations: { m: number; main: string }[] = [];
+  for (const [main, arr] of miles) for (const m of arr) stations.push({ m, main });
+  stations.sort((a, b) => a.m - b.m);
+  if (stations.length < 2) return null;
+
+  const m = projectMile(shape, [lng, lat]);
+  let best: { from: string; to: string; mf: number; mt: number } | null = null;
+  for (let i = 0; i + 1 < stations.length; i++) {
+    const a = stations[i]!;
+    const b = stations[i + 1]!;
+    const gap = b.m - a.m;
+    if (gap < 60) continue; // 同站双行/退化间隔 → 跳过
+    if (m >= a.m - 80 && m <= b.m + 80) {
+      if (!best || gap < best.mt - best.mf) best = { from: a.main, to: b.main, mf: a.m, mt: b.m };
+    }
+  }
+  if (!best) return null;
+
+  const md = hops.get(`${best.from}|${best.to}`);
+  if (!md || md <= 0) return null;
+  const segLenM = best.mt - best.mf;
+  const p = Math.min(1, Math.max(0, (m - best.mf) / segLenM));
+  const type = progressTypeOf(segLenM, md);
+  const bi = Math.min(19, Math.max(0, Math.floor((1 - p) * 20)));
+  return {
+    fromMain: best.from,
+    toMain: best.to,
+    p: Math.round(p * 1000) / 1000,
+    mdSec: Math.round(md),
+    remainSecD: Math.round(md * PROGRESS_H[type][bi]!),
+  };
+}

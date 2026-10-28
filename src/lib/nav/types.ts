@@ -109,7 +109,7 @@ export interface PoiPendingMatch {
 }
 
 /** 下拉区灰字提示的**语义键**（UI 据此渲染；文案常量见 `poi-search.ts`） */
-export type PoiHint = "no_local_then_enter" | "amap_empty";
+export type PoiHint = "no_local_then_enter" | "amap_empty" | "amap_circuit";
 
 /** `/api/poi/suggest` 响应（★ 两段式搜索：打字纯本地 / 回车可调高德） */
 export interface PoiSuggestResponse {

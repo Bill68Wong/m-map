@@ -10,14 +10,48 @@
  */
 import { segmentsOf } from "@/lib/recommend/enumerate";
 import { lookupHop, type SegmentIndex } from "@/lib/recommend/segment-lookup";
-import type { RecommendCard, RouteIndex, SegmentStrip, StripStop, TransferView } from "@/lib/recommend/types";
+import type {
+  RecommendCard,
+  RideLegView,
+  RouteIndex,
+  SegmentStrip,
+  StripStop,
+  TransferView,
+} from "@/lib/recommend/types";
 
 export interface StripBuildCtx {
   routeIdx: RouteIndex;
   segIdx: SegmentIndex;
   nameOf: Map<string, string>;
-  /** 今天星期（0=周日…6=周六） */
-  weekday: number;
+  /** ★ v3.4.0：查询时段桶（bucketOfRoute 五桶之一）——替代旧 weekday */
+  nowBucket: string;
+}
+
+/** ★ v3.3.0（AC-103）：站条方向名 —— 仅轻轨段非空（取该段 `RideLegView.directionName`） */
+export function stripDirLabelOf(ride: RideLegView): string | null {
+  return ride.kind === "lrt" ? ride.directionName ?? null : null;
+}
+
+/**
+ * ★ v3.3.0（AC-102）：该段**上车站实际可乘班车**（本库线码）—— 四规则（保守，宁回落主干不显错线）：
+ *   ① 主干**常速**可赶（`tier ≥ 3`）→ 主干；
+ *   ② 需提速才赶得上（`tier ∈ {1,2}`）且 `altBuses` 有可赶的**并行线** → 取其中 `totalMin` 最早者；
+ *   ③ 无法判定（`tier === null`）/ 无并行线 → 主干；
+ *   ④ 并行线数据缺失 → **回落主干**（不得显错线）。
+ *   仅**首段**（上车站语义）有意义；其余段恒回主干。
+ */
+export function boardRouteOf(card: RecommendCard, i: number): string {
+  const ride = card.rides[i];
+  if (!ride) return "";
+  const main = ride.route;
+  if (i !== 0) return main;
+  const parallels = ride.parallelRoutes ?? [];
+  if (!parallels.length) return main;
+  if (ride.tier === null || ride.tier === undefined) return main; // ③ 无法判定
+  if (ride.tier >= 3) return main; // ① 常速可赶 → 主干
+  const alt = (card.altBuses ?? []).filter((a) => parallels.includes(a.route));
+  if (!alt.length) return main; // ④ 数据缺失 → 不显错线
+  return alt.reduce((b, a) => (a.totalMin < b.totalMin ? a : b)).route; // ② 最早可赶并行线
 }
 
 /** 构建每段载具的站条（`card.rides` 与返回数组**一一对应**） */
@@ -37,7 +71,7 @@ export function buildStrips(card: RecommendCard, ctx: StripBuildCtx): SegmentStr
       const isFirst = k === 0;
       const isLast = k === codes.length - 1;
       const next = codes[k + 1];
-      const hop = !isLast && next ? lookupHop(ctx.segIdx, ride.route, code, next, ctx.weekday) : null;
+      const hop = !isLast && next ? lookupHop(ctx.segIdx, ride.route, code, next, ctx.nowBucket) : null;
       return {
         code,
         label: ctx.nameOf.get(code) ?? code,
@@ -47,9 +81,32 @@ export function buildStrips(card: RecommendCard, ctx: StripBuildCtx): SegmentStr
       };
     });
 
+    // ★ 2026-09-27（用户需求 3）：换乘后一段（轻轨）的班次报时——供流程图换乘处渲染报时块
+    const nxtLeg = card.rides[i + 1];
+    const nextLeg =
+      nxtLeg && nxtLeg.kind === "lrt" && nxtLeg.liveDepartures?.length
+        ? {
+            route: nxtLeg.route,
+            dirLabel: nxtLeg.directionName ?? null,
+            liveDepartures: nxtLeg.liveDepartures,
+            liveClocks: nxtLeg.liveClocks ?? [],
+            livePrecise: nxtLeg.livePrecise,
+            mainMs: nxtLeg.liveMainMs,
+          }
+        : null;
     const t = card.transfers[i];
+    // ★ B4（需求 7）：透传换乘等待/安全余量（`waitMin`/`slackMin`）⇒ 前端换乘行可显示
+    //   「换乘 X · 步行 N 分 · 等车约 M 分」，并由 `slackMin` 派生观测钩子 H8。
     const transferAfter: TransferView | null = t
-      ? { at: t.at, atLabel: t.atLabel, minutes: t.minutes, estimated: t.estimated, sameField: t.sameField }
+      ? {
+          at: t.at,
+          atLabel: t.atLabel,
+          minutes: t.minutes,
+          estimated: t.estimated,
+          sameField: t.sameField,
+          waitMin: t.waitMin ?? null,
+          slackMin: t.slackMin ?? null,
+        }
       : null;
 
     return {
@@ -59,11 +116,15 @@ export function buildStrips(card: RecommendCard, ctx: StripBuildCtx): SegmentStr
       alight: ride.alight,
       boardLabel: ride.boardLabel,
       alightLabel: ride.alightLabel,
+      // ★ v3.3.0：AC-103 方向名 / AC-102 上车站实际可乘班车
+      dirLabel: stripDirLabelOf(ride),
+      boardRoute: boardRouteOf(card, i),
       stops,
       rideMin: ride.minutes,
       // ★ v2.3.0（B5.2）：秒级乘车时长直接从卡片腿回填（口径一致：仅 LRT_RIDE_SEC_FIXED 线非空）
       rideSecText: ride.rideSecText,
       transferAfter,
+      nextLeg,
     };
   });
 }

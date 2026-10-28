@@ -15,6 +15,7 @@
  * 所以它是**必要输入**，随方向卡一起带进 `/recommend`。
  */
 import Link from "next/link";
+import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import ZonePicker, { useZone } from "./ZonePicker";
 import { HOME_SLUG, PAIR_ORDER, PLACE_SHORT, dirLabel, type PlanRow, type ActiveSession } from "@/lib/home-plans-shared";
@@ -33,19 +34,28 @@ export default function HomeClient({
   const router = useRouter();
   const [zone, setZone] = useZone();
 
+  /**
+   * ★ v3.1.1 #5：数据加载失败的**原始错误只进控制台**（供排查），不渲染给用户
+   *   （界面只给「服务暂未就绪」这类用户语言）。
+   */
+  useEffect(() => {
+    if (dbError) console.error("[commute] 方案数据加载失败：", dbError);
+  }, [dbError]);
+
   if (dbError) {
     return (
       <main className="page">
+        {/* ★ v3.0.0 品牌更名：产品名「MUST登校」→ 英文「M Map」（中文品牌名「澳搭車」，见 public/brand/lockup.svg） */}
         <h1 className="h-headline" style={{ marginBottom: 8 }}>
-          MUST登校
+          M Map
         </h1>
         <p className="t-error t-body" style={{ marginBottom: 12 }}>
-          数据库未就绪
+          服务暂未就绪
         </p>
+        {/* ★ v3.1.1 #5（文案门禁）：**不再把初始化命令/原始错误渲染给用户**
+            （旧文案含 `配置 .env → npm run db:schema → db:seed`）；原始错误改走控制台日志。 */}
         <p className="t-label t-muted" style={{ lineHeight: 1.6 }}>
-          请先完成初始化：配置 .env → npm run db:schema → npm run db:seed
-          <br />
-          详情：{dbError}
+          数据暂时无法加载，请稍后重试。
         </p>
       </main>
     );
@@ -61,7 +71,7 @@ export default function HomeClient({
   const dirCard = (from: string, to: string, count: number, delayMs: number) => (
     <button
       className="press-card anim-fade-up"
-      // v1.0.0：直达自动选线（座区随行；服务端只在涉及澳门科技大学的方向使用它）
+      // v1.0.0：直达自动选线（座区随行；服务端只在涉及澳門科技大學的方向使用它）
       onClick={() => router.push(`/recommend?from=${from}&to=${to}&zone=${encodeURIComponent(zone)}`)}
       style={{ minHeight: 82, animationDelay: `${delayMs}ms` }}
       aria-label={`${dirLabel(from, to)}，${count} 条路线，查看最快路线`}
@@ -100,7 +110,8 @@ export default function HomeClient({
   return (
     <main className="page">
       <header style={{ marginBottom: 16, padding: "4px 2px" }}>
-        <h1 className="h-headline">MUST登校</h1>
+        {/* 品牌名「M Map」；中文品牌名「澳搭車」（横排标志见 public/brand/lockup.svg） */}
+        <h1 className="h-headline">M Map</h1>
         <p className="t-label t-muted" style={{ marginTop: 2 }}>
           选方向 → 立刻看到最快路线
         </p>
@@ -125,7 +136,7 @@ export default function HomeClient({
         ))}
       </div>
 
-      {/* 座区：影响涉及澳门科技大学的方向 */}
+      {/* 座区：影响涉及澳門科技大學的方向 */}
       <div style={{ marginTop: 22 }}>
         <ZonePicker value={zone} onChange={setZone} />
       </div>

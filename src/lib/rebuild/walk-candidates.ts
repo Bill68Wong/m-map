@@ -30,7 +30,7 @@ import type { Pool } from "pg";
 /** 站码主码归一：剥掉站台号后缀（C690/3 → C690、M9/2 → M9、T376/1 → T376） */
 export const mainCode = (c: string): string => /^[A-Za-z]+\d+/.exec(c)?.[0] ?? c;
 
-/** 澳门科技大学的三个校区座别 —— **三栋不同建筑 = 三个不同目的地**，各算一组 */
+/** 澳門科技大學的三个校区座别 —— **三栋不同建筑 = 三个不同目的地**，各算一组 */
 export const SCHOOL_ZONES = ["B/C", "N/O", "R"] as const;
 export type SchoolZone = (typeof SCHOOL_ZONES)[number];
 
@@ -39,7 +39,7 @@ export interface WalkNeed {
   placeSlug: string;
   /** 站码主码（C690、T363），与 walk_times 聚合键一致 */
   stationMain: string;
-  /** 'B/C' | 'N/O' | 'R'；非澳门科技大学 place 恒为 null */
+  /** 'B/C' | 'N/O' | 'R'；非澳門科技大學 place 恒为 null */
   zone: string | null;
   /**
    * 该主码下**真实存在的站台码列表**（如 ['C690/1','C690/2','C690/3']）

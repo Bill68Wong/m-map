@@ -19,6 +19,8 @@ export default async function Commute() {
   try {
     [plans, active] = await Promise.all([queryPlans(), queryActiveSession()]);
   } catch (err) {
+    // ★ v3.1.1 #5：原始错误**只进服务端日志**（界面走用户语言，见 HomeClient）
+    console.error("[commute] 方案数据加载失败：", err);
     dbError = (err as Error).message;
   }
 
