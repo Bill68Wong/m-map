@@ -142,6 +142,7 @@ export default function RouteSheet({
         alarm={dTrack.alarm}
         lrt={dLrt}
         traveling={dTrack.traveling}
+        boardDetect={dTrack.boardDetect}
         anomaly={dTrack.anomaly}
         note={dTrack.note}
         freshSec={dFreshSec}

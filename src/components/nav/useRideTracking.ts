@@ -34,9 +34,8 @@ import {
   ANOMALY_MIN_GAP_MS,
   autoBoardOf,
   anomalyOf,
-  R2_STREAK,
+  detectPausedOf,
   type Anomaly,
-  type AutoBoardResult,
   type FixLite,
 } from "@/lib/nav/boarding-detect";
 import type { LL, ColoredLeg, OverviewLegInput } from "@/lib/nav/route-overview";
@@ -64,6 +63,12 @@ const NOTE_NO_VEHICLES = "这条线现在查不到车 · 稍后再试，或直�
 const NOTE_NO_VEHICLES_BOARD = "这条线现在查不到车 · 稍后再试，或直接点「我已上车」自己开始";
 const NOTE_LRT_WEAK = "暂时收不到信号 · 位置停在上一站";
 const NOTE_FETCH_FAIL = "车辆数据获取失败，稍后自动重试";
+/**
+ * ★ v3.6.0（AC-25a）：判定**事实上已停止**时的文案。
+ *   为什么不能继续写「正在检测车辆」：GPS 拒权/长时间无帧时系统已不再判定，
+ *   界面若仍说"正在检测"，用户会以为"车还没来"，实际是"我不看了"。
+ */
+const NOTE_GPS_UNAVAILABLE = "定位不可用 · 自动上车判断已暂停，上车后请点「手动标记上车」";
 
 export type RidePhase = "off" | "boarding" | "riding" | "done";
 
@@ -106,6 +111,12 @@ export interface RideTrackView {
   alarm: "none" | "soon" | "now";
   traveled: LL[] | null;
   traveling: boolean;
+  /**
+   * ★ v3.6.0（AC-25a）：自动上车判定的**实际**状态。
+   *   `on` = 有可信定位、判定进行中；`paused` = 拒权/超时/连续低精度 ⇒ **已停止判定**。
+   *   只驱动文案与钩子（`.nav-actions[data-board-detect]`），不影响地图蓝点。
+   */
+  boardDetect: "on" | "paused";
   note: string;
   candidates: { plate: string; hint: string }[];
   /** 本次 riding 是否由自动判定进入 */
@@ -215,8 +226,18 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
   const lastGoodDotRef = useRef<RideYouDot | null>(null);
   /** ★ 本批：自动下车连续命中帧数 */
   const alightStreakRef = useRef(0);
-  /** ★ 本批：自动上车连续命中帧数（多帧确认 R2_STREAK） */
+  /** ★ 本批：自动上车连续命中帧数（多帧确认） */
   const boardStreakRef = useRef(0);
+  /**
+   * ★ v3.6.0（AC-25a）：自动判定是否已「事实上停止」。
+   *   只影响**自动判定与文案**；地图蓝点走 `youDot` 自己的冻结逻辑，两者不合并。
+   */
+  const [boardPaused, setBoardPaused] = useState(false);
+  /**
+   * ★ v3.6.0：进入候车态的时刻 —— 供 `detectPausedOf` 的启动宽限用
+   *   （避免"第一帧还没到"被误报成"定位不可用"）。
+   */
+  const boardingStartedAtRef = useRef<number | null>(null);
   /** ★ 本批：自动下车瞬态计时器 */
   const justAlightedTimerRef = useRef<number | null>(null);
   /** ★ 本批：自动下车撤销快照（仅最后一次自动下车可撤销） */
@@ -278,6 +299,39 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
     fixesRef.current = arr;
   }, [userFix]);
 
+  /**
+   * ★ v3.6.0（AC-25a）：维护「判定是否已暂停」。
+   *   · 5s 心跳：捕获「用户不再产生新帧」这条路径（60s 无帧 ⇒ paused），
+   *     光靠 `userFix` 永远等不到。⚠️ 依赖**不含** `userFix` —— 否则 1.5~3s 就
+   *     clear+set 一次 interval（功能对但属无谓抖动）。
+   *   · 新帧复评：另用一个小 effect 调 `tickRef`，保持「帧到位立刻转 on」的响应，
+   *     同时不重建 interval。
+   *   · 启动宽限：`boardingStartedAtRef` 内的前 `BOARDING_START_GRACE_MS` 不判 paused。
+   *   仅在候车态计算；离开候车态一律回到 `on`（不污染乘车/结束态）。
+   */
+  const pausedTickRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    if (phase !== "boarding" || !active) {
+      pausedTickRef.current = () => {};
+      setBoardPaused(false);
+      return;
+    }
+    const tick = () => {
+      const next = detectPausedOf(fixesRef.current, Date.now(), boardingStartedAtRef.current);
+      setBoardPaused((v) => (v === next ? v : next));
+    };
+    pausedTickRef.current = tick;
+    tick();
+    const t = window.setInterval(tick, 5_000);
+    return () => window.clearInterval(t);
+  }, [phase, active]);
+
+  /** 新帧到位 ⇒ 立即复评（不顺带重建上面的 interval） */
+  useEffect(() => {
+    if (phase !== "boarding" || !active) return;
+    pausedTickRef.current();
+  }, [phase, active, userFix]);
+
   const reset = useCallback(() => {
     setPhase("off");
     setLegIndex(0);
@@ -306,6 +360,7 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
     lastGoodDotRef.current = null;
     alightStreakRef.current = 0;
     boardStreakRef.current = 0;
+    boardingStartedAtRef.current = null;
     undoRef.current = null;
     if (justAlightedTimerRef.current) {
       window.clearTimeout(justAlightedTimerRef.current);
@@ -472,7 +527,7 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
 
   /* ── 自动上车判定 ── */
   const switchToRiding = useCallback(
-    (nextPlate: string | null, source: "vehicle" | "gps", reason: AutoBoardResult["reason"]) => {
+    (nextPlate: string | null, source: "vehicle" | "gps") => {
       const leg = legs[legIndex];
       const route = leg?.route.replace(/^LRT-/, "") ?? "";
       const lrt = leg?.kind === "lrt";
@@ -498,7 +553,6 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
       anomalyStreakRef.current = 0;
       boardStreakRef.current = 0; // ★ 本批：切换后清零多帧确认计数
       alightStreakRef.current = 0;
-      void reason;
       // ★ 本批：**任何来源**都建一次站点里程阶梯（供纵条 youAt / 自动下车判定）
       ladderRef.current = null;
       void ensureLadder();
@@ -524,11 +578,12 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
       autoUsed: autoUsedRef.current,
       streak: boardStreakRef.current,
     });
-    // ★ 本批（AC-56）：R1 strong 立即切换；R2 / R1weak+R2 需连续 ≥R2_STREAK 帧确认
+    // ★ v3.6.0（架构 §3.1）：唯一切换条件 = `hit && streak >= need`（need 由 autoBoardOf 返回）。
+    //   **删除**旧版 `res.reason === "r1"` 特权分支 —— 车辆信号不得单独触发上车。
     boardStreakRef.current = res.streak;
     if (!res.hit) return;
-    if (res.reason === "r1" || res.streak >= R2_STREAK) {
-      switchToRiding(res.plate, res.source, res.reason);
+    if (res.streak >= res.need) {
+      switchToRiding(res.plate, res.source);
     }
   }, [phase, active, legs, legIndex, strips, anchors, boardPos, switchToRiding]);
 
@@ -724,9 +779,12 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
     setAutoSwitched(false);
     setAutoNote("");
     setAnomaly("none");
-    // 冷却与自动状态在 leg 变化时复位（此处保持）
+    // ★ v3.6.0（架构 §3.1）：**不再清零**冷却 —— 改为从"现在"起算，
+    //   即「开始导航后 20s 内不做自动判定」。旧版清零 = 冷却形同不存在。
     autoUsedRef.current = false;
-    lastSwitchTsRef.current = 0;
+    lastSwitchTsRef.current = Date.now();
+    boardStreakRef.current = 0;
+    boardingStartedAtRef.current = Date.now(); // ★ 判定启动宽限起点（AC-25a 防首帧闪烁）
     onRequestGps?.(); // ★ 必须在用户手势内申请 GPS（开始导航）
     void acquireWake();
   }, [card, acquireWake, onRequestGps]);
@@ -749,7 +807,7 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
       const leg = legs[legIndex];
       if (!leg) return;
       if (leg.kind !== "bus" || !leg.dir) {
-        switchToRiding(null, "gps", "r2");
+        switchToRiding(null, "gps");
         return;
       }
       setTraveling(true);
@@ -850,7 +908,16 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
         setLegIndex((i) => i + 1);
         setPhase("boarding");
         autoUsedRef.current = false;
+        /**
+         * ★ **故意重置冷却**（与 `start()` 的「不清零」相反，勿"统一"成 Date.now()）：
+         *   下一段是**全新行程**（用户刚下车、人就站在换乘站台）⇒ 上车判定应**立刻可用**；
+         *   给新段保留 20s 冷却 = 让同站换乘用户干等 20 秒才可能被判上车，
+         *   那是把「防抖」错误地推广成「惩罚」。
+         *   启动宽限另行打点（下一行）—— 两件事不冲突：宽限防"首帧未到的误报"，
+         *   清冷却保"新段立即可判"。
+         */
         lastSwitchTsRef.current = 0;
+        boardingStartedAtRef.current = Date.now(); // ★ 下一段同样有启动宽限（防首帧闪烁）
         setNote("");
       } else {
         setPhase("done");
@@ -910,6 +977,7 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
     anomalyStreakRef.current = 0;
     ladderRef.current = null;
     lastSwitchTsRef.current = Date.now();
+    boardingStartedAtRef.current = Date.now(); // ★ 回到等车态同样有启动宽限
     autoUsedRef.current = true; // 冷却后再允许自动
   }, []);
 
@@ -974,7 +1042,13 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
     alarm,
     traveled,
     traveling,
-    note,
+    boardDetect: phase === "boarding" && boardPaused ? "paused" : "on",
+    /**
+     * ★ v3.6.0（AC-25a）：paused 时**强制覆盖**提示文案 —— 不能把"未判定"渲染成"正在检测"。
+     *   放在返回值里派生（而非塞进 `note` state）：候车轮询会不断改写 `note`，
+     *   写进 state 会被 `NOTE_NO_VEHICLES` / `NOTE_FETCH_FAIL` 覆盖掉。
+     */
+    note: phase === "boarding" && boardPaused ? NOTE_GPS_UNAVAILABLE : note,
     candidates,
     autoSwitched,
     autoNote,

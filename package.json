@@ -22,6 +22,7 @@
     "test:overview": "tsx scripts/test-route-overview.ts",
     "test:altbuses": "tsx scripts/test-altbuses.ts",
     "test:siblings": "tsx scripts/test-siblings.ts",
+    "test:boarding-detect": "tsx scripts/test-boarding-detect.ts",
     "check:api-guards": "tsx scripts/check-api-guards.ts",
     "test:favorites-v3": "tsx scripts/test-favorites-v3.ts",
     "db:migrate-v071": "tsx scripts/db-guard.ts run db/migrate-v071.ts",
