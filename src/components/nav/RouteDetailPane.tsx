@@ -41,6 +41,10 @@ export interface RouteDetailPaneProps {
   destCoord?: { lng: number; lat: number } | null;
   /** ★ 2026-09-24：点「切过去」→ 打开新方案导航 */
   onSwitchCard?: (card: RecommendCard, degraded: boolean) => void;
+  /** ★ v3.6.0 S5：步行跟随入口（宿主提供； ⇒ 不渲染展开键） */
+  onWalkStart?: ((seg: "out", steps: import("@/lib/walk/walk-shared").WalkStep[]) => void) | null;
+  onWalkExpand?: () => void;
+  walkPreview?: import("./NavDetailBody").WalkPreview;
   /** ★ 2026-09-25：全屏化（导航中隐藏底导、收敛间距） */
   immersive?: boolean;
 }
@@ -58,6 +62,9 @@ export default function RouteDetailPane({
   track = null,
   destCoord = null,
   onSwitchCard,
+  onWalkStart,
+  onWalkExpand,
+  walkPreview,
   immersive = false,
 }: RouteDetailPaneProps) {
   /** 收藏数据（纯函数在客户端现算：指纹 / 快照 / 流程图结构） */
@@ -106,6 +113,9 @@ export default function RouteDetailPane({
           track={track}
           destCoord={destCoord}
           onSwitchCard={onSwitchCard}
+          onWalkStart={onWalkStart}
+          onWalkExpand={onWalkExpand}
+          walkPreview={walkPreview}
           immersive={immersive}
         />
       )}

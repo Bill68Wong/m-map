@@ -56,7 +56,11 @@ import {
   IconSearch,
   IconTrash,
   IconArrowBackUp,
+  IconAlertTriangle,
+  IconArrowLeft,
+  IconArrowUp,
   IconDots,
+  IconFlag,
   IconGripVertical,
   IconPencil,
   IconPinned,
@@ -179,6 +183,18 @@ const REGISTRY: Record<string, any> = {
   "help-circle": IconBook,
   "info-circle": IconInfoCircleLinear,
   list: IconListDetails,
+  /* ── ★ v3.6.0 S5（步行导航）：转向 / 到达 / 偏航 ────────────────────────
+     · 转向四态与 `WalkTurn`（`lib/walk/walk-shared.ts`）一一对应 ——
+       **不得**在组件里另用字符箭头（「←」「→」）代替，否则视觉与描边风格两端分裂；
+     · `uturn` 复用 `undo`（IconArrowBackUp 的几何就是回转箭头）；
+     · 全部 Tabler 3.47.0 同库、stroke=2 方头方角、**零长度段 = 0**（过 audit-icon-dots 门禁）。 */
+  turnStraight: IconArrowUp,
+  turnLeft: IconArrowLeft,
+  turnRight: IconArrowRight,
+  /** 到达旗（设计 §2.2 `walkArrive`） */
+  walkArrive: IconFlag,
+  /** 偏航警示（设计 §2.2 `alertTriangle`） */
+  alertTriangle: IconAlertTriangle,
 };
 
 export type IconName = keyof typeof REGISTRY;

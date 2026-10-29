@@ -44,6 +44,14 @@ import {
   zoomForAcross,
 } from "./nav-map-fit";
 import { drawOverview } from "./nav-map-overview";
+import {
+  clearWalkLayers,
+  ensureWalkLayers,
+  readWalkStyle,
+  splitStepByRatio,
+  type WalkLayers,
+} from "./nav-map-walk";
+import type { WalkStep } from "@/lib/walk/walk-shared";
 import { lrtTransferVariantOf } from "./lrt-transfer";
 import TrackLayer from "./TrackLayer";
 import UserDotLayer from "./UserDotLayer";
@@ -147,6 +155,13 @@ export interface NavMapProps {
         box?: { minLng: number; minLat: number; maxLng: number; maxLat: number };
         /** fit-box：可视槽底边像素（= 当前档面板顶边） */
         slotTopPx?: number;
+        /**
+         * ★ v3.6.0 S5（步行跟随）：顶部被占高度（= 安全区 + `--walkturn-h`）。
+         *   与 `insetBottomPx` 任一存在 ⇒ 走"中带"算法；**都不传时行为完全不变**。
+         */
+        insetTopPx?: number;
+        /** ★ v3.6.0 S5：底部被占高度（= 面板顶边 `topsPx[detentIndex]`） */
+        insetBottomPx?: number;
       }
     | null;
   /** 定位回调：成功给 GCJ-02 坐标；失败给 null */
@@ -179,6 +194,20 @@ export interface NavMapProps {
    *   几何由 `useRouteOverview` 算好（`buildColoredLegs`）；`color=null` 回落 `--accent`。
    */
   overview?: ColoredLeg[] | null;
+  /**
+   * ★ v3.6.0 S5：**步行跟随三线**（done / now / ahead）。`null` ⇒ 三条全部移除。
+   * `donePath` 由调用方累积（偏航重算后不清空）；`currentIdx` + `ratio` 决定 now/ahead 切分。
+   */
+  walk?: {
+    steps: WalkStep[];
+    currentIdx: number;
+    /** 米级进度 0~1（**不要**用步级索引推地图几何，见设计 §2.3 细节 5） */
+    ratio: number;
+    /** 已走过的累积轨迹（GCJ-02） */
+    donePath: [number, number][];
+  } | null;
+  /** 步行线的重画版本号（ratio 变化但对象引用不变时也能刷新） */
+  walkVersion?: number;
   /**
    * ★ 2026-09-25：**导航追踪 · 用户定位蓝点（人）**。
    *   非空 ⇒ 画蓝点（原生 marker z128 < 车辆 130）；`null` ⇒ 移除（拒权/无信号/上车重合）。
@@ -228,6 +257,8 @@ export default function NavMap({
   vehicles = NO_VEHICLES,
   onVehicleClick,
   overview = null,
+  walk = null,
+  walkVersion = 0,
   userFix = null,
   traveled = null,
   lineStops = null,
@@ -256,6 +287,8 @@ export default function NavMap({
   /** 全量站点（一次拉取，ref 缓存）与已渲染标记（code → marker） */
   const stationsRef = useRef<StationPointLite[] | null>(null);
   const stationMarkersRef = useRef<Map<string, any>>(new Map());
+  /** ★ v3.6.0 S5：步行三线（done/now/ahead）的 Polyline 句柄 */
+  const walkLayersRef = useRef<WalkLayers>({ donePath: null, nowPath: null, aheadPath: null });
   /**
    * ★ 2026-09-22 路线查看模式：
    *   · `routePolylinesRef` 当前画的线（退出时逐个 remove）；
@@ -745,19 +778,31 @@ export default function NavMap({
        * `slotTopPx` = 当前档面板顶边像素（full≈12vh / half=50vh / peek=80vh）；
        * 复用 `fit-two` 的反推 zoom 逻辑（宽/高按可用区，留呼吸位），再把框中心抬到「顶部槽中心」。
        * ★ 2026-09-24：呼吸边距接上设计 Token `--map-fit-gap`（此前悬空未接线；回落 20）。
+       *
+       * ★ v3.6.0 S5：**新增 `insetTopPx` / `insetBottomPx`**（步行跟随两侧都占：
+       *   顶部 `.walkturn` 横幅 + 底部面板）。两者任一存在 ⇒ 走"中带"算法；
+       *   **都不传时旧路径一字不改**（recommend/detail 取景完全不受影响）。
+       *   ⚠️ 不要改用 `map.setFitView`：本文件 `:694-708` 有实测记录 ——
+       *   `setFitView` 在 `setLimitBounds(澳門)` 下会把 zoom 打到 11、中心跑到珠海斗门。
        */
       if (cmd.mode === "fit-box") {
         const box = cmd.box;
         if (!box) return;
         try {
           const size = map.getSize?.() ?? { width: 390, height: 700 };
+          const gap = fitGapPx();
+          const hasInset = cmd.insetTopPx != null || cmd.insetBottomPx != null;
+          const insetTop = Math.max(0, Math.round(cmd.insetTopPx ?? 0));
+          const insetBottom = Math.max(0, Math.round(cmd.insetBottomPx ?? 0));
+          /** 旧口径：可视槽顶边（= 面板顶边）；新口径：中带高/中心 */
           const slotTop = Math.max(80, Math.round(cmd.slotTopPx ?? size.height * 0.12));
           const centerLat = (box.minLat + box.maxLat) / 2;
           const centerLng = (box.minLng + box.maxLng) / 2;
-          // 可用区：宽留 50px/侧；高只用「顶边以上区域」，上下各留 gap 呼吸位
-          const gap = fitGapPx();
+          // 可用区：宽留 50px/侧；高按「顶边以上区域」或「中带」
           const availW = Math.max(80, size.width - 100);
-          const availH = Math.max(80, slotTop - gap * 2);
+          const availH = hasInset
+            ? Math.max(80, size.height - insetTop - insetBottom - gap * 2)
+            : Math.max(80, slotTop - gap * 2);
           const lngSpan = Math.max((box.maxLng - box.minLng) * 1.25, 1e-5);
           const latSpan = Math.max((box.maxLat - box.minLat) * 1.25, 1e-5);
           const zx = Math.log2((360 * availW) / (256 * lngSpan));
@@ -767,8 +812,14 @@ export default function NavMap({
           const z = Math.max(12, Math.min(16, Math.floor(Math.min(zx, zy))));
           applyCamera(() => {
             map.setZoomAndCenter(z, [centerLng, centerLat], true);
-            // 框中心：从整屏中心（size.height/2）抬到「顶部槽中心」（slotTop/2）
-            map.panBy(0, Math.round(size.height / 2 - slotTop / 2));
+            if (hasInset) {
+              /** 中带中心（屏坐标 y）：把框中心从整屏中心平移到中带中心 */
+              const midY = insetTop + (size.height - insetTop - insetBottom) / 2;
+              map.panBy(0, Math.round(size.height / 2 - midY));
+            } else {
+              // 框中心：从整屏中心（size.height/2）抬到「顶部槽中心」（slotTop/2）
+              map.panBy(0, Math.round(size.height / 2 - slotTop / 2));
+            }
           });
           canvasRef.current?.setAttribute("data-nav-zoom", String(z));
           canvasRef.current?.setAttribute("data-view-mode", "fit-box-selfcalc");
@@ -1303,6 +1354,57 @@ export default function NavMap({
    * 原生化后位置由地图引擎驱动，**拖拽期零 JS**；合并仅在数据刷新 + `moveend`/`zoomend`
    *   （节流 120ms）重算。`zIndex:130` 保证「车压站点/pin」视觉不变。
    */
+
+  /**
+   * ★ v3.6.0 S5：**步行三种路**（done / now / ahead，三条独立 Polyline）。
+   *
+   * · 版本号 `walkTick` 用于"每帧 ratio 变了也要重画"，故不把整个 walk 对象塞进依赖；
+   * · 进入 `riding`/离开 walk 时调用方把 `walk` 传 `null` ⇒ 本 effect **0ms 全部 remove**
+   *   （不做淡出）：把"步行线与乘车彩段共存"的窗口直接消掉，避免踩 z 层级的坑。
+   * · 切分与样式全在 `nav-map-walk.ts`（纯函数，可对拍）——本 effect 只管生命周期。
+   */
+  useEffect(() => {
+    const map = mapRef.current;
+    const AMap = amapRef.current;
+    if (!map || !AMap) return;
+
+    const clearWalk = () => {
+      walkLayersRef.current = clearWalkLayers(map as never, walkLayersRef.current);
+    };
+
+    if (!walk || !walk.steps.length) {
+      clearWalk();
+      canvasRef.current?.removeAttribute("data-walk-paths");
+      return;
+    }
+
+    const style = readWalkStyle(document.documentElement);
+    walkLayersRef.current = ensureWalkLayers(
+      map as never,
+      (AMap.Polyline as unknown) as never,
+      style,
+      walkLayersRef.current,
+    );
+    const L = walkLayersRef.current;
+
+    /**
+     * `donePath`：**累积轨迹**（调用方给），不参与切分；偏航重算后仍保留。
+     * `nowPath`：当前步按 `ratio` 切开后的**后半**（还没走的那截）。
+     * `aheadPath`：当前步之后的所有步（整段）。
+     */
+    const { remaining } = splitStepByRatio(walk.steps[walk.currentIdx], walk.ratio);
+    const ahead = walk.steps.slice(walk.currentIdx + 1).flatMap((s) => s.polyline);
+
+    L.donePath?.setPath((walk.donePath ?? []) as never);
+    L.nowPath?.setPath(remaining as never);
+    L.aheadPath?.setPath(ahead as never);
+    canvasRef.current?.setAttribute(
+      "data-walk-paths",
+      `${(walk.donePath ?? []).length}/${remaining.length}/${ahead.length}`,
+    );
+
+    return clearWalk;
+  }, [walk, walkVersion]);
 
   return (
     <div

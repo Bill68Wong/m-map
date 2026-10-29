@@ -43,6 +43,16 @@ import NavBrandBar from "./NavBrandBar";
 import AlightBanner from "./AlightBanner";
 import PinDiag from "./PinDiag";
 import NavSearchBarSlot from "./NavSearchBarSlot";
+/* ★ v3.6.0 S5：步行导航（预取 + 跟随状态机 + 顶部横幅） */
+import { useWalkRoute } from "@/components/walk/useWalkRoute";
+import { useWalkFollow } from "@/components/walk/useWalkFollow";
+import WalkTurnBanner from "@/components/walk/WalkTurnBanner";
+import type { WalkStep } from "@/lib/walk/walk-shared";
+
+/** 稳定的空 steps 引用（避免每次渲染新建数组 ⇒ 触发 hook 内部 effect 重跑） */
+const EMPTY_WALK_STEPS: WalkStep[] = [];
+/** 顶部跟随横幅高度（px）—— 与 `--walkturn-h` 同值，取景中带计算用（改多行须同步上调） */
+const WALKTURN_H = 64;
 import RouteLinesSheet from "./RouteLinesSheet";
 import RoutePanel from "./RoutePanel";
 import RouteSheet from "./RouteSheet";
@@ -234,6 +244,75 @@ export default function NavShell({
     setRidePhase(ride.phase);
   }, [ride.phase]);
 
+  /* ══════════════════════════════════════════════════════════════════════
+     ★ v3.6.0 S5 · 步行导航（详情可预览 / 进入后跟随）
+     ─────────────────────────────────────────────────────────────────────
+     · **互斥铁律**：`walkFollowing !== null` 与 `riding` 互斥（架构 §3.3）；
+     · **进入跟随的唯一入口 = 用户显式点击**（不自动进入）：点击处由 `WalkSegToggle`
+       的 `onExpand`（预览）与「开始步行」（跟随）触发，见 `RouteSheet` 的 walk 行；
+     · **AC-08a**：预取只有首/末两段（`useWalkRoute` 内已写死 ≤2 次），
+       推进过程中不再补请求。
+     ══════════════════════════════════════════════════════════════════════ */
+  /** 正在跟随的步行段（null = 未跟随） */
+  const [walkSeg, setWalkSeg] = useState<"out" | "in" | null>(null);
+
+  /**
+   * 两段步行的 OD：
+   *   · `out`（走到上车站）：起点 = 用户起点（`fromPoint`，无则用当前定位）→ 首段 `board`；
+   *   · `in`（下车站走到目的地）：末段 `alight` → 终点 `to`。
+   * 只有在 **detail pane 且几何就绪** 时才成立（否则没有站点锚点可去）。
+   */
+  const walkOds = useMemo(() => {
+    const legs = ov.body?.legs ?? [];
+    if (!legs.length || !to) return { out: null, in: null };
+    const startPt = fromPoint ?? (userFixR.fix ? { lng: userFixR.fix.lng, lat: userFixR.fix.lat } : null);
+    const firstBoard = legs[0]?.board;
+    const lastAlight = legs[legs.length - 1]?.alight;
+    return {
+      out: startPt && firstBoard ? { from: { lng: startPt.lng, lat: startPt.lat }, to: { lng: firstBoard.lng, lat: firstBoard.lat } } : null,
+      in: lastAlight && to ? { from: { lng: lastAlight.lng, lat: lastAlight.lat }, to: { lng: to.lng, lat: to.lat } } : null,
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ov.body?.legs, to?.lng, to?.lat, fromPoint?.lng, fromPoint?.lat, userFixR.fix?.lng, userFixR.fix?.lat]);
+
+  /** 预取首/末两段（AC-08a：仅此两次） */
+  const walkRoute = useWalkRoute(walkOds);
+  const activeWalk = walkSeg === "out" ? walkRoute.out : walkSeg === "in" ? walkRoute.in : null;
+
+  /** 跟随状态机（GPS 帧驱动；`following=false` 时为预览/空态，不判定位） */
+  const walkFollow = useWalkFollow({
+    steps: activeWalk?.steps ?? EMPTY_WALK_STEPS,
+    stepsTotalM: activeWalk?.stepsTotalM ?? 0,
+    fix: userFixR.fix ? { lng: userFixR.fix.lng, lat: userFixR.fix.lat, accuracy: userFixR.fix.accuracy } : null,
+    following: walkSeg !== null && (activeWalk?.phase === "ready"),
+  });
+
+  /**
+   * `donePath`：用户**真实走过的累积轨迹**。
+   * 每帧把当前定位追加到末尾，**偏航重算后不清空、不重置**（设计 §2.3 切分规则）。
+   * 与 `now/ahead` 可能几何不同源 —— "灰线与新绿线接续但不完全共线"是正确行为。
+   */
+  const donePathRef = useRef<[number, number][]>([]);
+  const [walkVersion, setWalkVersion] = useState(0);
+  const walkStepsKey = `${walkSeg ?? ""}|${activeWalk?.steps.length ?? 0}`;
+  useEffect(() => {
+    // 换段 ⇒ 轨迹重新累积（同一段内不重置）
+    donePathRef.current = [];
+    setWalkVersion((v) => v + 1);
+  }, [walkStepsKey]);
+  useEffect(() => {
+    if (!walkSeg || !userFixR.fix) return;
+    const p: [number, number] = [userFixR.fix.lng, userFixR.fix.lat];
+    const last = donePathRef.current[donePathRef.current.length - 1];
+    // 去抖：与上一点重合（<1 米）就不追加，避免轨迹里塞满重复顶点
+    if (last && Math.abs(last[0] - p[0]) < 1e-5 && Math.abs(last[1] - p[1]) < 1e-5) return;
+    donePathRef.current = [...donePathRef.current, p];
+    setWalkVersion((v) => v + 1);
+  }, [userFixR.fix, walkSeg]);
+
+  /** 步行跟随中禁止 ride 自动上车（互斥）：两者同时激活时以 walk 为准 */
+  const walkActive = walkSeg !== null;
+
   /** ★ 2026-09-25：取景指令化（AC-17） */
   const { view, frame, reframeOnSettle } = useNavFrame();
   /** 当前档位镜像（取景指令读取用；避免 snap 进入 effect 依赖） */
@@ -254,28 +333,47 @@ export default function NavShell({
           : ovExtra.length >= 2
             ? unionBox([], ovExtra)
             : null;
-      if (box) frame({ mode: "fit-box", box, slotTopPx: slot });
-      else frame({ mode: "none" });
+      /**
+       * ★ v3.6.0 S5：步行跟随时**顶部有横幅、底部有面板 ⇒ 两侧都占**，
+       *   必须用新的 `insetTopPx` / `insetBottomPx`（中带算法）；
+       *   非步行态**不传这两个新参** ⇒ 走旧路径，取景行为一字不改。
+       */
+      if (box) {
+        if (walkActive) {
+          frame({
+            mode: "fit-box",
+            box,
+            slotTopPx: slot,
+            insetTopPx: safeTop + WALKTURN_H,
+            insetBottomPx: slot,
+          });
+        } else {
+          frame({ mode: "fit-box", box, slotTopPx: slot });
+        }
+      } else frame({ mode: "none" });
       return;
     }
     if (stage === "panel") frame({ mode: from ? "fit-two" : to ? "dest-center-top" : "none" });
     else frame({ mode: "none" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rsOpen, pane, ov.box, ovExtra, stage, from, to]);
+  }, [rsOpen, pane, ov.box, ovExtra, stage, from, to, walkActive, safeTop]);
 
   /**
-   * ★ v3.2.0（Spec §2/§3 · AC-84）：`body[data-nav-phase]` **四值**（页面级导航阶段钩子）——
-   *   `off`（未开面板）/ `recommend`（选路线）/ `detail`（查看·候车）/ `riding`（导航中）。
+   * ★ v3.2.0（Spec §2/§3 · AC-84）：`body[data-nav-phase]` **五值**（页面级导航阶段钩子）——
+   *   `off` / `recommend` / `detail` / **`walk`（★ v3.6.0 S5 新增第四态）** / `riding`。
    *   ⚠️ 与 `.nav-actions[data-nav-phase]`（NavTrackBar，值为**乘车 phase**）语义不同，勿混用；
    *      旧布尔 `body[data-nav="riding"]` **废弃**（底导隐藏规则已改选择器，见 globals.css）。
+   *   ⚠️ `walk` 与 `riding` **互斥**：步行跟随优先（用户已显式进入），且两者入口互相隐藏。
    */
-  const navPhase: "off" | "recommend" | "detail" | "riding" = !rsOpen
+  const navPhase: "off" | "recommend" | "detail" | "walk" | "riding" = !rsOpen
     ? "off"
     : pane === "recommend"
       ? "recommend"
-      : ride.phase === "riding"
-        ? "riding"
-        : "detail";
+      : walkActive
+        ? "walk"
+        : ride.phase === "riding"
+          ? "riding"
+          : "detail";
   useEffect(() => {
     document.body.setAttribute("data-nav-phase", navPhase);
     return () => document.body.removeAttribute("data-nav-phase");
@@ -422,6 +520,18 @@ export default function NavShell({
           onVehicleClick={onVehicleClick}
           /* ★ 2026-09-23：路线总览（灰底线 + 彩段） */
           overview={detailActive ? ov.legs : null}
+          /* ★ v3.6.0 S5：步行三线（done/now/ahead）—— `walkSeg` 为空 ⇒ 传 null ⇒ 地图 0ms 移除 */
+          walk={
+            walkActive && activeWalk?.phase === "ready"
+              ? {
+                  steps: activeWalk.steps,
+                  currentIdx: Math.max(0, walkFollow.currentIdx),
+                  ratio: walkFollow.progress.ratio,
+                  donePath: donePathRef.current,
+                }
+              : null
+          }
+          walkVersion={walkVersion}
           /* ★ v3.2.0（需求 4 / AC-74）：**蓝点任何时候显示** —— 导航态用 GPS 投影点（`youDot`）回落原始
              GPS；**浏览/选点/选路线态也回落原始 GPS**（原先非 detail 态传 `null` ⇒ 浏览时不显示蓝点，
              违反 AC-74）。拒权/未获定位 ⇒ `userFixR.fix = null` ⇒ 蓝点不显示、页面照常（AC-75）。 */
@@ -517,6 +627,42 @@ export default function NavShell({
         </div>
       )}
 
+      {/*
+        ★ v3.6.0 S5：**顶部步行跟随横幅** —— 页面级 `fixed`，**必须挂在 `.nav-map-wrap` 之外**。
+        wrap 是层叠上下文，挂进去会永远低于底部 chrome（项目为这个先后踩过两次，
+        见本文件 `:34-36` 的注释）。四态一条横幅，绝不叠两条。
+      */}
+      {walkActive && activeWalk?.phase === "ready" && (
+        <WalkTurnBanner
+          state={
+            walkFollow.phase === "arrived"
+              ? "arrive"
+              : walkFollow.offRoute
+                ? "off"
+                : walkFollow.lowAccuracy
+                  ? "manual"
+                  : "turn"
+          }
+          text={activeWalk.steps[walkFollow.currentIdx]?.text}
+          sub={activeWalk.steps[walkFollow.currentIdx]?.sub}
+          turn={activeWalk.steps[walkFollow.currentIdx]?.turn ?? "straight"}
+          /* 横幅显示**本步剩余米**（不是全程 → 否则"右转"配"还剩 800 米"会让人以为走错） */
+          distM={(() => {
+            const s = activeWalk.steps[walkFollow.currentIdx];
+            if (!s) return 0;
+            const geom = s.cumM.length ? s.cumM[s.cumM.length - 1] - s.cumM[0] : s.distM;
+            return Math.max(0, geom - walkFollow.progress.doneInStepM);
+          })()}
+          offM={walkFollow.offM}
+          destLabel={to?.label}
+          onRecover={() => {
+            walkFollow.recover();
+            if (walkSeg) walkRoute.reload(walkSeg);
+          }}
+          onRetry={() => userFixR.start?.()}
+        />
+      )}
+
       {/* 公共交通路线全屏选择弹窗（必须在 wrap 之外） */}
       {lineSheet && (
         <RouteLinesSheet
@@ -541,6 +687,25 @@ export default function NavShell({
         colors={colors}
         fav={fromPoint && to ? { from: endpointOf(fromPoint), to: endpointOf(to) } : null}
         immersive={ride.phase === "riding"}
+        /**
+         * ★ v3.6.0 S5：步行入口 + 首段预览。
+         * `onStart` = **唯一**进入跟随的入口（用户显式点击「开始步行」）；
+         * `preview` 只取首段（末段跟随由 `walkSeg === "in"` 承载，入口同理）。
+         */
+        walk={{
+          onStart: (seg, steps) => {
+            void steps; // steps 已由 useWalkRoute 缓存，跟随状态机会拿到同一份
+            walkRoute.ensure(seg);
+            setWalkSeg(seg);
+          },
+          onExpand: () => walkRoute.ensure("out"),
+          preview: {
+            phase: walkRoute.out.phase,
+            steps: walkRoute.out.steps,
+            serverSteps: walkRoute.out.steps,
+            totalDistM: walkRoute.out.stepsTotalM,
+          },
+        }}
         detail={
           detailCard && to
             ? {

@@ -27,6 +27,21 @@ import { catchHintOf, directionNameOf, EtaText, Row, TierBadge, macauClock } fro
 import type { FavoriteEndpoint, PlanSnapshot, RouteSeg } from "@/lib/favorites/types";
 import type { RecommendCard, SegmentStrip } from "@/lib/recommend/types";
 import type { RideTrackView } from "./useRideTracking";
+/* ★ v3.6.0 S5：步行预览（展开键 + 静态步骤列表） */
+import WalkSegToggle from "@/components/walk/WalkSegToggle";
+import WalkStepList from "@/components/walk/WalkStepList";
+import type { WalkPhase } from "@/components/walk/useWalkRoute";
+import type { WalkStep } from "@/lib/walk/walk-shared";
+
+/** 步行预览数据（首段）；未就绪时给最小形状，避免调用方每次造对象 */
+export interface WalkPreview {
+  phase: WalkPhase;
+  steps: WalkStep[];
+  /** 服务端原始 steps（`开始步行` 时交给跟随状态机，保证同一份几何） */
+  serverSteps: WalkStep[];
+  totalDistM: number;
+}
+const EMPTY_WALK_PREVIEW: WalkPreview = { phase: "idle", steps: [], serverSteps: [], totalDistM: 0 };
 
 export interface NavDetailBodyProps {
   card: RecommendCard;
@@ -64,6 +79,15 @@ export interface NavDetailBodyProps {
   onSwitchCard?: (card: RecommendCard, degraded: boolean) => void;
   /** ★ 全屏化（导航中收敛间距） */
   immersive?: boolean;
+  /**
+   * ★ v3.6.0 S5：进入步行跟随（用户显式点击「开始步行」）。
+   * 传 `undefined` ⇒ 本组件**不渲染**展开键（收藏页 `RouteDetailSheet` 无地图上下文，走这条）。
+   */
+  onWalkStart?: ((seg: "out", steps: WalkStep[]) => void) | null;
+  /** 展开步骤时回调（调用方据此 `ensure()` 取数；命中缓存则零请求） */
+  onWalkExpand?: () => void;
+  /** 首段步行预览数据（由宿主 `useWalkRoute` 提供） */
+  walkPreview?: WalkPreview;
 }
 
 export default function NavDetailBody({
@@ -80,7 +104,12 @@ export default function NavDetailBody({
   destCoord = null,
   onSwitchCard,
   immersive = false,
+  onWalkStart,
+  onWalkExpand,
+  walkPreview = EMPTY_WALK_PREVIEW,
 }: NavDetailBodyProps) {
+  /** ★ v3.6.0 S5：步行步骤展开态（不记忆，父组件持有亦不落盘） */
+  const [walkOpen, setWalkOpen] = useState(false);
   const colorOf = (c: string) => colors[c] ?? null;
   const first = card.rides[0];
   /** ★ v3.3.0（AC-107）：赶车提示（合并式）—— 后端 `catchHint` 优先、回落 `tierText` */
@@ -162,7 +191,59 @@ export default function NavDetailBody({
               {card.walkOut.toLabel}
             </>
           }
+          /**
+           * ★ v3.6.0 S5（设计 §2.1）：行右侧 44×44「步骤」展开键。
+           * 展开后的 `.rc-walklist` **必须紧随该行**（Row 的兄弟节点）——
+           * 塞进 `aside` 会落进 `.rc-row` 的 flex 行里被挤扁（S5 验收抓到过）。
+           */
+          aside={
+            onWalkStart ? (
+              <WalkSegToggle
+                idPrefix="detail"
+                open={walkOpen}
+                onToggle={() => {
+                  const next = !walkOpen;
+                  setWalkOpen(next);
+                  if (next) onWalkExpand?.();
+                }}
+              />
+            ) : null
+          }
         />
+        {/* ★ v3.6.0 S5：展开的步骤列表（紧随「步行」行；预览态 currentIdx=-1 ⇒ 全部未走） */}
+        {onWalkStart && walkOpen && (
+          <div className="rc-walkpreview">
+            {walkPreview.phase === "ready" ? (
+              <>
+                <WalkStepList
+                  steps={walkPreview.steps}
+                  currentIdx={-1}
+                  idPrefix="detail"
+                  longWalk={walkPreview.totalDistM > 2500}
+                />
+                <button
+                  type="button"
+                  className="btn btn--outline btn--sm rc-walkpreview__go"
+                  onClick={() => onWalkStart("out", walkPreview.serverSteps)}
+                >
+                  开始步行
+                </button>
+              </>
+            ) : walkPreview.phase === "failed" ? (
+              /* 降级：只给直线距离 + 固定步速估算，绝不显示假的分步（架构 §3.3 纪律 4） */
+              <p className="rc-walkpreview__fallback t-label t-muted">
+                步行路径暂时取不到 · 约 {card.walkOut.distanceM ? Math.round(card.walkOut.distanceM) : "—"} 米
+                {card.walkOut.minutes ? ` · 约 ${card.walkOut.minutes} 分钟` : ""}
+              </p>
+            ) : (
+              /* 骨架：距离/时长来自 detail-body 已有字段 ⇒ 不等网络 */
+              <p className="rc-walkpreview__sk t-label t-muted">
+                约 {card.walkOut.minutes} 分钟
+                {card.walkOut.distanceM ? ` · ${Math.round(card.walkOut.distanceM)} 米` : ""} · 步骤载入中…
+              </p>
+            )}
+          </div>
+        )}
         {first && (
           <Row
             dot="wait"

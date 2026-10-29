@@ -7544,3 +7544,321 @@ body[data-nav-phase]:not([data-nav-phase="off"]) .nav-brandbar__acts { display: 
 .fav-sheet__swap {
   align-self: flex-start;
 }
+/* ============================================================================
+   M Map v3.6.0 · Token 增量（可直接追加到 src/app/globals.css 末尾）
+   原则：只增不改 —— 本文件不含任何既有 Token 的重定义。
+   权威文档：docs/迭代-v360-20261029/03-设计-规格与Token.md
+   ──────────────────────────────────────────────────────────────────────────
+   5 组 · 39 条：
+     ① 地图·步行三种路 + 相机视野边距（画布需具体色值，同 --map-line-* 模式）
+     ② 步行分步卡片（三态墨色 / 结构 / 偏航 / 顶部跟随横幅）
+     ③ 线路搜索徽章（自适应字色两端）
+     ④ 速度分档 · 新增档 0（实心红）
+     ⑤ 轻量提示行（替代「已带入收藏」横幅）
+   刷新三态：刻意 0 条新增（复用 --accent / --muted / --shadow-hard / --focus-ring）
+   ============================================================================ */
+
+:root {
+  /* ── ① 地图 · 步行圆点虚线 ──────────────────────────────────────────────
+     注意：刻意**深色模式保持与浅色同值**（AMap 底图恒为浅色瓦片，本项目未接深色地图样式；
+           线色若随主题抬亮，在浅瓦片上反而更看不清）。此为与 --map-line-* 不同的**显式例外**，
+           删除本注释前请先确认底图已支持深色。 */
+  --map-walk-done: #8c93a0; /* 已走 = 与 --map-line-passed 同值（视觉同族） */
+  --map-walk-ahead: #0b6e4f; /* 未走 / 当前 = --brand-green 同值（项目绿） */
+
+  /* 圆点节奏（字符串，供 split(" ") 解析成 strokeDasharray）
+     点心距 = 0.5+12 = 12.5px；配 w6 ⇒ 单点实长 6.5、点间缝 6.0 ⇒ 缝 ≈ 1 个点径 */
+  --map-walk-dash: 0.5 12;
+
+  /* 线宽 / 不透明度（三通道区分，不只靠颜色） */
+  --map-walk-w-done: 5;
+  --map-walk-w-ahead: 5;
+  --map-walk-w-now: 7;
+  --map-walk-op-done: 0.85;
+  --map-walk-op-ahead: 0.55;
+  --map-walk-op-now: 1;
+
+  /* 层级（插进既有 z 表：灰虚 68 < 步行三态 69/70/73 < 灰实 74 < 站点 90） */
+  --map-z-walk-done: 69;
+  --map-z-walk-ahead: 70;
+  --map-z-walk-now: 73;
+
+  /* 相机跟随的视野呼吸边距 —— 注意：**必须是可 parseFloat 的纯 px**。
+     AMap 相机只吃数字，前端按 parseFloat(readToken("--map-fit-gap")) 直取。
+     禁 calc() / clamp() / rem（写成算式会逼前端在 JS 里再造常量）。 */
+  --map-fit-gap: 24px;
+
+  /* ── ② 步行分步卡片 ──────────────────────────────────────────────────── */
+  /* 三态墨色（色阶，不用 opacity —— 半透明在 --surface-2 上会脏） */
+  --walk-now-ink: var(--fg); /* 当前步：主文案 */
+  --walk-now-bg: var(--brand-green-soft);
+  --walk-now-mark: var(--brand-green); /* 图标 / 圆盘 / 距离 */
+  --walk-ahead-ink: var(--fg-2); /* 未走：主文案 */
+  --walk-ahead-mark: var(--muted); /* 未走：图标 / 距离 */
+  --walk-done-ink: var(--meta); /* 已走：整行（4.58:1 on --surface） */
+  --walk-done-mark: var(--meta);
+  /* 注意：已走行若落在 --surface-2 底上，--walk-done-ink 须覆写为 --muted
+     （--meta on #eaece7 仅 3.85:1；--muted 为 5.04:1） */
+
+  /* 结构 */
+  --walk-rail: var(--border-2); /* 竖向引导线（未走） */
+  --walk-rail-done: var(--map-line-passed);
+  --walk-step-min-h: 44px; /* 触摸目标下限 */
+  --walk-icon-box: 24px; /* 转向图标盒（--icon-lg） */
+  --walk-turn-w: 2px; /* 引导线宽 */
+
+  /* 偏航提示（走错路 = 需纠正，非错误；避开 --warn 的对比度坑：4.19:1） */
+  --walk-off-bg: var(--slow-soft);
+  --walk-off-ink: var(--slow-ink); /* #8a6400 on #fbf1d6 = 4.78:1 */
+
+  /* 顶部跟随横幅（AC-02「地图上方」；站牌语言 = 2px 描边 + 同色硬投影，同 .nav-searchbar） */
+  --walkturn-w: 2px; /* 描边 */
+  --walkturn-shadow: 3px 3px 0 0 var(--brand-green); /* 投影与描边**同色**，厚度感；深色随 --brand-green 换 */
+  --walkturn-h: 64px; /* 最小高；落位公式依赖它，改多行须同步上调 */
+  --walkturn-z: 92; /* > 车卡 90，< 下车横幅 94 */
+
+  /* ── ③ 线路搜索标签（实际字色由 chipInkOf() 运行时算，此处只登记两端） ── */
+  --chip-ink-light: #ffffff; /* 深底 ⇒ 白字 */
+  --chip-ink-dark: var(--fg); /* 浅底 ⇒ 深字 */
+  --chip-ring: inset 0 0 0 1px rgba(255, 255, 255, 0.22); /* 深底细内描边（沿用 .route-chip 做法） */
+  --chip-ring-dark: inset 0 0 0 1px rgba(15, 23, 32, 0.18); /* 浅底 + 深字时改暗描边 */
+
+  /* ── ④ 速度分档 · 新增档 0「大概率赶不上」──────────────────────────────
+     六档中**唯一的实心底**（其余五档都是浅底 + 深字）。
+     颜色 = 实心红（--danger）。为什么不是琥珀：档 1 现存就是**浅红底**
+     （--error-container，globals.css:1506-1509），档 0 压在浅红之上只能是更重的红；
+     用琥珀会让色相严重度**非单调**（用户会觉得"浅红比琥珀更急"，而档 0 才是没戏那档）。
+     「红已被占用」不构成冲突 —— 靠形态分工：
+       删除确认 = 描边红（.btn--danger）｜ 到站 = 脉动红（--track-alight-now）｜ 档 0 = 实心红块 + 白字
+     「更严重」则同时由色相单调 + 实心 vs 浅底两条通道承载。
+     Backlog（不采用）：实心琥珀 var(--warn)，因上述非单调否决，不留并存开关。 */
+  --tier0-bg: var(--danger);
+  --tier0-fg: #ffffff; /* 6.06:1（#b4342a 底） */
+
+  /* ── ⑤ 轻量提示行（替代「已带入收藏」横幅；推荐方案其实是直接删除） ── */
+  --hintline-ink: var(--meta); /* 4.58:1 on --surface */
+  --hintline-h: 20px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    /* ① 地图步行线：**不覆写**（见上方例外说明） */
+
+    /* ② 步行三态：全部是别名，自动跟随（--brand-green → #6dd58c，
+          --brand-green-soft → #00391b，--meta → #a9adb8），无需重复声明 */
+
+    /* ④ 档 0 反向：深色下 --danger = #ffb4ab（亮红）⇒ 必须配黑字。
+       白字在此底上仅 1.70:1（远不达标），黑字 12.37:1。浅深两态不能共用同一 --tier0-fg。 */
+    --tier0-bg: var(--danger);
+    --tier0-fg: #000000; /* 12.37:1（#000 属允许例外） */
+
+    /* ③ 线路标签内描边：深色下沿用 rgba(255,255,255,.22) 已够（同 .route-chip） */
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   ★ v3.6.0 S5 · 步行导航组件样式（Token 见上方增量区；此处**不写任何色值**）
+   设计依据：docs/迭代-v360-20261029/03-设计-规格与Token.md §2.1 / §2.2
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── 详情页「步行」行右侧展开键（44px 触摸目标）── */
+.walkseg__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 44px;
+  min-width: 44px;
+  justify-content: flex-end;
+  padding: 0;
+  margin: calc(var(--space-1) * -1) 0;
+  background: none;
+  border: 0;
+  color: var(--accent);
+  font-size: var(--text-2xs);
+  cursor: pointer;
+}
+.walkseg__toggle:focus-visible { outline: none; box-shadow: var(--focus-ring); border-radius: var(--radius-chip); }
+.walkseg__chev { transition: transform var(--dur-instant) var(--ease-standard); }
+.walkseg__chev.is-open { transform: rotate(180deg); }
+@media (prefers-reduced-motion: reduce) {
+  .walkseg__chev { transition: none; }
+}
+
+/* ── 步骤列表（三态 + 竖向引导线）── */
+.rc-walklist { display: flex; flex-direction: column; margin-top: var(--space-1); }
+.walklist__long {
+  margin: 0 0 var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--slow-soft);
+  color: var(--slow-ink);
+  border-radius: var(--radius-chip);
+  line-height: 1.5;
+}
+.walkstep {
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--walk-icon-box) 1fr auto;
+  align-items: start;
+  column-gap: var(--space-3);
+  min-height: var(--walk-step-min-h);
+  padding: var(--space-2) 0;
+  padding-left: 12px;
+}
+.walkstep__rail {
+  position: absolute;
+  left: calc(12px + var(--walk-icon-box) / 2 - var(--walk-turn-w) / 2);
+  top: calc(var(--space-2) + var(--walk-icon-box) / 2);
+  bottom: calc(var(--space-2) * -1);
+  width: var(--walk-turn-w);
+  background: var(--walk-rail);
+}
+.walkstep:last-child .walkstep__rail { display: none; }
+.walkstep__mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--walk-icon-box);
+  height: var(--walk-icon-box);
+  color: var(--walk-ahead-mark);
+}
+.walkstep__body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.walkstep__txt { font-size: var(--text-md); line-height: 1.45; color: var(--walk-ahead-ink); }
+.walkstep__sub { font-size: var(--text-2xs); color: var(--muted); }
+.walkstep__dist {
+  font-size: var(--text-xs);
+  color: var(--walk-ahead-mark);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  padding-top: 2px;
+}
+.walkstep__done { color: var(--walk-done-mark); display: inline-flex; align-items: center; padding-top: 2px; }
+
+/* 当前步：绿圆盘 + 600 字重 + 绿浅底（本行起引导线转绿） */
+.walkstep--now .walkstep__mark { color: var(--walk-now-mark); }
+.walkstep--now .walkstep__txt { color: var(--walk-now-ink); font-weight: var(--fw-emphasize); }
+.walkstep--now .walkstep__dist { color: var(--walk-now-mark); font-weight: var(--fw-emphasize); }
+.walkstep--now {
+  background: var(--walk-now-bg);
+  border-radius: var(--radius-chip);
+  padding-left: 12px;
+  padding-right: var(--space-2);
+}
+.walkstep--now .walkstep__rail { background: var(--walk-now-mark); }
+
+/* 已走：整行压暗 + 引导线转灰 */
+.walkstep--done .walkstep__mark,
+.walkstep--done .walkstep__txt,
+.walkstep--done .walkstep__dist { color: var(--walk-done-ink); }
+.walkstep--done .walkstep__rail { background: var(--walk-rail-done); }
+
+/* ── 跟随面板 ── */
+.walkpane { display: flex; flex-direction: column; gap: var(--space-1); }
+.walkpane.is-fading { opacity: 0.35; transition: opacity var(--dur-instant) var(--ease-standard); }
+.walkpane__off {
+  margin: 0 0 var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  background: var(--walk-off-bg);
+  color: var(--walk-off-ink);
+  border-radius: var(--radius-chip);
+}
+.walkpane__remain { margin: var(--space-1) 0 0; }
+.walkseg__done {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: 44px;
+  padding: 0;
+  background: none;
+  border: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+.walkseg__done:focus-visible { outline: none; box-shadow: var(--focus-ring); border-radius: var(--radius-chip); }
+.walklist__manual { display: flex; gap: var(--space-3); padding-top: var(--space-1); }
+
+/* ── 顶部跟随横幅（页面级 fixed；必须挂在 .nav-map-wrap 之外）── */
+.walkturn {
+  position: fixed;
+  top: calc(var(--space-3) + var(--safe-top));
+  left: var(--space-4);
+  right: var(--space-4);
+  z-index: var(--walkturn-z);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--walkturn-h);
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface);
+  border: var(--walkturn-w) solid var(--brand-green);
+  border-radius: var(--radius-card);
+  box-shadow: var(--walkturn-shadow);
+}
+.walkturn__mark { display: inline-flex; align-items: center; color: var(--brand-green); flex: none; }
+.walkturn__body { display: flex; flex-direction: column; gap: 1px; flex: 1; min-width: 0; }
+.walkturn__txt {
+  font-size: var(--text-lg);
+  font-weight: var(--fw-emphasize);
+  line-height: 1.3;
+  color: var(--fg);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.walkturn__sub { font-size: var(--text-2xs); color: var(--muted); }
+.walkturn__dist {
+  flex: none;
+  min-width: 72px;
+  text-align: right;
+  white-space: nowrap;
+  font-size: var(--text-xl);
+  font-weight: var(--fw-announce);
+  font-variant-numeric: tabular-nums;
+  color: var(--brand-green);
+}
+.walkturn__act {
+  flex: none;
+  position: relative;
+  min-height: 36px;
+  padding: 0 var(--space-1);
+  background: none;
+  border: 0;
+  color: inherit;
+  font-size: var(--text-xs);
+  font-weight: var(--fw-emphasize);
+  cursor: pointer;
+}
+/* 伪元素撑到 44px 触摸目标（视觉仍 36px） */
+.walkturn__act::after {
+  content: "";
+  position: absolute;
+  inset: -4px -6px;
+}
+.walkturn__act:focus-visible { outline: none; box-shadow: var(--focus-ring); border-radius: var(--radius-chip); }
+
+/* 异常三态：**撤影 + 换色**（同色硬影只表达"正在跟随"） */
+.walkturn[data-state="off"] {
+  background: var(--walk-off-bg);
+  border-color: var(--walk-off-ink);
+  box-shadow: none;
+}
+.walkturn[data-state="off"] .walkturn__mark,
+.walkturn[data-state="off"] .walkturn__txt { color: var(--walk-off-ink); }
+.walkturn[data-state="arrive"] {
+  background: var(--walk-now-bg);
+  border-color: var(--brand-green);
+  box-shadow: none;
+}
+.walkturn[data-state="arrive"] .walkturn__mark { color: var(--brand-green); }
+.walkturn[data-state="manual"] {
+  background: var(--surface-2);
+  border-color: var(--border-2);
+  box-shadow: none;
+}
+.walkturn[data-state="manual"] .walkturn__mark,
+.walkturn[data-state="manual"] .walkturn__txt { color: var(--fg-2); }
+
+/* 步行态：隐藏底部 Tab（只改这一条，品牌栏由既有 :not([data-nav-phase="off"]) 覆盖） */
+body[data-nav-phase="walk"] .bottom-nav { display: none; }
