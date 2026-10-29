@@ -29,7 +29,7 @@ import type { RecommendCard, SegmentStrip } from "@/lib/recommend/types";
 import type { RideTrackView } from "./useRideTracking";
 /* ★ v3.6.0 S5：步行预览（展开键 + 静态步骤列表） */
 import WalkSegToggle from "@/components/walk/WalkSegToggle";
-import WalkStepList from "@/components/walk/WalkStepList";
+import WalkStepList, { distText } from "@/components/walk/WalkStepList";
 import type { WalkPhase } from "@/components/walk/useWalkRoute";
 import type { WalkStep } from "@/lib/walk/walk-shared";
 
@@ -39,9 +39,12 @@ export interface WalkPreview {
   steps: WalkStep[];
   /** 服务端原始 steps（`开始步行` 时交给跟随状态机，保证同一份几何） */
   serverSteps: WalkStep[];
+  /** 几何真实总长（`stepsTotalM`）—— 显示/剩余计算都用它，**不用 totalDistM** */
   totalDistM: number;
+  /** 预计步行分钟（= `totalDurationS / 60`，取整前） */
+  totalMin: number;
 }
-const EMPTY_WALK_PREVIEW: WalkPreview = { phase: "idle", steps: [], serverSteps: [], totalDistM: 0 };
+const EMPTY_WALK_PREVIEW: WalkPreview = { phase: "idle", steps: [], serverSteps: [], totalDistM: 0, totalMin: 0 };
 
 export interface NavDetailBodyProps {
   card: RecommendCard;
@@ -201,10 +204,63 @@ export default function NavDetailBody({
               <WalkSegToggle
                 idPrefix="detail"
                 open={walkOpen}
-                onToggle={() => {
+                onToggle={(ev) => {
                   const next = !walkOpen;
                   setWalkOpen(next);
-                  if (next) onWalkExpand?.();
+                  if (!next) return;
+                  onWalkExpand?.();
+                  /**
+                   * ★ v3.6.0 S5 布局修复 ②：展开后
+                   *   (a) 把**这一行**贴到滚动容器的可视区顶部；
+                   *   (b) 按「行以下还剩多少可见空间」反算预览块的高度上限。
+                   *
+                   * ── 为什么必须实测，而不是写死 vh ─────────────────────────────────
+                   *   实测（420×900，half 档）：`.route-sheet__scroll` 自身 clientH=832，
+                   *   但它**只有上半截在视口内**（容器 518→1350，视口到 900）⇒ 可见仅 382px。
+                   *   而预览块从 y=580 开始，`max-height:42vh`(=378) ⇒ 底部 958，**按钮在 922**，
+                   *   视口外 22px ⇒ Playwright 判「元素中心不在视口内」，人也点不到。
+                   *   写死任何 vh 都逃不掉这个矛盾（块起点随上方行数变化）。
+                   *
+                   * ── 两个必须避开的坑（都踩过）────────────────────────────────────
+                   *   ① 页面里有**两个** `.route-sheet__scroll`（recommend / detail 各一）⇒
+                   *      必须 `closest()` 从被点击的按钮向上找，**禁止 document.querySelector**。
+                   *   ② 滚动位移**不能用 `offsetTop` 相减** —— 嵌套定位下 offsetParent 不一致，
+                   *      实测只滚了 61px（应为 ~190px）。一律用 `getBoundingClientRect()`。
+                   */
+                  const btn = ev.currentTarget as HTMLElement | null;
+                  const row = btn?.closest(".rc-row--walk") as HTMLElement | null;
+                  const box = row?.closest(".route-sheet__scroll") as HTMLElement | null;
+                  if (!row || !box) return;
+                  requestAnimationFrame(() => {
+                    // (a) 行贴顶：先滚，后测量（用瞬时滚动 ⇒ 同一帧内 scrollTop 已生效，测得准）
+                    const rowTop = row.getBoundingClientRect().top - box.getBoundingClientRect().top;
+                    box.scrollTo({ top: Math.max(0, box.scrollTop + rowTop - 8) });
+
+                    /**
+                     * (b) 反算高度上限：行以下到**真实可视底**。
+                     *
+                     * ⚠️⚠️ 可视底不是 `window.innerHeight` —— 详情 pane 有**吸底操作条**
+                     *   `.route-sheet__actions-slot`（实测 absolute，815→900，高 85px，z=20）。
+                     *   只按 innerHeight 算 ⇒ 预览块伸进去被它盖住：
+                     *   命中测试 `elementFromPoint` 在按钮中心返回的是 `btn--primary`（「开始导航」），
+                     *   即**用户点「开始步行」会误触到「开始导航」** —— 这是真实 UX 缺陷，
+                     *   不只是自动化测试的无障碍判据问题。
+                     *   ⇒ 用 `min(容器底, 视口底, 吸底槽顶)`。
+                     */
+                    const rowRect = row.getBoundingClientRect();
+                    const boxRect = box.getBoundingClientRect();
+                    const slot = box
+                      .closest(".route-sheet")
+                      ?.querySelector(".route-sheet__actions-slot") as HTMLElement | null;
+                    const slotTop = slot ? slot.getBoundingClientRect().top : Infinity;
+                    const visibleBottom = Math.min(boxRect.bottom, window.innerHeight, slotTop);
+                    const avail = visibleBottom - rowRect.bottom - 8 - 12;
+                    // 写进 CSS 变量（不直接写 style.maxHeight：让 CSS 保留兜底默认值）
+                    box.style.setProperty(
+                      "--walkpreview-h",
+                      `${Math.max(140, Math.min(440, Math.round(avail)))}px`,
+                    );
+                  });
                 }}
               />
             ) : null
@@ -221,13 +277,26 @@ export default function NavDetailBody({
                   idPrefix="detail"
                   longWalk={walkPreview.totalDistM > 2500}
                 />
-                <button
-                  type="button"
-                  className="btn btn--outline btn--sm rc-walkpreview__go"
-                  onClick={() => onWalkStart("out", walkPreview.serverSteps)}
-                >
-                  开始步行
-                </button>
+                <div className="rc-walkpreview__foot">
+                  <button
+                    type="button"
+                    className="btn btn--outline btn--sm rc-walkpreview__go"
+                    onClick={() => onWalkStart("out", walkPreview.serverSteps)}
+                  >
+                    开始步行
+                  </button>
+                  {/*
+                    ★ v3.6.0 S5 布局修复 ③：按钮旁给「全程距离 · 时长」。
+                    7 步的列表里用户看不出"还要走多久"，这一行能省一次滚动。
+                    ⚠️ 距离用 **stepsTotalM**（几何真实总长），**不是 totalDistM**
+                      —— 中间步被丢弃时两者可差 30%~60%，用后者会与实际折线对不上。
+                  */}
+                  {walkPreview.totalDistM > 0 && (
+                    <span className="rc-walkpreview__go-meta">
+                      全程 {distText(walkPreview.totalDistM)} · 约 {Math.max(1, Math.round(walkPreview.totalMin))} 分钟
+                    </span>
+                  )}
+                </div>
               </>
             ) : walkPreview.phase === "failed" ? (
               /* 降级：只给直线距离 + 固定步速估算，绝不显示假的分步（架构 §3.3 纪律 4） */

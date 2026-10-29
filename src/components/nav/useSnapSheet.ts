@@ -27,7 +27,7 @@
  *   transform」）；React 状态仅在**起拖 / 释放**各变一次（`dragging`）。落定/开合由 effect +
  *   React style 双写同值（幂等），保证回弹也能被 260ms 过渡接住。
  */
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { DETENTS, type Detent } from "./sheet-detents";
 
 /** 起拖区高度（px）：grip + 头部（命中区 ≥44×24） */
@@ -65,6 +65,15 @@ export interface UseSnapSheetOpts {
    *   （不触发 React 重渲染 ⇒ 主线程不阻塞地图渲染循环）。
    */
   sheetRef?: RefObject<HTMLElement | null>;
+  /**
+   * ★ v3.6.0 S5：**允许停靠的档位**（可选）。walk 态要求「强制 half、允许 full、禁 peek」，
+   *   而 peek 会把"当前步"藏掉，所以必须从**可停靠集合**里排除，而不是只挡一处。
+   *
+   * ⚠️ **不传时行为必须一行不变**（其余 pane 完全不受影响）—— 这是硬要求：
+   *   下面 `allowedIdx` 在不传时 = 全部档位，所有分支退化成与原来完全相同的算术。
+   * 传了之后**三处都按它走**：① 越界阻尼上下界 ② flick / 阈值吸附的目标档 ③ 键盘 ↑↓。
+   */
+  allowedDetents?: Detent[];
 }
 
 export interface UseSnapSheet {
@@ -80,8 +89,31 @@ export interface UseSnapSheet {
   onPointerUp: (e: React.PointerEvent<HTMLDivElement>) => void;
 }
 
+/**
+ * 从 `from` 往 `dir` 方向的**下一个允许档**下标（无则原样返回）。
+ *
+ * ★ 刻意放在**模块级**（纯函数、无闭包）：若写成组件内箭头函数，
+ *   键盘监听的 effect 会因"每次渲染新建函数"而被迫把它列进 deps（或留着 accepted-stale-closure），
+ *   两种都不好。纯函数 + 显式传参 ⇒ deps 只需真实输入 `allowedDetents`，lint 也干净。
+ */
+function nextAllowedOf(allowed: number[], from: number, dir: 1 | -1, last: number): number {
+  for (let i = from + dir; i >= 0 && i <= last; i += dir) {
+    if (allowed.includes(i)) return i;
+  }
+  return from;
+}
+
 export function useSnapSheet(opts: UseSnapSheetOpts): UseSnapSheet {
-  const { open, detent, topsPx, onDetentChange, onDismiss, dismissible = true, sheetRef } = opts;
+  const {
+    open,
+    detent,
+    topsPx,
+    onDetentChange,
+    onDismiss,
+    dismissible = true,
+    sheetRef,
+    allowedDetents,
+  } = opts;
   const [dragging, setDragging] = useState(false);
   const moved = useRef(false);
   const drag = useRef({
@@ -95,6 +127,29 @@ export function useSnapSheet(opts: UseSnapSheetOpts): UseSnapSheet {
   });
 
   const last = Math.max(0, topsPx.length - 1);
+
+  /**
+   * 可停靠档位的**下标集合**（升序）。
+   * 不传 `allowedDetents` ⇒ `[0..last]`（= 原来行为，零差异）；
+   * 传了就取它在 `DETENTS` 里的下标并去重排序；**过滤后为空则回落全部**（防调用方传空数组导致面板卡死）。
+   */
+  const allowedIdxKey = (allowedDetents ?? []).join(",");
+  const allowedIdx = useMemo(() => {
+    const all = Array.from({ length: last + 1 }, (_, i) => i);
+    if (!allowedDetents || allowedDetents.length === 0) return all;
+    const set = new Set<number>();
+    for (const d of allowedDetents) {
+      const i = DETENTS.indexOf(d);
+      if (i >= 0 && i <= last) set.add(i);
+    }
+    const arr = [...set].sort((a, b) => a - b);
+    return arr.length ? arr : all; // 过滤后为空 ⇒ 回落全部（防调用方传空数组把面板卡死）
+    // 依赖用字符串键：调用方若传字面量数组，每次渲染都是新引用 ⇒ 用 join 稳定
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allowedIdxKey, last]);
+  /** 允许范围的两端（阻尼边界用） */
+  const allowedMin = allowedIdx[0] ?? 0;
+  const allowedMax = allowedIdx[allowedIdx.length - 1] ?? last;
   const index = Math.min(last, Math.max(0, DETENTS.indexOf(detent)));
   const cur = topsPx[index] ?? 0;
   const winH = topsPx.length ? topsPx[topsPx.length - 1] / 0.8 : 844;
@@ -203,9 +258,9 @@ export function useSnapSheet(opts: UseSnapSheetOpts): UseSnapSheet {
       d.decided = true;
     }
     moved.current = true;
-    // 越界阻尼：上界 full / 下界 peek
-    const minDy = -(cur - (topsPx[0] ?? 0));
-    const maxDy = (topsPx[last] ?? cur) - cur;
+    // 越界阻尼：上界 = 允许的最高档 / 下界 = 允许的最低档（不传 allowedDetents 时即 full / peek）
+    const minDy = -(cur - (topsPx[allowedMin] ?? 0));
+    const maxDy = (topsPx[allowedMax] ?? cur) - cur;
     let v = dyRaw;
     if (v < minDy) v = minDy + (v - minDy) * RUBBER;
     if (v > maxDy) v = maxDy + (v - maxDy) * RUBBER;
@@ -240,19 +295,21 @@ export function useSnapSheet(opts: UseSnapSheetOpts): UseSnapSheet {
 
     // ② 吸附：「结束位置 + 速度投影」落点取最近可用档
     const projected = cur + rawDy + v * PROJECT_MS;
-    let nearest = 0;
+    /** ★ 只在**允许档**里找最近（禁 peek 时 peek 不参与竞争） */
+    let nearest = allowedIdx[0] ?? 0;
     let nd = Infinity;
-    for (let i = 0; i < topsPx.length; i++) {
-      const dd = Math.abs(topsPx[i] - projected);
+    for (const i of allowedIdx) {
+      const dd = Math.abs((topsPx[i] ?? 0) - projected);
       if (dd < nd) {
         nd = dd;
         nearest = i;
       }
     }
-    const dir = projected > cur ? 1 : -1;
-    const adjIdx = index + dir;
-    // 越界（已在端点同向拖）或未变档 → 回弹当前档
-    if (nearest === index || adjIdx < 0 || adjIdx > last) {
+    const dir: 1 | -1 = projected > cur ? 1 : -1;
+    /** 下一个**允许**档（旧实现是 index ± 1；不传 allowedDetents 时两者完全等价） */
+    const adjIdx = nextAllowedOf(allowedIdx, index, dir, last);
+    // 越界（已在允许范围的端点同向拖）或未变档 → 回弹当前档
+    if (nearest === index || adjIdx === index) {
       onDetentChange(DETENTS[index]);
       return;
     }
@@ -275,12 +332,18 @@ export function useSnapSheet(opts: UseSnapSheetOpts): UseSnapSheet {
       }
       if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
       const i = DETENTS.indexOf(detent);
-      const next = e.key === "ArrowUp" ? Math.max(0, i - 1) : Math.min(DETENTS.length - 1, i + 1);
+      /** ★ 键盘也只走允许档（与拖拽同一集合，避免"键盘能到 peek、拖拽到不了"） */
+      const next = nextAllowedOf(allowedIdx, i, e.key === "ArrowUp" ? -1 : 1, last);
+      if (next === i) return;
       onDetentChange(DETENTS[next]);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, detent, onDetentChange, onDismiss]);
+    /**
+     * 依赖里放 `allowedDetents`（真正的外部输入）而不是 `nextAllowed`（每次渲染新建的闭包）；
+     * 否则 walk 态切换导致的可停靠集合变化不会让键盘监听重建 ⇒ 闭包里还是旧的 allowedIdx。
+     */
+  }, [open, detent, onDetentChange, onDismiss, allowedIdx, last]);
 
   return {
     dragging,

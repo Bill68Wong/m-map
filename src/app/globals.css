@@ -7862,3 +7862,63 @@ body[data-nav-phase]:not([data-nav-phase="off"]) .nav-brandbar__acts { display: 
 
 /* 步行态：隐藏底部 Tab（只改这一条，品牌栏由既有 :not([data-nav-phase="off"]) 覆盖） */
 body[data-nav-phase="walk"] .bottom-nav { display: none; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   ★ v3.6.0 S5 · 步行预览块（详情页展开态）
+   ──────────────────────────────────────────────────────────────────────────
+   为什么需要这一段（S5 真浏览器验收的阻断）：
+     7 步的真实高德步骤 + 「开始步行」按钮，在 half 档（50vh）里**整块超出可见区**
+     ⇒ 按钮落到视口外，Playwright 的 actionability 判「元素中心不在视口内」⇒ 无法点击。
+     注意：**不是"滚动容器没滚"** —— 按钮确实在 `.route-sheet__scroll` 内，真因是块本身太长。
+   ⇒ 限高 + 列表内滚 + 按钮钉底（不碰 actions 插槽：那里只承载 NavTrackBar，
+     且 `.route-sheet__scroll` 的 padding-bottom 依赖 `--actions-slot-h`，加行就要同步改它）。
+   ══════════════════════════════════════════════════════════════════════════ */
+.rc-walkpreview {
+  display: flex;
+  flex-direction: column;
+  /**
+   * 高度上限由**运行时实测**写入（`NavDetailBody` 展开时按「行以下还剩多少可见空间」反算）。
+   * 兜底 42vh：首帧/JS 未执行时也不至于撑爆。
+   * ⚠️ 不要改回纯 vh —— 实测 half 档下滚动容器自身 clientH 832 但只有 382px 在视口内，
+   *   任何固定 vh 都会让块底部（含「开始步行」按钮）落到视口外。
+   */
+  max-height: var(--walkpreview-h, 42vh);
+  min-height: 0;
+}
+.rc-walkpreview .rc-walklist {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  /* ★ 关键：阻止滚动链传到面板 ⇒ 否则滚到底继续滑会带动档位（本项目拖拽期零 JS，最易在此出问题） */
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
+}
+.rc-walkpreview__go {
+  flex: 0 0 auto; /* 按钮永不被压缩 */
+  align-self: flex-start;
+  margin-top: var(--space-2);
+  max-width: 100%;
+}
+/* 按钮右侧的距离/时长（用 stepsTotalM，不是 totalDistM） */
+.rc-walkpreview__go-meta {
+  font-size: var(--text-2xs);
+  color: var(--muted);
+  margin-left: var(--space-2);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.rc-walkpreview__sk,
+.rc-walkpreview__fallback {
+  margin: 0;
+  padding: var(--space-2) 0;
+  line-height: 1.5;
+}
+/* 按钮行（钉底 + 右侧 meta 同一行；窄屏可换行） */
+.rc-walkpreview__foot {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1) 0;
+  flex: 0 0 auto;
+}

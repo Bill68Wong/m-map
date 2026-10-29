@@ -24,8 +24,8 @@ export interface WalkSegToggleProps {
   idPrefix: string;
   /** 展开态（父组件持有） */
   open: boolean;
-  /** 切换 */
-  onToggle: () => void;
+  /** 切换（带事件：父组件据此用 `closest()` 定位最近的滚动容器做受控滚动） */
+  onToggle: (ev: React.MouseEvent<HTMLButtonElement>) => void;
 }
 
 export default function WalkSegToggle({ idPrefix, open, onToggle }: WalkSegToggleProps) {

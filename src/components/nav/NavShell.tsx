@@ -699,11 +699,14 @@ export default function NavShell({
             setWalkSeg(seg);
           },
           onExpand: () => walkRoute.ensure("out"),
+          /** ★ 正在跟随（walk 态）⇒ RouteSheet 据此禁 peek */
+          active: walkActive,
           preview: {
             phase: walkRoute.out.phase,
             steps: walkRoute.out.steps,
             serverSteps: walkRoute.out.steps,
             totalDistM: walkRoute.out.stepsTotalM,
+            totalMin: walkRoute.out.totalDurationS / 60,
           },
         }}
         detail={
