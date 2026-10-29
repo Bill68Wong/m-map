@@ -113,7 +113,7 @@ async function main() {
   // ── REVOKE 路径 ──
   if (REVOKE) {
     say("");
-    if (!APPLY) { say("② REVOKE 需加 --apply"); await c.release(); await pool.end(); return; }
+    if (!APPLY) { say("② REVOKE 需加 --apply（**需同时带 `--apply` 才会执行**）"); await c.release(); await pool.end(); return; }
     await run("BEGIN");
     for (const t of tabs) await run(`DROP POLICY IF EXISTS ${ROLE}_rw ON public."${t.relname}"`);
     await run(`GRANT ALL ON ALL TABLES IN SCHEMA public TO anon, authenticated`).catch(() => {});
