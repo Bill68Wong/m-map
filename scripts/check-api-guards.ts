@@ -404,23 +404,18 @@ function scan(): void {
  * ══════════════════════════════════════════════════════════════════════ */
 
 /**
- * **遗留欠账基线**（AC-50d 违规，先于本轮存在）。
+ * **遗留欠账基线**（AC-50d 违规的历史存量）。
  *
- * 键 = `${路由}|${字面量}`（**不按行号**，行号会漂）。基线内只打印 `DEBT`；
- * **任何新出现的字面量都 FAIL**。修掉一条后本脚本会提示移除，**基线只应缩短**。
+ * ★ **已清空于 v3.6.0**（S5/S6 评审收口轮）：`card` / `nav` / `plans` / `recommend` /
+ *   `route-shapes` / `route-vehicles` 那 7 处中文字面量已全部改成六枚举。
+ *   ⇒ 若本集合再出现任何条目，说明**新欠账产生了**，**不要往里加** —— 去改代码。
  *
- * ⚠️ 加基线=又一处空头支票。加之前先问：这个字面量是不是已经下线（该走 GONE_PREFIXES）、
- *    或接口本身是不是 Bearer 保护（该走 ALLOWLIST）？两者都不是才是真欠账。
+ * 为什么保留这个机制而不删掉：它是"棘轮"，用来在**过渡期**吸纳存量而不阻塞新规则上线。
+ * 现在存量归零，它的正确形态就是空集合；留着空壳可以保证「有人想加基线」时会先看到这段注释。
+ *
+ * 键格式 = `${路由}|${字面量}`（**不按行号**，行号会漂）。
  */
-const KNOWN_DEBT = new Set<string>([
-  "/api/card|缺少必填参数（from/to/plan/route/board/alight）",
-  "/api/nav|缺少或非法坐标：需 fromLng/fromLat/toLng/toLat（GCJ-02）",
-  "/api/plans|方案查询失败，请稍后重试",
-  "/api/recommend|缺少参数 from / to",
-  "/api/route-shapes|missing_code",
-  "/api/route-vehicles|缺少 code 参数（线路码，如 26 / 51A / N6）",
-  "/api/route-vehicles|缺少或非法 dir 参数（应为 0 或 1）",
-]);
+const KNOWN_DEBT = new Set<string>([]);
 
 /** 允许出现任意 `error` 字面量的路由（必须打印理由） */
 const ERROR_LITERAL_ALLOW: { pattern: RegExp; reason: string }[] = [
@@ -433,57 +428,83 @@ const ERROR_LITERAL_ALLOW: { pattern: RegExp; reason: string }[] = [
 interface ErrorFinding {
   file: string;
   route: string;
-  literal: string;
-  /** ok = 字面量本身就是六枚举之一（合规）；其余见注释 */
+  /** 实际值：字符串字面量内容，或 `API_ERROR.xxx` 的完整写法（便于人读） */
+  value: string;
+  /** ok = 值本身就是六枚举之一（合规）；其余见下方注释 */
   status: "ok" | "new" | "debt" | "gone" | "allow";
   reason?: string;
 }
 
-/** 扫 `error: "…"` / `error: '…'` 字面量（只认响应构造处，注释与模板串不算） */
+/**
+ * 扫三种写法并判值是否在六枚举内：
+ *   A. `error: "字面量"` / `error: '字面量'`
+ *   B. `error: API_ERROR.xxx`
+ *   C. `errorResponse(API_ERROR.xxx…)`  ← 统一错误响应的构造点
+ *
+ * ── 为什么必须同时扫 A / B / C（两次变异测试逼出来的）─────────────────────
+ *   · 只扫 A ⇒ `error: API_ERROR.新键` 扫不到（diff 里看着"用了枚举很规范"）；
+ *   · 只扫 A+B ⇒ `errorResponse(API_ERROR.新键, 404)` **仍然扫不到** ——
+ *     而这恰恰是本项目**主要**的错误返回方式（`lib/http/errors.ts#errorResponse`）。
+ *     ⇒ 漏掉 C 等于漏掉大半，闭集门禁会变成"只对新写的字面量生效"的假门禁。
+ *   两种写法都按**值**判，一视同仁。
+ *
+ * ⚠️ 行级匹配（不做 AST）的前提是「响应都是单行构造」。若将来出现跨行 `error:`
+ *    或跨行 `errorResponse(`，本脚本会漏 —— 那时请换 AST，**不要**往上堆更复杂的正则。
+ */
 function scanErrorLiterals(): ErrorFinding[] {
   const out: ErrorFinding[] = [];
+
+  /** 归类一处 error 值（三种写法共用，保证口径一致） */
+  const classify = (
+    route: string,
+    value: string,
+  ): { status: ErrorFinding["status"]; reason?: string } => {
+    // AC-50d 管的是**值**，先判值是否在闭集内
+    if (ENUM_VALUES.has(value)) return { status: "ok" };
+    if (underPrefix(route, GONE_PREFIXES)) return { status: "gone" };
+    const allow = ERROR_LITERAL_ALLOW.find((a) => a.pattern.test(route));
+    if (allow) return { status: "allow", reason: allow.reason };
+    if (KNOWN_DEBT.has(`${route}|${value}`)) return { status: "debt" };
+    return { status: "new" };
+  };
+
   for (const file of collectRouteFiles(API_ROOT).sort()) {
     const route = routePathOf(file);
-    const code = stripNonCode(fs.readFileSync(file, "utf8"));
-    // 注意：stripNonCode 会把字符串内容清空 ⇒ 必须用**原文**取字面量值，用**剥注释版**判位置。
-    // 这里直接对原文按行扫（注释行前面会被 `//` 或 `*` 开头，简单跳过即可）。
+    // ⚠️ 必须用**原文**取值（`stripNonCode` 会把字符串内容清空）；注释行按前缀跳过即可。
     const rawLines = fs.readFileSync(file, "utf8").split(/\r?\n/);
     for (const line of rawLines) {
       const trimmed = line.trim();
       if (trimmed.startsWith("//") || trimmed.startsWith("*") || trimmed.startsWith("/*")) continue;
-      const m = /\berror:\s*"([^"]*)"/.exec(line) ?? /\berror:\s*'([^']*)'/.exec(line);
-      if (!m) continue;
-      const literal = m[1];
-      if (!literal) continue; // 空串不当错误码
-      let status: ErrorFinding["status"] = "new";
-      let reason: string | undefined;
-      if (ENUM_VALUES.has(literal)) {
-        // 直接写字面量但值在闭集内 ⇒ 合规（AC-50d 管的是**值**，不是写法）
-        status = "ok";
-      } else if (underPrefix(route, GONE_PREFIXES)) {
-        status = "gone";
-      } else {
-        const allow = ERROR_LITERAL_ALLOW.find((a) => a.pattern.test(route));
-        if (allow) {
-          status = "allow";
-          reason = allow.reason;
-        } else if (KNOWN_DEBT.has(`${route}|${literal}`)) {
-          status = "debt";
-        }
+
+      // 写法 A：字符串字面量
+      const lit = /\berror:\s*"([^"]*)"/.exec(line) ?? /\berror:\s*'([^']*)'/.exec(line);
+      // 写法 B：`error: API_ERROR.xxx`
+      const ref = /\berror:\s*API_ERROR\.([A-Za-z0-9_]+)/.exec(line);
+      // 写法 C：`errorResponse(API_ERROR.xxx` —— 本项目的统一错误出口
+      const via = /\berrorResponse\(\s*API_ERROR\.([A-Za-z0-9_]+)/.exec(line);
+
+      if (lit) {
+        const value = lit[1];
+        if (!value) continue; // 空串不当错误码
+        out.push({ file, route, value, ...classify(route, value) });
+      } else if (ref) {
+        const key = ref[1];
+        out.push({ file, route, value: `API_ERROR.${key}`, ...classify(route, key) });
+      } else if (via) {
+        const key = via[1];
+        out.push({ file, route, value: `errorResponse(API_ERROR.${key})`, ...classify(route, key) });
       }
-      out.push({ file, route, literal, status, reason });
     }
-    void code; // （保留：位置判定目前按行做，不需要剥注释版）
   }
   return out;
 }
 
 /**
- * 六枚举闭集 —— **独立于 `API_ERROR` 再列一遍**，故意的。
+ * 六枚举闭集 —— **独立于 `API_ERROR` 再列一遍**，这是**有意的冗余**。
  *
- * 若这里也 `import { API_ERROR }` 再取 `Object.values()`，那么有人往 `errors.ts`
- * 里加第七个值，本脚本会自动跟着"认可"它 —— 闭集就白设了。
- * ⇒ 脚本侧手工抄一份：**加枚举必须同时改两处**，改动会被 diff 看见。
+ * 若改成 `Object.values(API_ERROR)`，那么有人往 `src/lib/http/errors.ts` 里加第七个值时，
+ * 本门禁会**自动认可**它 —— 闭集就白设了。手工抄一份的代价是「加枚举要改两处」，
+ * 而这正是我们要的：**新增枚举必须在 diff 里看得见**，并被人工审一次。
  */
 const ENUM_VALUES = new Set([
   "unauthorized",
@@ -503,17 +524,21 @@ function scanErrors(): void {
   const bad = findings.filter((f) => f.status === "new");
 
   console.log("\n═══ 错误码闭集（AC-50d · 4xx/5xx 的 error 只允许六枚举）═══");
-  const checked = findings.length - ok.length - gone.length - allowed.length;
-  console.log(`扫描 ${findings.length} 处 error 字面量 · 需合规 ${checked} 处` +
-    `（已合规 ${ok.length} · 已下线 ${gone.length} · 豁免 ${allowed.length}）\n`);
+  // `pending` = 既不在枚举内、也不属已下线/豁免/基线 ⇒ 真正需要处理的数量
+  const pending = findings.length - ok.length - gone.length - allowed.length;
+  console.log(
+    `共扫 ${findings.length} 处 error 出处` +
+      `（合规 ${ok.length} · 已下线 ${gone.length} · 豁免 ${allowed.length} · 待处理 ${pending}）\n` +
+      `  三种写法全覆盖：\`error: "…"\` / \`error: API_ERROR.x\` / \`errorResponse(API_ERROR.x)\`\n`,
+  );
 
   for (const f of bad) {
-    console.log(`FAIL  ${f.route.padEnd(30)} ${JSON.stringify(f.literal)}`);
+    console.log(`FAIL  ${f.route.padEnd(30)} ${JSON.stringify(f.value)}`);
     console.log(`      ↳ ${path.relative(process.cwd(), f.file)}`);
   }
   if (debt.length) {
     console.log("── 遗留欠账（基线内，不阻塞；修掉后请从 KNOWN_DEBT 删行，基线只应缩短）──");
-    for (const f of debt) console.log(`DEBT  ${f.route.padEnd(30)} ${JSON.stringify(f.literal)}`);
+    for (const f of debt) console.log(`DEBT  ${f.route.padEnd(30)} ${JSON.stringify(f.value)}`);
     console.log("");
   }
   if (allowed.length) {

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getPool } from "@/lib/db";
+import { API_ERROR } from "@/lib/http/errors";
 
 /** GET /api/plans：全部方案（含样本数、最近使用，常用置顶） */
 export async function GET() {
@@ -80,6 +81,7 @@ export async function GET() {
     // ★ v3.1.1 #5（文案门禁）：**开发信息只进服务端日志**，不再写进给用户的错误体
     //   （旧文案含 `npm run db:schema && db:seed` —— 开发命令泄漏到界面）。
     console.error("[plans] 查询失败（首次部署请确认已完成数据库初始化）：", (err as Error).message);
-    return NextResponse.json({ error: "方案查询失败，请稍后重试" }, { status: 500 });
+    // ★ v3.6.0（AC-50d）：`error` 只允许六枚举（查询失败 = 上游/库侧问题 ⇒ upstream_error）
+    return NextResponse.json({ error: API_ERROR.upstream_error }, { status: 500 });
   }
 }

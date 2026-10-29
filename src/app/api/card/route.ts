@@ -26,7 +26,9 @@ export async function GET(req: Request) {
   const sp = Object.fromEntries(new URL(req.url).searchParams) as Record<string, string>;
   const p = parseCardQuery(sp);
   if (!p) {
-    return NextResponse.json({ ok: false, error: "缺少必填参数（from/to/plan/route/board/alight）" }, { status: 400 });
+    // ★ v3.6.0（AC-50d）：`error` 只允许六枚举。前端 `CardDetailClient` 已用
+    //   `errorTextOf(j.error)` 翻译 ⇒ 回枚举正是它现在的期望（旧中文串会回落成通用文案）。
+    return NextResponse.json({ ok: false, error: API_ERROR.bad_request }, { status: 400 });
   }
   try {
     const r = await cardDetail(getPool(), {

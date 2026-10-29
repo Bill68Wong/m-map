@@ -44,7 +44,10 @@ interface Row {
 export async function GET(req: Request) {
   try {
     const code = new URL(req.url).searchParams.get("code")?.trim() ?? "";
-    if (!code) return NextResponse.json({ shapes: [], error: "missing_code" }, { status: 400 });
+    // ★ v3.6.0（AC-50d）：`error` 只允许六枚举。
+    //   ⚠️ 此处**不能**用 `errorResponse()` —— 那会丢掉 `shapes: []` 数组形状，
+    //      而客户端把 `shapes` 当地图图层数据源（字段消失 = 白屏，空数组 = 不画线）。
+    if (!code) return NextResponse.json({ shapes: [], error: API_ERROR.bad_request }, { status: 400 });
 
     const pool = getPool();
     const [shapesRes, routeRes, stopsRes] = await Promise.all([
