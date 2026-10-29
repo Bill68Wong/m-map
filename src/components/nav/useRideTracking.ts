@@ -923,6 +923,13 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
       anomalyStreakRef.current = 0;
       vehicleRef.current = null;
       missRef.current = 0;
+      /**
+       * ★ S4 评审 advisory 2：换腿瞬间**必须清空上一腿的车队**。
+       *   否则新一段的 boarding effect 跑起来之前，`mapVehicles` 会拿上一腿的车渲染 1 帧
+       *   （表现为"换乘站台上闪一下别的线路的车"）。effect 后自愈，但仍该清。
+       */
+      listRef.current = [];
+      lastCompanyRef.current = null;
       ladderRef.current = null;
       lrtStateRef.current = { passedIdx: -1, computed: -1, dist: 0, ts: 0, badStreak: 0 };
       alightStreakRef.current = 0;
@@ -997,16 +1004,22 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
    *   · 旧 `onRefresh` 直接调 `fetchFrame` ⇒ 连点即连发（后端成了唯一防线）；
    *   · 现在点下就起算冷却，与请求快慢无关（旧版「冷却」实为一次 HTTP 往返 ≈1s，
    *     用户看到的「一秒冷却一次」即由此而来）。
-   * @returns 是否真的发起了请求（`false` = 冷却中，被拦下）
+   *   ★ 评审阻断 ③：**轻轨段不进冷却** —— `fetchFrame` 对非 bus 腿直接 return（刷不出
+   *     任何东西），进了冷却就是"给了一个什么都不会发生的倒计时"（设计 §2.6 明令禁用）。
+   * @returns 是否真的发起了请求（`false` = 冷却中 / 非巴士段，被拦下）
    */
   const refreshNow = useCallback((): boolean => {
     if (vehicleCooldown.cooling) return false;
+    /** 当前腿是否巴士：轻轨段刷新无意义 ⇒ 早退且**不 start 冷却** */
+    const leg = legs[legIndex];
+    const isBus = leg ? leg.kind === "bus" : false;
+    if (!isBus) return false;
     if (phase === "riding" && plate) void fetchFrame(plate);
     else if (phase === "boarding") void fetchFrame(null);
     else return false;
     vehicleCooldown.start();
     return true;
-  }, [vehicleCooldown, phase, plate, fetchFrame]);
+  }, [vehicleCooldown, phase, plate, fetchFrame, legs, legIndex]);
 
   /** 兼容旧调用点：`onRefresh` = `refreshNow`（面板顶栏与品牌栏都用它） */
   const onRefresh = useCallback(() => {
