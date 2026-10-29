@@ -16,6 +16,14 @@
  *     所以按钮的 disabled 只看「是否为空 / **点搜索是否在途**」，不看「是否已有本地命中」，
  *     ★ v3.1.1 #7 起**也不看打字预测是否在途**（否则输入后立刻点会被原生 disabled 吞掉）。
  *
+ * ── ★ v3.6.0：线路分区（AC-40/41/43）与搜索态恢复（AC-45）──────────────
+ *   · **线路分区在最顶部**，与「地点 / 站点」分区互不混排；点线路行 **不填起终点**，
+ *     而是跳 `/line/[code]`（AC-41 明令：不得走旧 `/routes`、不得把线路当起终点）。
+ *   · **无线路命中 ⇒ 分区不渲染**（AC-43：不留空标题、不报错）。
+ *   · 从 `/line` 返回时用 `sessionStorage` 恢复**当前**搜索态（`q` + 结果列表）：
+ *     `/line` 是独立路由 ⇒ 跳过去 `NavShell` 整棵卸载，纯内存 state 必然归零。
+ *     ⚠️ 与「不记忆历史出发点」不冲突 —— 见 `SS_KEY` 上方的界线说明。
+ *
  * ── 与旧 `PoiSearchBox` 的差别 ────────────────────────────────────────
  *   旧组件是「输入框 + **下拉浮层**」，适合嵌在抽屉里；
  *   新版要「**全屏 + 结果直接铺满中部**」，下拉浮层那套定位/关闭逻辑不再适用，
@@ -24,11 +32,70 @@
  * ⚠️ 文案一律**简体**；站名/线路名保留繁体原文。
  */
 import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import Icon from "@/components/ui/Icon";
 import RouteStack from "@/components/RouteStack";
-import type { NavPoint, PoiKind, PoiSearchResult, PoiSuggestResponse } from "@/lib/nav/types";
+import { chipInkOf } from "@/lib/ui/chip-ink";
+import type { NavPoint, PoiKind, PoiSearchResult, PoiSuggestResponse, RouteSuggestion } from "@/lib/nav/types";
 
 const DEBOUNCE_MS = 300;
+
+/**
+ * ★ v3.6.0（AC-45）：**同会话内**返回时恢复当前搜索态。
+ *
+ * ── 为什么必须持久化（这不是"可能"，是必然）──────────────────────────────
+ *   AC-41 要求点线路结果 **URL 变化** ⇒ `/line/[code]` 必须是独立路由
+ *   （不能做成覆盖层，否则 URL 不变、不满足契约）⇒ 跳过去时 `NavShell` 整棵卸载
+ *   ⇒ 返回是**重新 mount**，纯内存的 `q`/`resp` 归零 ⇒ 输入框空、结果列表空。
+ *
+ * ── 为什么用 `sessionStorage` 而不是 `localStorage` ──────────────────────
+ *   本文件头既有约束：**不记忆历史出发点**（产品 R5 明确不用 localStorage）——
+ *   那条说的是「下次打开还记着你上次去哪儿」。而这里是「**同一会话内**返回时恢复
+ *   当前这次搜索」，语义不同、也不跨会话（关 tab 即清）。
+ *   ⇒ 界线：起终点选择**不存**（存了会出现"为什么它记得我上次去哪"）；
+ *     只存 `q` + `resp` + `open` 这类**当前交互的中间态**。
+ */
+const SS_KEY = "mmap.search.v1";
+/**
+ * 「从 `/line` 返回」的**一次性**标记。
+ *
+ * ── 为什么需要它 ────────────────────────────────────────────────────────
+ *   AC-45 要求返回后**看到**「输入框仍是 26、结果列表仍在那」。
+ *   只恢复 `q`/`resp` 不够 —— 从 `/line` 返回时 `NavShell` 重新 mount，
+ *   `stage` 会被算成 `map`/`panel`（取决于 URL），**搜索层根本没打开**，
+ *   用户看到的是首页 ⇒ "输入框仍在那"无从谈起。
+ *   ⇒ 跳转前打标记；NavShell mount 时若看到它，就把 `stage` 直接置为 `search`
+ *     并**立即删除**（一次性）—— 这样刷新页面/新开 tab 都不会莫名弹搜索层。
+ */
+const SS_RETURN = "mmap.search.return";
+
+/** 读回同会话搜索态；`editing` 不匹配（换了端点）⇒ 视为无（不把"搜出发地"的结果带到"搜目的地"） */
+function readSaved(editing: "dest" | "from"): { q: string; resp: PoiSuggestResponse | null } | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.sessionStorage.getItem(SS_KEY);
+    if (!raw) return null;
+    const o = JSON.parse(raw) as { editing?: string; q?: string; resp?: PoiSuggestResponse | null };
+    if (o.editing !== editing || !o.q) return null;
+    return { q: o.q, resp: o.resp ?? null };
+  } catch {
+    return null;
+  }
+}
+
+/** 写入（`q` 为空 ⇒ 清除：用户主动清空输入框就代表放弃了这次搜索） */
+function writeSaved(editing: "dest" | "from", q: string, resp: PoiSuggestResponse | null): void {
+  if (typeof window === "undefined") return;
+  try {
+    if (!q.trim()) {
+      window.sessionStorage.removeItem(SS_KEY);
+      return;
+    }
+    window.sessionStorage.setItem(SS_KEY, JSON.stringify({ editing, q, resp }));
+  } catch {
+    /* 隐私模式 / 配额满 ⇒ 静默降级（只是不恢复，不影响搜索本身） */
+  }
+}
 
 /** 结果类型徽章（简体） */
 const TYPE_LABEL: Record<PoiKind, string> = {
@@ -36,6 +103,9 @@ const TYPE_LABEL: Record<PoiKind, string> = {
   lrt_station: "轻轨站",
   place: "地点",
   poi: "地点",
+  /** ★ v3.6.0（AC-40）：线路结果的徽章。行内实际用**主题色徽章**（见 `.linechip`），
+   *  本项只作为 `Record<PoiKind, string>` 的完整性兜底（例如 pending 分支）。 */
+  route: "线路",
 };
 
 /** 巴士站显示名带站码（`M1 關閘總站`）；轻轨站/地点用原名 */
@@ -82,6 +152,15 @@ const MACAU_ZONE_WORDS =
   "澳门|澳門|花地玛堂区|花地瑪堂區|圣安多尼堂区|聖安多尼堂區|大堂区|大堂區|望德堂区|望德堂區|风顺堂区|風順堂區|嘉模堂区|嘉模堂區|圣方济各堂区|聖方濟各堂區|路氹填海区|路氹填海區";
 const MACAU_ZONE_RE = new RegExp(`^(${MACAU_ZONE_WORDS})[·\\s]*`);
 
+/**
+ * 徽章文本（AC-40 / 设计 §2.4）：巴士显示线路码原文（`26` / `51A`）；
+ * 轻轨**去掉 `LRT-` 前缀只留中文名**（`氹仔線`）—— `LRT-` 对用户是噪音。
+ */
+function chipTextOf(r: RouteSuggestion): string {
+  const raw = (r.code ?? r.name ?? "").trim();
+  return r.kind === "lrt" ? raw.replace(/^LRT-/, "") : raw;
+}
+
 /** 地址清洗：剥离区划前缀（最多 3 层）；清洗后为空 ⇒ 返回空串（该条目不显示地址行） */
 function cleanAddr(a?: string | null): string {
   if (!a) return "";
@@ -100,6 +179,56 @@ function distMeters(a: { lng: number; lat: number }, b: { lng: number; lat: numb
   return 2 * R * Math.asin(Math.min(1, Math.sqrt(s)));
 }
 
+/**
+ * 线路结果行（AC-40 视觉规格 · 设计 §2.8）
+ *
+ * ── 三层结构 ────────────────────────────────────────────────────────────
+ *   `.linechip`  主题色徽章：**列宽固定 72px** —— 否则 2 字的 `25` 与 4 字的 `石排灣線`
+ *                会把右侧名称左缘推得忽左忽右（同屏多行时非常明显）。
+ *                底色 = 该线路主题色（`colors[code]`），字色用 `chipInkOf()` 按底色算
+ *                （浅底上白字只有 1.x:1，必须自适应；死带会加深底色）。
+ *   `.line-result__name`   线路显示名（线路本身即"名字"，不再重复编号）
+ *   `.line-result__sub`    「查看全线站点」—— 承担"点了会跳页"的预告（AC-40 必需）
+ *
+ * ── 无障碍 ──────────────────────────────────────────────────────────────
+ *   整行是一个 `<button>`；`aria-label` 带上「查看…全线站点」，
+ *   避免读屏只念出「26」这种两个字符的编号而不知所指。
+ */
+function LineResultRow({
+  r,
+  color,
+  onOpen,
+}: {
+  r: RouteSuggestion;
+  color: string | undefined;
+  onOpen: (r: RouteSuggestion) => void;
+}) {
+  const ink = chipInkOf(color);
+  const chip = chipTextOf(r);
+  return (
+    <button
+      type="button"
+      className="line-result"
+      onClick={() => onOpen(r)}
+      aria-label={`${chip} 线路 · 查看全线站点`}
+    >
+      <span
+        className="linechip"
+        style={{ background: ink.bg, color: ink.ink }}
+        data-chip-ink={ink.tone}
+      >
+        {ink.dot && <span className="linechip__dot" style={{ background: ink.dot }} aria-hidden="true" />}
+        <span className="linechip__text">{chip}</span>
+      </span>
+      <span className="line-result__main">
+        <span className="line-result__name">{r.name}</span>
+        <span className="line-result__sub">查看全线站点</span>
+      </span>
+      <Icon name="forward" size={16} />
+    </button>
+  );
+}
+
 export default function SearchSheet({
   editing,
   dest,
@@ -111,8 +240,13 @@ export default function SearchSheet({
   onPickQuick,
   onBack,
 }: SearchSheetProps) {
-  /** 输入框内容：**正在编辑的那个**端点为空（待输入），另一个显示已选值 */
-  const [q, setQ] = useState("");
+  const router = useRouter();
+  /**
+   * 输入框内容：**正在编辑的那个**端点为空（待输入），另一个显示已选值。
+   * ★ v3.6.0（AC-45）：初始值从 `sessionStorage` 读 —— 从 `/line/[code]` 返回时
+   *   `NavShell` 是**重新 mount**，纯内存 state 必然归零（见 `readSaved` 注释）。
+   */
+  const [q, setQ] = useState(() => readSaved(editing)?.q ?? "");
   /**
    * ★ v3.1.1 #7（真机反馈「输入后立刻点搜索可能不成功」）：
    *   原先用单个 `loading` 同时表示「打字预测请求」与「点搜索请求」，且 **按钮 `disabled={loading||…}`**
@@ -124,7 +258,7 @@ export default function SearchSheet({
   const loading = busy !== null;
   /** ★ 并发保护：只认最后一次请求的响应（防「打字预测」的迟到响应覆盖「点搜索」的结果） */
   const reqIdRef = useRef(0);
-  const [resp, setResp] = useState<PoiSuggestResponse | null>(null);
+  const [resp, setResp] = useState<PoiSuggestResponse | null>(() => readSaved(editing)?.resp ?? null);
   const [err, setErr] = useState("");
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -160,14 +294,31 @@ export default function SearchSheet({
     };
   }, [userPos]);
 
-  // 进入本层 → 聚焦输入框、清空上一次的输入（**每次进入都是新的搜索意图**）
+  /**
+   * 进入本层 → 聚焦输入框。
+   *
+   * ★ v3.6.0（AC-45）行为变更：**不再无条件清空**。
+   *   旧实现每次 mount 都 `setQ("")`/`setResp(null)` ⇒ 从 `/line/[code]` 返回时
+   *   用户刚搜的「26」和结果列表全没了（AC-45 直接不成立）。
+   *   现在：同端点且 sessionStorage 有值 ⇒ **保留**（浏览器返回场景）；
+   *         换了端点（from↔dest）⇒ 清空（不同端点的搜索意图不该串）。
+   *   ⚠️ 这里**不读** sessionStorage：初始 state 已经读过了；此处只处理"editng 变化"。
+   */
   useEffect(() => {
-    setQ("");
-    setResp(null);
+    const saved = readSaved(editing);
+    if (!saved) {
+      setQ("");
+      setResp(null);
+    }
     setErr("");
     const t = setTimeout(() => inputRef.current?.focus(), 60);
     return () => clearTimeout(t);
   }, [editing]);
+
+  /** ★ AC-45：`q`/`resp` 每次变化都写回 sessionStorage（清空即删） */
+  useEffect(() => {
+    writeSaved(editing, q, resp);
+  }, [editing, q, resp]);
 
   /**
    * 发起搜索。
@@ -239,6 +390,33 @@ export default function SearchSheet({
   const results = resp?.results ?? [];
   const pending = resp?.pending ?? [];
   const hint = resp?.hintText;
+  /**
+   * ★ v3.6.0（AC-40）：**线路分区**（独立于 `results`，不混排）。
+   * `undefined`/空 ⇒ **整个分区不渲染**（AC-43：不留空标题、不报错）。
+   * 分组：「巴士线路」/「轻轨线路」——按 `code` 前缀 `LRT-` 判定（与 `route-lines` 口径一致）。
+   */
+  const routeHits = resp?.routes ?? [];
+  /** 分组直接用后端给的 `kind`（不从前缀猜 —— 后端 `RouteSuggestion.kind` 已是权威判定） */
+  const busRoutes = routeHits.filter((r) => r.kind === "bus");
+  const lrtRoutes = routeHits.filter((r) => r.kind === "lrt");
+
+  /**
+   * ★ v3.6.0（AC-41）：线路结果 **不填起终点**，跳独立全景页。
+   *   · 明确**不**走旧 `/routes`（已下线）；
+   *   · 明确**不**调 `onPick`（否则会把线路当成目的地塞进导航 —— AC-41 明令禁止）。
+   *   `useRouter().push` ⇒ 真实 URL 变化，浏览器返回键可回到本页（配合 AC-45 恢复搜索态）。
+   */
+  function openLine(r: RouteSuggestion) {
+    const code = (r.code ?? r.name ?? "").trim();
+    if (!code) return;
+    // 线路码可能是中文（`LRT-氹仔线`）⇒ 必须编码，否则 URL 里出现裸中文（部分代理会 400）
+    try {
+      window.sessionStorage.setItem(SS_RETURN, "1");
+    } catch {
+      /* 隐私模式 ⇒ 只是不自动重开搜索层，不影响跳转 */
+    }
+    router.push(`/line/${encodeURIComponent(code)}`);
+  }
   /** 另一个端点（非编辑中的那个）—— 用于双输入条时显示 */
   const other = editing === "from" ? dest : from;
   const otherLabel = other?.label ?? (editing === "from" ? "（未选）" : "我的位置");
@@ -360,6 +538,38 @@ export default function SearchSheet({
         {/* ── 已输入：结果列表 ── */}
         {q.trim() && (
           <div className="ssheet__list">
+            {/*
+              ★★ v3.6.0（AC-40）：**线路分区在最顶部**，且与地点/站点分区**互不混排**。
+              ── 三条硬约束 ──────────────────────────────────────────────────
+                ① 分区标题（「巴士线路」/「轻轨线路」）只在区头出现**一次**；
+                ② 每行 = 主题色徽章（列宽固定 72px）+ 名称 + 副标题「查看全线站点」；
+                ③ **无线路命中 ⇒ 整个分区不渲染**（AC-43：不留空标题、不报错）。
+              ── 为什么线路不能和站点混排 ────────────────────────────────────
+                线路行的**动作**是「跳全景页看这条线」，站点行是「设为目的地」。
+                混排会让两件不同的事长得一样，用户点了线路以为选了终点（AC-41 明令禁止）。
+            */}
+            {busRoutes.length > 0 && (
+              <div className="ssheet__sect ssheet__sect--routes" data-route-sect="bus">
+                <p className="ssheet__sect-title t-label">巴士线路</p>
+                {busRoutes.map((r) => (
+                  <LineResultRow key={`r-bus-${r.code}`} r={r} color={colors?.[r.code]} onOpen={openLine} />
+                ))}
+              </div>
+            )}
+            {lrtRoutes.length > 0 && (
+              <div className="ssheet__sect ssheet__sect--routes" data-route-sect="lrt">
+                <p className="ssheet__sect-title t-label">轻轨线路</p>
+                {lrtRoutes.map((r) => (
+                  <LineResultRow key={`r-lrt-${r.code}`} r={r} color={colors?.[r.code]} onOpen={openLine} />
+                ))}
+              </div>
+            )}
+
+            {/* 地点 / 站点分区：有线路分区时加分隔线（视觉上明确"这是另一类结果"） */}
+            {(routeHits.length > 0 && (results.length > 0 || pending.length > 0)) && (
+              <p className="ssheet__sect-title ssheet__sect-title--split t-label">地点 / 站点</p>
+            )}
+
             {results.map((r, i) => {
               /* ★ 2026-09-27（用户口径）：两行布局——左列「地点名（大字）+ 地址（小字）」；右侧直线距离；
                  「高德」来源标签与行政区划不再展示（地址已剥离区划前缀）。 */
