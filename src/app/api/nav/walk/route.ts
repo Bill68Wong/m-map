@@ -5,10 +5,10 @@
  *   详情页「步行预览」折叠态 + 进入跟随后的分步指引。**只服务前端**，无业务写入。
  *
  * ── 参数 ──────────────────────────────────────────────────────────────
- *   `fromLng` `fromLat` `toLng` `toLat`（必填，**GCJ-02**）
- *   ⚠️ 兼容别名 `oLng` `oLat` `dLng` `dLat`（架构 §4.1.1 用的是后者，主理人派工用的是前者）。
- *      两套都收，是为了让前端无论照哪份文档实现都能通 —— 少一次"联调才发现字段名不一致"。
- *      **两套都传时以 `from*` / `to*` 为准**（不合并、不猜测）。
+ *   **主用** `fromLng` `fromLat` `toLng` `toLat`（必填，**GCJ-02**）。
+ *   `oLng` `oLat` `dLng` `dLat` 为**架构文档 §4.1.1 的旧写法**，保留兼容；
+ *   **新代码不得再用**（两套都传时以 `from*` / `to*` 为准，不合并、不猜测）。
+ *   保留旧名的唯一理由：让前端照哪份文档实现都能通，少一次"联调才发现字段名不一致"。
  *   `origin` `dest`（可选，起终点显示名）—— **仅用于日志**，不参与计算、不回显。
  *
  * ── 鉴权 ──────────────────────────────────────────────────────────────
@@ -21,10 +21,12 @@
  *   `Cache-Control: no-store`：几何随用户位置变，且服务端**刻意不做缓存**
  *   （理由见 `walking.ts` 文件头「为什么绝不缓存」）。客户端 5 分钟内存缓存同 OD。
  *
- * ── 错误口径（AC-50d）──────────────────────────────────────────────────
- *   `bad_request`(400) · `rate_limited`(429) · `upstream_error`(502)。
- *   ⚠️ 架构 §4.1.1 原写「502 + 高德 info」，与 PM 的六值闭集冲突；
- *      按主理人裁决**回固定枚举**，高德 info 只进服务端日志（不泄漏上游细节）。
+ * ── 错误体口径（★ 以 AC-50d 为准）──────────────────────────────────────
+ *   固定六枚举：`bad_request`(400) · `rate_limited`(429) · `upstream_error`(502)。
+ *   ⚠️⚠️ **架构文档 §4.1.1 的「502 + 高德 `info`」已作废，勿按旧文档改回。**
+ *      理由：AC-50d 是硬约束（响应体不含内部信息），而高德 `info` 会带
+ *      `INVALID_USER_KEY` 这类串 —— 等于把**密钥状态**告诉调用方。
+ *      高德 `info` / `infocode` 只进服务端 `console.warn`。
  */
 import { NextRequest } from "next/server";
 import { fetchWalkingSteps } from "@/lib/amap/walking";
@@ -43,7 +45,10 @@ function coordOf(v: string | null, limit: number): number | null {
   return n;
 }
 
-/** 优先 `primary`，缺失时退回架构文档的短名 `legacy` */
+/**
+ * 取坐标参数：**主用 `primary`**，缺失时退回架构文档 §4.1.1 的旧短名 `legacy`。
+ * ⚠️ 旧名只为兼容保留，新代码不得再用（见文件头「参数」段）。
+ */
 function pick(sp: URLSearchParams, primary: string, legacy: string): string | null {
   const a = sp.get(primary);
   if (a !== null && a.trim() !== "") return a;
@@ -53,6 +58,8 @@ function pick(sp: URLSearchParams, primary: string, legacy: string): string | nu
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
 
+  // 主用 fromLng/fromLat/toLng/toLat；oLng/oLat/dLng/dLat 为架构文档 §4.1.1 的旧写法，
+  // 保留兼容，**新代码不得再用**（两套都传时以 from*/to* 为准）。
   const fromLng = coordOf(pick(sp, "fromLng", "oLng"), 180);
   const fromLat = coordOf(pick(sp, "fromLat", "oLat"), 90);
   const toLng = coordOf(pick(sp, "toLng", "dLng"), 180);
@@ -87,7 +94,8 @@ export async function GET(req: NextRequest) {
       totalDistM: r.totalDistM,
       totalDurationS: r.totalDurationS,
       // ── 兼容别名（架构 §4.1.1 的字段名）──
-      // 前端 S5 无论按哪份契约取值都能读到；两者恒等，不存在"哪个更权威"的歧义。
+      // **主用 `totalDistM` / `totalDurationS`**；`distanceM` / `durationS` 仅为兼容旧契约，
+      // **前端应读主字段**（新代码不得读别名）。两者恒等，不存在"哪个更权威"的歧义。
       distanceM: r.totalDistM,
       durationS: r.totalDurationS,
       /** 全线几何（`lng,lat;...`），供只需画一条线、不关心分步的消费方 */
