@@ -184,6 +184,33 @@ export default function RouteSheet({
   const recCoolingSec = recCooldown.sec;
 
   /**
+   * ★★ S4 评审阻断 ②：**顶栏刷新键的冷却必须按当前 pane 取**。
+   *   旧实现顶栏视觉只接 `recCoolingSec`（推荐冷却），于是：
+   *     · boarding 态 —— 冷却其实在 `refreshNow` 里生效，但顶栏永远 idle
+   *       （而且候车态吸底条**没有**刷新键，顶栏是唯一入口）⇒ 点第 2 次起**静默无反应**；
+   *     · riding 态 —— 顶栏 idle，倒计时却在吸底条（用户不知道该看哪个）。
+   *   这正是用户原话「刷新没反应」的翻版：冷却从 1s 变 5s，但反馈丢了。
+   */
+  const paneCoolingSec = pane === "recommend" ? recCoolingSec : (detail?.track?.refreshCoolingSec ?? 0);
+
+  /**
+   * ★★ S4 评审阻断 ③：**刷新作用域**。
+   *   `feedbackFrame` 对非巴士腿直接 return（刷不出任何东西）⇒ 轻轨段点刷新
+   *   若仍进冷却，就是"给了一个什么都不会发生的冷却"（设计 §2.6 特意禁用该反模式）。
+   *   口径：当前追踪腿的 `kind`；无追踪（pane=recommend）取 `card.rides[0].kind`。
+   */
+  const refreshScope: "bus" | "lrt" =
+    pane === "recommend"
+      ? rec.data?.cards?.[0]?.rides?.[0]?.kind === "lrt"
+        ? "lrt"
+        : "bus"
+      : detail?.card?.rides?.[detail.track?.legIndex ?? 0]?.kind === "lrt"
+        ? "lrt"
+        : "bus";
+  /** 轻轨段刷新永不进冷却（也永不显示倒计时） */
+  const paneCoolingVisible = refreshScope === "bus" ? paneCoolingSec : 0;
+
+  /**
    * ★ v3.6.0 S4：推荐 pane 的刷新改走 `reload({ nocache: true })` ——
    *   用户主动点刷新时不接受服务端 `transit_cache` 的旧结果；
    *   自动首载/切换偏好仍走缓存（`load` 不带 nocache），省配额。
@@ -308,14 +335,16 @@ export default function RouteSheet({
                 旧版只有 `refreshBusy`（= HTTP 往返 ≈1s）⇒ 表现为「一秒冷却一次」。 */}
           <button
             type="button"
-            className={`route-sheet__iconbtn${refreshBusy || recCoolingSec > 0 ? " is-cooling" : ""}`}
+            className={`route-sheet__iconbtn${refreshBusy || paneCoolingVisible > 0 ? " is-cooling" : ""}`}
             data-refresh-scope={pane === "recommend" ? "recommend" : "detail"}
+            /* ★ S4 阻断 ③：观测钩子 —— `off` = 该段刷不出任何东西（轻轨），永不进冷却 */
+            data-cooldown={refreshScope === "bus" ? "on" : "off"}
             onClick={onRefreshClick}
-            aria-disabled={refreshBusy || recCoolingSec > 0 || undefined}
+            aria-disabled={refreshBusy || paneCoolingVisible > 0 || undefined}
             aria-busy={refreshBusy || undefined}
             aria-label={
-              recCoolingSec > 0
-                ? `刷新，${recCoolingSec} 秒后可再次刷新`
+              paneCoolingVisible > 0
+                ? `刷新，${paneCoolingVisible} 秒后可再次刷新`
                 : refreshBusy
                   ? "刷新中"
                   : pane === "recommend"
@@ -323,8 +352,8 @@ export default function RouteSheet({
                     : "刷新巴士数据"
             }
             title={
-              recCoolingSec > 0
-                ? `${recCoolingSec} 秒后可再次刷新`
+              paneCoolingVisible > 0
+                ? `${paneCoolingVisible} 秒后可再次刷新`
                 : refreshBusy
                   ? "刷新中"
                   : pane === "recommend"
@@ -333,9 +362,9 @@ export default function RouteSheet({
             }
           >
             <Icon name="refresh" size={20} />
-            {recCoolingSec > 0 && (
+            {paneCoolingVisible > 0 && (
               <span className="route-sheet__cd" aria-hidden="true">
-                {recCoolingSec}
+                {paneCoolingVisible}
               </span>
             )}
           </button>

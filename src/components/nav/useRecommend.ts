@@ -10,7 +10,7 @@
  *   · `load(q, { nocache })` —— `reload({nocache:true})` 透传 `nocache=1`
  *     旁路服务端 `transit_cache`（`api/nav/route.ts` 已支持），保证拿到真·最新；
  *   · 结果经 `mergeCardsStable`（`merge-cards.ts`）合入：**保留旧顺序与结构**，
- *     只覆盖会变的数字；旧有新无的卡保留原位并标 `stale: true`（不删）。
+ *     只覆盖会变的数字；本轮已无对应的旧卡**直接丢弃**（保留会让列表随刷新膨胀）。
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { RecommendCard } from "@/lib/recommend/types";
@@ -73,6 +73,17 @@ export function useRecommend(
   const [err, setErr] = useState("");
   /** 已发起过加载的 query+prefs（防同一组合反复自动重拉；失败由「重试」手动触发） */
   const loadedQueryRef = useRef<string | null>(null);
+  /**
+   * ★★ S4 评审阻断 ①（**必须**，别简化成"prev 存在就 merge"）：
+   *   merge 只对「**同一 query** 的刷新」成立。`prev` 的生命周期跨 OD、跨偏好、跨轻轨优先开关，
+   *   无条件 merge 会造成三处**可见功能破坏**（架构已实测）：
+   *     · 换目的地 ⇒ 旧目的地路线残留在最前（3 张变 6 张）；
+   *     · 切偏好档 ⇒ 服务端已重排却被旧顺序覆盖 ⇒ 排序永久失效（AC-52/53）；
+   *     · 切轻轨优先 ⇒ 未置顶 + 角标丢失（AC-105）。
+   *   ⇒ 用**上一次真正发起的完整查询键**做守卫：同键才 merge，换键整体替换。
+   *   键的来源 = `fullQuery`（含 from/to/zone + prefs + lrtFirst），`nocache` 不计入（它不改变语义）。
+   */
+  const mergedForRef = useRef<string | null>(null);
   /** 并发保护：只认最后一次请求的结果 */
   const reqIdRef = useRef(0);
 
@@ -95,11 +106,15 @@ export function useRecommend(
       if (!j.ok) throw new Error(j.error ? errorTextOf(j.error) : "加载失败");
       const nextCards = j.cards ?? [];
       /**
-       * ★ v3.6.0 S4（只刷数字不换路线）：合入而非替换 ——
-       *   首次加载（`prev` 为空）等价于直接用新列表；之后一律以**旧顺序**为主轴。
+       * ★ v3.6.0 S4（只刷数字不换路线）+ 评审阻断 ①（query 守卫）：
+       *   · **同一 query** 的刷新 ⇒ 以旧顺序为主轴合入，只覆盖会变的数字；
+       *   · **query 变了**（换 OD / 切偏好 / 切轻轨优先）⇒ **整体替换**，
+       *     否则服务端重排会被旧顺序覆盖、旧目的地的卡会残留在列表最前。
        */
+      const sameQuery = mergedForRef.current === q;
+      mergedForRef.current = q;
       setData((prev) => ({
-        cards: prev ? mergeCardsStable(prev.cards, nextCards) : nextCards,
+        cards: prev && sameQuery ? mergeCardsStable(prev.cards, nextCards) : nextCards,
         colors: j.colors ?? prev?.colors ?? {},
         degraded: !!j.degraded,
         emptyReason: j.emptyReason ?? null,
