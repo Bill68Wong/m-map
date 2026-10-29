@@ -21,6 +21,11 @@
  *
  * GET 不校验：只读不写库，风控面由上游令牌桶 + 缓存覆盖（不属 AC-50 范围）。
  *
+ * ── 部署须知（配环境变量的人看这里）──────────────────────────────────
+ *   `POST /api/dsat/grab` 需在生产环境配 `GRAB_TOKEN`，未配时仅非生产环境放行（fail-closed）。
+ *   本节说明的常规落点是 `.env.example`，但该文件被 `scripts/check-commit-scope.mjs` 的
+ *   全文敏感词扫描硬拦（命中项全在历史既有行，与本轮无关），无法随 S2 一起更新 ⇒ 说明落在此处。
+ *
  * 跑法：`node node_modules/tsx/dist/cli.mjs scripts/check-api-guards.ts`
  * 退出码：0 = 全部有防护；1 = 存在裸奔写方法（并逐个打印原因）
  */
