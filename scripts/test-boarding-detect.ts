@@ -358,7 +358,7 @@ console.log("\n[⑪ streak]");
  * 位移门 `max(60, 5.5/3.6×45) = 68.75m` 与「5.5 km/h × 45s」是同一约束的两种写法，
  * 速度门成了唯一实际生效的门 ⇒ 6~7 km/h 的**快走**会被判成「已上车」。
  *
- * 夹具：10m 稠密顶点外的 2m 稠密顶点 + accuracy=10m + **45s 满窗**（4 帧 × 15s）。
+ * 夹具：**2m 稠密顶点** + accuracy=10m + **45s 满窗**（4 帧 × 15s）。
  * 逐条断言、不聚合（铁律 24：断言基于契约取值域，不靠汇总掩盖）。
  */
 console.log("\n[⑫ 步行不得判上车 · 45s 满窗]");
@@ -373,10 +373,23 @@ console.log("\n[⑫ 步行不得判上车 · 45s 满窗]");
     { label: "A2 弱车", vehicles: [vStopping] },
   ];
 
+  /**
+   * ⚠️ **区分力分布**（架构终审指出，务必保留）：
+   *   · `5.0` / `5.5` 两档 —— 在常量 = 5.5 时**同样 PASS**（`5.5 > 5.5` 被严格大于挡住），
+   *     ⇒ 这 6 条**不具区分力**，只是"下界不该判上车"的补充说明。
+   *   · `6.0` / `7.0` / `8.0` 三档 × 三场景 = **那 9 条才是真正的回归防线**
+   *     （实测：常量退回 5.5 时恰好这 9 条 FAIL）。
+   *   ⇒ **勿删 6.0 / 7.0 / 8.0**；只留 5.5 会让人误以为还在防回归，实际已经失去报警能力。
+   */
   for (const kmh of [5.0, 5.5, 6.0, 7.0, 8.0]) {
     for (const sc of SCENARIOS) {
       const r = autoBoardOf(inputOf({ fixes: WALK_FIXES(kmh), vehicles: sc.vehicles }));
-      eq(r.hit, false, `步行 ${kmh.toFixed(1)}km/h · ${sc.label} ⇒ 不得判上车`);
+      const discriminating = kmh >= 6.0; // 6.0 / 7.0 / 8.0 才是回归防线
+      eq(
+        r.hit,
+        false,
+        `步行 ${kmh.toFixed(1)}km/h · ${sc.label} ⇒ 不得判上车${discriminating ? "" : "（不具区分力，见上方注释）"}`,
+      );
     }
   }
 
