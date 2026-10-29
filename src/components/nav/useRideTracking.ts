@@ -291,7 +291,14 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, plate, listTick]);
 
-  /** 更新 GPS 采样缓冲 */
+  /**
+   * 更新 GPS 采样缓冲。
+   *
+   * ⚠️ **必须声明在下方「paused tick 主 effect」之前** —— 那里的新帧复评 effect
+   *   会读 `fixesRef.current`；React 按声明顺序执行 effect，本 effect 若被排到后面，
+   *   复评就会读到**上一帧**的数据，而且**不会报任何错**（ref 永远有值、只是旧）。
+   *   纯顺序依赖、无类型保护，改动 effect 顺序时务必看这里。
+   */
   useEffect(() => {
     if (!userFix) return;
     const arr = fixesRef.current.filter((f) => userFix.ts - f.ts <= FIX_KEEP_MS);
@@ -909,14 +916,23 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
         setPhase("boarding");
         autoUsedRef.current = false;
         /**
-         * ★ **故意重置冷却**（与 `start()` 的「不清零」相反，勿"统一"成 Date.now()）：
+         * ★ 冷却复位：默认**故意置 0**（与 `start()` 的「不清零」相反，勿"统一"成 `Date.now()`）。
          *   下一段是**全新行程**（用户刚下车、人就站在换乘站台）⇒ 上车判定应**立刻可用**；
          *   给新段保留 20s 冷却 = 让同站换乘用户干等 20 秒才可能被判上车，
          *   那是把「防抖」错误地推广成「惩罚」。
-         *   启动宽限另行打点（下一行）—— 两件事不冲突：宽限防"首帧未到的误报"，
-         *   清冷却保"新段立即可判"。
+         *
+         * ⚠️ **唯一例外：GPS 源的自动下车**（架构终审加的精准护栏）。
+         *   GPS 源自动下车是唯一「可能判错、且判错后没有车辆信号能纠正」的路径 ——
+         *   `autoAlightOf` 的 gps 分支靠「里程越站 30m」判断，误差直接来自投影；
+         *   一旦误判提前下车，新段会立刻在错误的站台重新开始判定。
+         *   ⇒ 只对这条路径保留 20s 冷却（防抖）；手动下车、车辆源自动下车仍置 0
+         *     （它们要么是用户本人操作，要么有车牌可核，主流换乘零延迟）。
+         *
+         * 启动宽限另行打点（下一行）—— 两件事不冲突：宽限防"首帧未到的误报"，
+         * 冷却决定"新段多久后才能被判上车"。
          */
-        lastSwitchTsRef.current = 0;
+        const gpsAutoAlight = auto && progressSource === "gps";
+        lastSwitchTsRef.current = gpsAutoAlight ? Date.now() : 0;
         boardingStartedAtRef.current = Date.now(); // ★ 下一段同样有启动宽限（防首帧闪烁）
         setNote("");
       } else {
