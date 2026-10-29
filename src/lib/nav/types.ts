@@ -49,12 +49,14 @@ export type PoiSource = "local" | "amap-inputtips" | "amap-text";
 /**
  * 搜索结果种类。
  *
- * ★ v3.6.0（AC-40）：新增 `"route"` —— **线路结果**不再混进 `results`，
- *   而是走独立的 `PoiSuggestResponse.routes`（见该字段注释）。
- *   ⚠️ 加了这一项后，`Record<PoiKind, string>` 的徽章文案表会**编译报错** ——
- *      这是**有意的护栏**（漏写文案在运行时会显示成「undefined」，很难在走查中发现）。
+ * ★ v3.6.0（AC-40）：**刻意不含 `"route"`** —— 线路结果走独立的
+ *   `PoiSuggestResponse.routes`（元素类型是 `RouteSuggestion`，不是 `PoiSearchResult`）。
+ *   理由：`PoiSearchResult.lng/lat` 是必填坐标，而线路**没有坐标**
+ *   （库里 106 条 `target_kind='route'` 的 lng/lat 全为 null）；硬塞假坐标会让
+ *   「一条线路被当成一个地理点」——正是「输入 25 就把 25 路当终点」那个老坑的另一种复现。
+ *   ⇒ 本类型只描述**有坐标的**搜索结果。
  */
-export type PoiKind = "station" | "lrt_station" | "poi" | "place" | "route";
+export type PoiKind = "station" | "lrt_station" | "poi" | "place";
 
 /** 一条 POI 搜索结果（确认后即成为 transit 的 destination） */
 export interface PoiSearchResult {

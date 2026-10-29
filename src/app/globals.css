@@ -8271,3 +8271,58 @@ body[data-nav-phase="walk"] .bottom-nav { display: none; }
   font-size: var(--text-2xs);
   color: var(--muted);
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   全站 404 页（src/app/not-found.tsx）
+   替代 Next 内置的英文「This page could not be found.」—— 全站文案一律简体。
+   ══════════════════════════════════════════════════════════════════════════ */
+.nf {
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-5);
+  background: var(--bg);
+  color: var(--fg);
+}
+.nf__box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 320px;
+  text-align: center;
+}
+.nf__mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--muted);
+}
+.nf__title {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: var(--fw-emphasize);
+  letter-spacing: -0.01em;
+}
+.nf__body {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: 1.6;
+}
+.nf__act {
+  margin-top: var(--space-2);
+}
+
+/* `/line` 错误条的按钮组（404 ⇒ 只有「返回搜索」；故障 ⇒ 还有「重试」） */
+.lp-notice__txt { margin: 0; }
+.lp-notice__acts {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
