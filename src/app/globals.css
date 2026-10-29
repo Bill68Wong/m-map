@@ -7922,3 +7922,256 @@ body[data-nav-phase="walk"] .bottom-nav { display: none; }
   gap: var(--space-1) 0;
   flex: 0 0 auto;
 }
+
+/* ══════════════════════════════════════════════════════════════════════
+   线路站点全景页（/line/[code]）· v3.6.0 S6
+   ──────────────────────────────────────────────────────────────────────
+   设计依据：03-设计-规格与Token.md §2.8
+   · 页骨架复用 .rv-page 的语义（--bg 底 + sticky 头），但类名独立，
+     避免与「查看路线页」互相影响；
+   · 行高 56px、报站列固定 16px 高 ⇒ 三态切换时**列表零跳动**（AC-42b）；
+   · 首末站：实心 11px + --fw-emphasize；中间站空心 9px。
+   ⚠️ 本项目**无全局 box-sizing 重置**，需要精确高度的地方必须显式声明。
+   ══════════════════════════════════════════════════════════════════════ */
+
+.lp-page {
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+  background: var(--bg);
+  padding-bottom: var(--space-6);
+}
+
+/* ── 顶栏 ── */
+.lp-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 10px var(--space-4);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
+.lp-head__back,
+.lp-head__rev {
+  flex: none;
+  /* 视觉 34px，命中区靠伪元素撑到 44（沿用 .rv-head__back 现役做法） */
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: var(--fg-2);
+  cursor: pointer;
+  position: relative;
+  border-radius: var(--radius-chip);
+}
+.lp-head__back::after,
+.lp-head__rev::after {
+  content: "";
+  position: absolute;
+  inset: -5px;
+}
+.lp-head__back:active,
+.lp-head__rev:active {
+  background: var(--surface-2);
+}
+.lp-head__rev[data-busy] {
+  opacity: 0.5;
+  pointer-events: none;
+}
+.lp-head__title {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.lp-head__sub {
+  font-size: var(--text-2xs);
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── 线路徽章（.linechip）──
+   底色由数据（routes.color）经 chipInkOf() 算出，字色/底色**内联注入**；
+   这里只管形态。data-chip-ink 供 QA 断言分支命中。 */
+.linechip {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 34px;
+  min-height: 22px;
+  padding: 3px 8px;
+  border-radius: var(--radius-chip);
+  font-size: var(--text-2xs);
+  font-weight: var(--fw-announce);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  box-sizing: border-box;
+  justify-content: center;
+}
+.linechip[data-chip-ink="light"],
+.linechip[data-chip-ink="deepened"] {
+  box-shadow: var(--chip-ring);
+}
+.linechip[data-chip-ink="dark"],
+.linechip[data-chip-ink="fallback"] {
+  box-shadow: var(--chip-ring-dark);
+}
+.linechip[data-chip-ink="fallback"] {
+  background: var(--surface-2);
+  color: var(--fg);
+}
+.linechip__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: none;
+}
+
+/* ── 走向小图 ── */
+.lp-map {
+  height: 180px;
+  margin: var(--space-4);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  --lp-map-gray: #9aa4ae;
+}
+.lp-map--empty {
+  /* 降级态：不给空白，给一句说明（AC-46 同口径） */
+  color: var(--muted);
+}
+.lp-map__empty-text {
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+/* ── 提示条（轻轨「暂无实时车辆数据」/ 错误）── */
+.lp-notice {
+  margin: 0 var(--space-4) var(--space-2);
+  padding: 8px 12px;
+  border-radius: var(--radius-chip);
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: var(--text-2xs);
+  line-height: 1.4;
+}
+.lp-notice--err {
+  color: var(--danger, #b4342a);
+}
+
+/* ── 站序列表 ── */
+.lp-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 var(--space-4);
+}
+.lp-stop {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 56px;
+  box-sizing: border-box;
+  position: relative;
+  padding-left: 26px;
+}
+/* 竖线：线路色 3px；首站从圆点起、末站到圆点止 */
+.lp-stop__rail {
+  position: absolute;
+  left: 15px;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--lp-color, var(--border));
+  opacity: 0.55;
+}
+.lp-stop__rail[data-edge="start"] {
+  top: 50%;
+}
+.lp-stop__rail[data-edge="end"] {
+  bottom: 50%;
+}
+/* 圆点：中间站空心 9px；首末站实心 11px */
+.lp-stop__dot {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 2px solid var(--lp-color, var(--border));
+  background: var(--surface);
+  box-sizing: border-box;
+}
+.lp-stop__dot[data-end="1"] {
+  width: 11px;
+  height: 11px;
+  left: 11px;
+  background: var(--lp-color, var(--border));
+}
+.lp-stop__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-2) 0;
+}
+.lp-stop__name {
+  font-size: var(--text-md);
+  color: var(--fg);
+  font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lp-stop[data-stop-end="1"] .lp-stop__name {
+  font-weight: var(--fw-emphasize);
+}
+.lp-stop__xfer {
+  font-size: var(--text-2xs);
+  color: var(--meta, var(--muted));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 报站列：三态同高 16px；未加载留空（**不画骨架**，避免滚动跳动） */
+.lp-stop__eta {
+  flex: none;
+  min-width: 96px;
+  height: 16px;
+  line-height: 16px;
+  text-align: right;
+  font-size: var(--text-xs);
+  color: var(--fg-2);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lp-stop[data-eta="none"] .lp-stop__eta {
+  color: var(--meta, var(--muted));
+}
+/* 轻轨：整列隐藏（一行 CSS 开关）—— ⚠️ 隐藏的是样式，`data-eta="none"` 仍输出到 DOM */
+.lp-page[data-kind="lrt"] .lp-stop__eta {
+  display: none;
+}
+
+.lp-foot {
+  margin: var(--space-4);
+  font-size: var(--text-2xs);
+  color: var(--meta, var(--muted));
+  text-align: center;
+}
