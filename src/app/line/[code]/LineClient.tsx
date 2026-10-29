@@ -172,6 +172,7 @@ export default function LineClient({ initial }: LineClientProps) {
 
       {/* ── 走向小图（无 shape ⇒ 降级提示，坑⑤）── */}
       <LineMapPane
+        routeCode={code}
         shapes={shapes}
         dir={dir}
         color={color}
