@@ -29,6 +29,14 @@ export interface FrameCmd {
   mode: FrameMode;
   box?: FrameBox;
   slotTopPx?: number;
+  /**
+   * ★ v3.6.0 S5（步行跟随）：顶部被占高度（= safe-top + `--walkturn-h`）。
+   * 与 `insetBottomPx` 任一存在时，`NavMap` 走"中带"算法（顶部横幅 + 底部面板两侧都占）；
+   * **都不传 ⇒ 旧路径一行不改**（recommend/detail 取景不受影响）。
+   */
+  insetTopPx?: number;
+  /** ★ v3.6.0 S5：底部被占高度（= 面板顶边 `topsPx[detentIndex]`） */
+  insetBottomPx?: number;
 }
 
 /** 交给 `NavMap` 的 `view` prop（含 tick：同模式连续触发也生效） */

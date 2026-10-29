@@ -76,6 +76,12 @@ export interface RouteSheetProps {
   fav?: { from: FavoriteEndpoint; to: FavoriteEndpoint } | null;
   detail?: RouteSheetDetail | null;
   onOpenDetail: (card: RecommendCard, degraded: boolean) => void;
+  /** ★ v3.6.0 S5：步行跟随相关（宿主提供，见 NavShell 的 walk 装配） */
+  walk?: {
+    onStart: (seg: "out", steps: import("@/lib/walk/walk-shared").WalkStep[]) => void;
+    onExpand: () => void;
+    preview: import("./NavDetailBody").WalkPreview;
+  } | null;
   /** ★ 2026-09-25：全屏化（导航中隐藏底导、收敛间距） */
   immersive?: boolean;
 }
@@ -93,6 +99,7 @@ export default function RouteSheet({
   fav = null,
   detail = null,
   onOpenDetail,
+  walk = null,
   immersive = false,
 }: RouteSheetProps) {
   // 推荐列表数据（列表 pane 常驻；同一 query + prefs 只自动拉一次）
@@ -418,6 +425,9 @@ export default function RouteSheet({
               destCoord={detail.destCoord ?? null}
               onSwitchCard={detail.onSwitchCard}
               immersive={immersive}
+              onWalkStart={walk?.onStart}
+              onWalkExpand={walk?.onExpand}
+              walkPreview={walk?.preview}
             />
           )}
         </div>
