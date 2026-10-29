@@ -25,6 +25,7 @@
     "test:boarding-detect": "tsx scripts/test-boarding-detect.ts",
     "check:api-guards": "tsx scripts/check-api-guards.ts",
     "test:walk-turn": "tsx scripts/test-walk-turn.ts",
+    "test:nav-params": "tsx scripts/test-nav-params.ts",
     "test:favorites-v3": "tsx scripts/test-favorites-v3.ts",
     "db:migrate-v071": "tsx scripts/db-guard.ts run db/migrate-v071.ts",
     "db:migrate-v090": "tsx scripts/db-guard.ts run db/migrate-v090.ts",
