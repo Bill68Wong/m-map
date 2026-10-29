@@ -6,10 +6,12 @@
  * v0.13.x → v1.0.0 的入口变更：点方向卡不再进「路线选择页」，而是直接进
  * `/recommend`，由服务端在 2 秒内算出**最快 5 条门到门路线**，首页卡片即最终产物。
  *
- * ★ 修复包 v2.2.1（第 5 条 · 停用清理）：
+ * ★ 修复包 v2.2.1（第 5 条）· v3.6.0 收尾：
  *   · **移除全部旧功能入口**（通勤记录 `/records` · 统计 `/stats` · 自由记站 `/free` ·
- *     继续计时 `/timer/*`）—— 这些页面已冻结（仍可直达，代码未删）；
- *   · **停止渲染 `DevModeToggle`**（组件文件与逻辑保留，只是不在任何页面出现）。
+ *     继续计时 `/timer/*`）—— v3.6.0 起这些页面**已下线**（middleware 308 回首页），
+ *     对应接口 `/api/timer*`、`/api/free*` 一律 **410 Gone**；
+ *   · **开发者模式整体移除**（`DevModeToggle` / `DevGate` / `CardDevActions` 与 `lib/dev-mode.ts`
+ *     已于 v3.6.0 删除，访问口令门同时拆除）。
  *
  * 座区在这里选（`<ZonePicker/>`）：下车后走到 B/C、N/O、R 哪一座，步行时间差得远，
  * 所以它是**必要输入**，随方向卡一起带进 `/recommend`。
@@ -28,8 +30,6 @@ export default function HomeClient({
   /** 保留（`/commute` 仍按原契约传入）；本页已不再展示「继续计时」入口 */
   active: ActiveSession | null;
   dbError: string | null;
-  /** 保留（原开发者入口已停用） */
-  authed: boolean;
 }) {
   const router = useRouter();
   const [zone, setZone] = useZone();

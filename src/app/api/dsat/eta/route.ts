@@ -5,6 +5,13 @@ import { nowBucketOfHolidayAware } from "@/lib/rebuild/holidays";
 import { loadStatics } from "@/lib/recommend/query";
 import { headwayAt, loadHeadway } from "@/lib/recommend/headway";
 import { collectMoving, fetchLocSegments, toBusArrival } from "@/lib/recommend/live";
+import { API_ERROR, errorResponse } from "@/lib/http/errors";
+import {
+  DSAT_BUCKET_CAPACITY,
+  DSAT_QPS,
+  RATE_BUCKET,
+  acquireToken,
+} from "@/lib/amap/rate-limit";
 
 /** 就近部署：Supabase 新加坡池化器 → sin1 */
 export const preferredRegion = "sin1";
@@ -14,8 +21,18 @@ export const preferredRegion = "sin1";
  * 实时车距（薄封装，核心逻辑在 src/lib/dsat/eta.ts 与自动快照共用）
  * 5s 缓存已内置于 queryEta（按 站|线路|dir|dest 聚合；v0.8.1 10s → 5s）
  * force=1：系统打点（depart/wait_start/alight）绕过缓存直查并回写；手动刷新不带
+ *
+ * ★ v3.6.0（S2）：拆除口令门后本接口**公开可调**（它是导航详情的报站数据源），
+ *   因此加**出口限流**（`dsat` 令牌桶，复用 `amap_rate_bucket` 表，无 DDL）——
+ *   否则任何人可借本站消耗 DSAT 配额。超桶 ⇒ 429（固定枚举 `rate_limited`）。
  */
 export async function GET(req: NextRequest) {
+  // 限流放在最前（含缓存命中）：缓存省的是上游调用，不是请求本身，公开接口的滥用面是请求量。
+  const rl = await acquireToken(RATE_BUCKET.dsat, DSAT_QPS, DSAT_BUCKET_CAPACITY);
+  if (!rl.ok) {
+    return errorResponse(API_ERROR.rate_limited, undefined, { "Retry-After": "1" });
+  }
+
   const sp = req.nextUrl.searchParams;
   const station = sp.get("station")?.trim() ?? "";
   const routesParam = sp.get("routes")?.trim() ?? "";
@@ -24,7 +41,7 @@ export async function GET(req: NextRequest) {
   const force = sp.get("force") === "1";
 
   if (!station || !routesParam) {
-    return NextResponse.json({ error: "缺少 station 或 routes 参数" }, { status: 400 });
+    return errorResponse(API_ERROR.bad_request);
   }
   const routes = routesParam
     .split(",")
@@ -32,7 +49,7 @@ export async function GET(req: NextRequest) {
     .filter(Boolean)
     .slice(0, 6); // 最多 6 条（与 queryEta/fleet-snapshot 上限一致；横琴 6 线方案不再截断）
   if (routes.length === 0) {
-    return NextResponse.json({ error: "routes 参数为空" }, { status: 400 });
+    return errorResponse(API_ERROR.bad_request);
   }
 
   // v0.20.9：可选「按线路指定站台」smap=26:M9/2,51:M9/4（合并卡各线站台不同）

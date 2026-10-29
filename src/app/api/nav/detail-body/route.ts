@@ -34,6 +34,7 @@ import { loadStatics } from "@/lib/recommend/query";
 import { mainCodeOf } from "@/lib/recommend/segment-lookup";
 import { wgs84ToGcj02 } from "@/lib/amap/coord";
 import type { RecommendCard } from "@/lib/recommend/types";
+import { API_ERROR } from "@/lib/http/errors";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -191,6 +192,6 @@ export async function POST(req: Request) {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error("[api/nav/detail-body] 失败：", msg);
-    return NextResponse.json({ ok: false, error: msg.slice(0, 200) }, { status: 500 });
+    return NextResponse.json({ ok: false, error: API_ERROR.upstream_error }, { status: 500 });
   }
 }

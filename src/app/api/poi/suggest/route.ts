@@ -7,13 +7,14 @@
  * 返回 `PoiSuggestResponse`（有坐标候选 `results` / 无坐标本地命中 `pending` / 灰字提示 `hint`+`hintText`）。
  *
  * ── 公开性（★ 必做，R-10）─────────────────────────────────────────────
- *   项目 `src/middleware.ts` 是 **fail-closed（默认拒绝）** ⇒ 本端点已加入
- *   `PUBLIC_PREFIXES`（`/api/poi/suggest`），否则公众搜不了。**未登录也必须能搜**。
+ *   本端点是**公众搜索**的入口，必须匿名可用。v3.6.0 起 `src/middleware.ts` 已**全站公开**
+ *   （口令门与 `PUBLIC_PREFIXES` 白名单一并拆除）⇒ 本端点天然可用，**不要再往任何白名单加东西**。
+ *   若将来恢复上锁，本端点必须重新登记，否则公众搜不了。
  *
  * ── 不阻塞 ────────────────────────────────────────────────────────────
  *   DB / 高德任何失败都**收敛为空结果**（HTTP 200，不 5xx），保证下拉区不炸。
  *
- * 设计：docs/设计-全澳导航-v1-20260918.md §2.A / §2.A.6 / §2.E（middleware 白名单）。
+ * 设计：docs/设计-全澳导航-v1-20260918.md §2.A / §2.A.6 / §2.E（公开性口径）。
  */
 import { NextRequest, NextResponse } from "next/server";
 import { suggest } from "@/lib/nav/poi-search";

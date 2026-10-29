@@ -2,7 +2,7 @@
  * 高德调用 · 跨实例令牌桶（src/lib/amap/rate-limit.ts，v1.3.0）
  *
  * ── 为什么必须「跨实例」────────────────────────────────────────────────
- *   高德个人认证开发者的**基础 LBS 服务并发上限 = 3 次/秒【官方+实测】**，且该上限是
+ *   高德个人认证开发者的**基础 LBS 服务并发上限 = 3 QPS【官方+实测】**，且该上限是
  *   **按 Key 全局**的 —— 不是按进程。Vercel 上每个 Serverless 实例都是独立进程，
  *   **单进程变量（如 `client.ts` 里的 `lastCallAt`）在多实例下完全失效** ✗
  *   ⇒ 必须把令牌桶放到**共享存储**（Postgres），用 `pg_advisory_xact_lock`
@@ -30,11 +30,40 @@ export const AMAP_QPS = 3;
 /** 桶容量（允许的短突发量）。默认 6 = 2 秒的量，够抵消「请求批次」抖动 */
 export const AMAP_BUCKET_CAPACITY = 6;
 
-/** 分桶名（与设计 §6.2 「transit/walking/search 分桶」一致） */
+/**
+ * ★ v3.6.0（S2）：DSAT 只读接口的出口限流参数。
+ *
+ * 取值与高德同档（3/s、容量 6）的理由：DSAT 是政府部门公开接口，本项目对它长期按
+ * 「别刷」自律（铁律 19/36）；单用户正常使用（点站点卡、导航详情轮询）远低于此；
+ * 容量 6 可吸收「一次进导航并发取多条线」的突发，不会误伤。
+ */
+export const DSAT_QPS = 3;
+export const DSAT_BUCKET_CAPACITY = 6;
+
+/**
+ * ★ v3.6.0（S2）：收藏写接口的滥用护栏参数。
+ * 写请求本就低频（保存一条收藏 / 校验 / 批量算预设），3/s 足够；容量 6 容忍编辑页连点保存。
+ */
+export const FAV_QPS = 3;
+export const FAV_BUCKET_CAPACITY = 6;
+
+/** 分桶名（与设计 §6.2 「transit/walking/search 分桶」一致）
+ *
+ *  ★ v3.6.0（S2）：新增两个**非高德**用途的桶 —— 存储复用同一张
+ *    `amap_rate_bucket(bucket, tokens, updated_at)`，靠 `bucket` 值区分，
+ *    **无需 DDL**（行由 `acquireToken` 首次使用时幂等插入）。
+ *    · `dsat`：`/api/dsat/eta`、`/api/station/eta` —— 拆口令门后这两个只读接口公开，
+ *      不设出口限流等于把 DSAT（澳门交通事务局）配额送给任何爬虫；
+ *    · `fav`：`/api/fav-routes*` 的**写**请求 —— 公开可写接口的滥用护栏（AC-50c）。
+ */
 export const RATE_BUCKET = {
   transit: "transit",
   walking: "walking",
   search: "search",
+  /** ★ v3.6.0：DSAT 只读报站接口（`/api/dsat/eta`、`/api/station/eta`） */
+  dsat: "dsat",
+  /** ★ v3.6.0：收藏写接口（`/api/fav-routes` / `plan` / `validate`） */
+  fav: "fav",
 } as const;
 export type RateBucketName = (typeof RATE_BUCKET)[keyof typeof RATE_BUCKET];
 

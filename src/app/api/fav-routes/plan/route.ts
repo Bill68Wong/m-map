@@ -25,6 +25,14 @@ import { getPool } from "@/lib/db";
 import { planNav } from "@/lib/nav/nav-service";
 import type { ChainStep } from "@/lib/nav/combo-params";
 import type { NavPoint } from "@/lib/nav/types";
+import { API_ERROR, errorResponse } from "@/lib/http/errors";
+import { MAX_FAV_BODY_BYTES, readJsonLimited } from "@/lib/http/body-limit";
+import {
+  FAV_BUCKET_CAPACITY,
+  FAV_QPS,
+  RATE_BUCKET,
+  acquireToken,
+} from "@/lib/amap/rate-limit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -82,13 +90,23 @@ function segsToChain(segs: Seg[]): ChainStep[] {
 
 export async function POST(req: Request) {
   try {
-    const body = (await req.json()) as Body;
-    const { fromSlug, toSlug, origin, dest } = body;
+    // ★ v3.6.0（S2）护栏：`fav` 令牌桶 + 请求体 ≤ 16KB（本接口一次算 13 条链、耗时近 9s，
+    //   是最该限流的一个；与另两个收藏写接口共用同一桶配额）
+    const rl = await acquireToken(RATE_BUCKET.fav, FAV_QPS, FAV_BUCKET_CAPACITY);
+    if (!rl.ok) {
+      return errorResponse(API_ERROR.rate_limited, undefined, { "Retry-After": "1" });
+    }
+    const parsed = await readJsonLimited<Body>(req, MAX_FAV_BODY_BYTES);
+    if (!parsed.ok) {
+      return errorResponse(API_ERROR.bad_request, parsed.reason === "tooLarge" ? 413 : 400);
+    }
+    const body = parsed.value;
+    const { fromSlug, toSlug, origin, dest } = body ?? {};
     if (!fromSlug || !toSlug || !SLUGS.has(fromSlug) || !SLUGS.has(toSlug)) {
-      return NextResponse.json({ ok: false, error: "bad_slug" }, { status: 400 });
+      return errorResponse(API_ERROR.bad_request);
     }
     if (!origin || !dest) {
-      return NextResponse.json({ ok: false, error: "missing_endpoints" }, { status: 400 });
+      return errorResponse(API_ERROR.bad_request);
     }
 
     const pool = getPool();
@@ -149,7 +167,11 @@ export async function POST(req: Request) {
             //   而本页要显示**该预设路线的线路名**（如「26 → 25B」）—— 这正是它存在的意义。
             return { r, card: { ...card, summary: r.name }, reason: null };
           } catch (e) {
-            return { r, card: null, reason: (e instanceof Error ? e.message : "error").slice(0, 120) };
+            // ★ v3.6.0（S2）：失败原因**不回显异常原文**（原实现 `e.message.slice(0,120)`），
+            //   细节进服务端日志；对外只留固定码，客户端据此提示「这条预设算不出来」
+            const msg = e instanceof Error ? e.message : String(e);
+            console.error(`[api/fav-routes/plan] ${r.route_key} 计算失败：`, msg);
+            return { r, card: null, reason: "plan_failed" };
           }
         }),
       );
@@ -173,6 +195,7 @@ export async function POST(req: Request) {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error("[api/fav-routes/plan] 失败：", msg);
-    return NextResponse.json({ ok: false, error: msg.slice(0, 300) }, { status: 500 });
+    // ★ v3.6.0（S2）：异常原文只进服务端日志（原实现 `msg.slice(0,300)` 会回显 SQL/表名）
+    return errorResponse(API_ERROR.upstream_error);
   }
 }

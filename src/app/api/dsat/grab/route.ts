@@ -3,6 +3,8 @@ import { getPool } from "@/lib/db";
 import { getBusPositions } from "@/lib/dsat/client";
 import { deriveRouteDir } from "@/lib/dsat/eta";
 import { RISK } from "@/config/risk";
+import { API_ERROR, errorResponse } from "@/lib/http/errors";
+import { hasInternalToken } from "@/lib/security/internal-token";
 
 /** 就近部署：Supabase 新加坡池化器 → sin1 */
 export const preferredRegion = "sin1";
@@ -42,13 +44,24 @@ interface GrabBody {
 }
 
 export async function POST(req: NextRequest) {
+  // ★ v3.6.0（S2）：本接口会**写采集表**（`segment_samples` / `bus_snapshots`）并**触发 DSAT 请求**
+  //   ⇒ 拆除口令门后必须自带鉴权，否则等于公网开放「污染唯一数据资产 + 放大外部调用」。
+  //   令牌读 `GRAB_TOKEN`（未配置时仅非生产放行，生产 fail-closed）。
+  //   ⚠️ 与下面那道 `RISK.timerGrab.enabled` 风控开关**互不替代**：令牌答「谁能调」，
+  //      开关答「此刻要不要调」。且鉴权放最前 —— 未授权者连「开关是否打开」都不该探测到。
+  if (!hasInternalToken(req)) {
+    console.warn("[grab] 拒绝未授权调用（缺 / 错 Bearer GRAB_TOKEN）");
+    return errorResponse(API_ERROR.unauthorized);
+  }
+
   try {
     if (!RISK.timerGrab.enabled) {
       return NextResponse.json({ ok: true, skipped: "disabled" });
     }
 
     const { sessionId, station, route, stage, atStation } = (await req.json()) as GrabBody;
-    if (!sessionId) return NextResponse.json({ error: "缺少 sessionId" }, { status: 400 });
+    // ★ v3.6.0（S2）：错误体统一为固定枚举（原实现回中文串，属对外契约不一致）
+    if (!sessionId) return errorResponse(API_ERROR.bad_request);
     const grabStage = stage === "alight" ? "alight" : "board";
 
     const pool = getPool();

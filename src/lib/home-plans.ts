@@ -3,8 +3,9 @@ import type { PlanRow, ActiveSession } from "@/lib/home-plans-shared";
 
 /**
  * 首页 / 路线选择页共用查询（src/lib/home-plans.ts，v0.13.x）
- * 首页按「方向对」分行（每行去程/回程两卡），点方向卡进 /routes?from=&to= 选具体方案。
- * 本文件仅可被服务端组件（page.tsx / routes）import；客户端共享常量见 home-plans-shared.ts。
+ * 首页按「方向对」分行（每行去程/回程两卡）；旧「路线选择页」`/routes` **已于 v3.6.0 删除**，
+ * 现仅 `/commute`（旧首页）与本文件服务端组件使用。
+ * 本文件仅可被服务端组件（page.tsx）import；客户端共享常量见 home-plans-shared.ts。
  */
 
 export type { PlanRow, ActiveSession } from "@/lib/home-plans-shared";

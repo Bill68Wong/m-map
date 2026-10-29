@@ -10,7 +10,8 @@
  * ⚠️ `preferredRegion = "sin1"`：与 Supabase 主库（ap-southeast-1 新加坡）**同区**，
  *    把每次 DB 往返的跨区 RTT 抹掉 —— 这是「2 秒出 5 卡」的关键一环（见计划 §六 #8）。
  *
- * 鉴权：middleware 口令门覆盖本路径（非白名单）→ 需 `mx_auth` cookie。
+ * 鉴权：v3.6.0 起 middleware **全站公开**（口令门已拆）⇒ 本接口匿名可调，靠 CDN/内存缓存
+ *   与上游令牌桶控量，无需凭据。
  * 幂等只读：本接口不写任何表（DSAT 调用会记 `dsat_call_logs`，属正常记账）。
  */
 import { NextRequest, NextResponse } from "next/server";
@@ -18,6 +19,7 @@ import { getPool } from "@/lib/db";
 import { recommend } from "@/lib/recommend/service";
 import { parsePrefs } from "@/lib/recommend/score";
 import { DEFAULT_ZONE, SCHOOL_ZONES, type SchoolZone } from "@/lib/recommend/types";
+import { API_ERROR } from "@/lib/http/errors";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -71,6 +73,6 @@ export async function GET(req: NextRequest) {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error("[api/recommend] 失败：", msg);
-    return NextResponse.json({ ok: false, error: msg.slice(0, 500) }, { status: 500 });
+    return NextResponse.json({ ok: false, error: API_ERROR.upstream_error }, { status: 500 });
   }
 }
