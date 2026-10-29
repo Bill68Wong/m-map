@@ -16,6 +16,7 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import Icon from "@/components/ui/Icon";
+import { errorTextOf } from "@/lib/ui/error-text";
 
 export interface RouteLineItem {
   code: string;
@@ -40,8 +41,15 @@ export default function RouteLinesSheet({ onPick, onClose }: RouteLinesSheetProp
       .then((r) => r.json())
       .then((j: { lines?: RouteLineItem[]; error?: string }) => {
         if (!alive) return;
-        if (j.error) setErr(j.error);
-        setLines(Array.isArray(j.lines) ? j.lines : []);
+        const list = Array.isArray(j.lines) ? j.lines : [];
+        /**
+         * ★ v3.6.0：降级时接口会返回 `{ lines: [], error: "upstream_error" }`。
+         *   ① 有 error **且**清单为空 ⇒ 显示提示（过了 `errorTextOf`，不把枚举上屏）；
+         *   ② 有 error 但清单**非空**（部分降级）⇒ **不报错**，照常展示已有线路，
+         *      否则一次上游抖动就把整个面板变成错误态。
+         */
+        if (j.error && list.length === 0) setErr(errorTextOf(j.error));
+        setLines(list);
       })
       .catch(() => {
         if (alive) {
