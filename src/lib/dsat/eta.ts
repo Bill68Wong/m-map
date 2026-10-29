@@ -44,7 +44,10 @@ export interface EtaBus {
   atStation: string;
   atStationName: string;
   status: string | null;
-  speed: string | number | null;
+  /**
+   * ★ v3.6.0（AC-20）：原 `speed` 字段已删除 —— DSAT 该字段延迟极大、不可信，
+   *   禁入 API 出口 / UI / 任何判定；采集侧仍按原样落库（`fleet_snapshot.speed_kmh`）。
+   */
   /**
    * ★ v1.0.0：挂载站 → 用户站的**逐跳站码对**（`[[a,b],...]`，长度 = stopsAway）。
    * 仅当调用方注入 `routeIndex` 时填充（旧路径不填，保持输出字节级不变）。
@@ -356,7 +359,6 @@ export async function queryEta(
                 atStation: st.staCode,
                 atStationName: stops[0]?.name ?? st.staCode,
                 status: b.status ?? null,
-                speed: b.speed ?? null,
                 hops: routeIndex ? [] : undefined,
               });
             }
@@ -394,7 +396,6 @@ export async function queryEta(
             atStation: st.staCode,
             atStationName: stops[busIdx]?.name ?? st.staCode,
             status: b.status ?? null,
-            speed: b.speed ?? null,
             hops: routeIndex ? hopPairsOf(busIdx, stopsAway) : undefined,
           });
         }

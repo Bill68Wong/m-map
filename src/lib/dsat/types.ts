@@ -16,10 +16,11 @@ export interface BusPosition {
   busPlate?: string; // 车牌 'MY9362'
   busCode?: string; // 车号 'E3390'
   /**
-   * 速度 km/h——⚠️ 不可靠（2026-09-03 实测反馈）：
-   * 停靠待发的车可能残留非空速度、进站中的车可能显示很高值
-   * （MY9487 发车台未动车却显示 33；AB6431 进站显示 49），疑似
-   * GPS 采样滞后/缓存。只作展示参考，禁止参与任何状态判定。
+   * ★ v3.6.0（AC-20）：**已停用** —— 仅采集落库（`fleet_snapshot.speed_kmh` / `segment_samples`），
+   * **禁入 API 出口 / UI / 任何判定**。
+   * 原观察（2026-09-03）：停靠待发的车可能残留非空速度、进站中的车可能显示很高值
+   * （MY9487 发车台未动车却显示 33；AB6431 进站显示 49），实为 GPS 采样滞后/缓存 ⇒
+   * 用户口径 v3.6.0：该字段延迟极大、完全不可信，本项目不再作为任何参考依据。
    */
   speed?: string | number;
   /**
@@ -60,14 +61,14 @@ export interface BusPositionsPayload {
 /**
  * ★ v2.10.0：位置接口（`routestation/location → data.busInfoList[]`）的**单车条目**
  * 实测仅 5 个字段、**无任何站点/航向信息**（见 docs/DSAT巴士接口调研.md §2.5.7）：
- *   坐标是 WGS84（6 位小数）、`busType` 车型、`speed` 车速（与报站同款、仅展示参考）。
+ *   坐标是 WGS84（6 位小数）、`busType` 车型、`speed` 车速（★ v3.6.0 起**已停用**：仅采集落库）。
  */
 export interface BusLocationItem {
   latitude?: string | number; // WGS84
   longitude?: string | number; // WGS84
   busPlate?: string; // 车牌，用于与报站接口按 plate 合并
   busType?: string; // 车型
-  speed?: string | number; // km/h（仅展示参考，禁参与状态判定）
+  speed?: string | number; // km/h ★ v3.6.0 已停用：仅采集落库，禁入 API 出口/UI/判定
 }
 
 /**

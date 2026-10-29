@@ -140,7 +140,6 @@ export function useRouteOverview(
                 plate: string;
                 lat: number;
                 lng: number;
-                speed?: number | null;
                 status?: string;
                 isLast?: boolean;
                 interval?: VehicleLite["interval"];
@@ -152,7 +151,6 @@ export function useRouteOverview(
               plate: v.plate,
               lat: v.lat,
               lng: v.lng,
-              speed: v.speed ?? null,
               status: bad.has(v.plate)
                 ? "lost"
                 : ((VALID_STATES.has(String(v.status)) ? String(v.status) : "unknown") as VehicleLite["status"]),
