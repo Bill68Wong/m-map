@@ -22,11 +22,13 @@
  *   （理由见 `walking.ts` 文件头「为什么绝不缓存」）。客户端 5 分钟内存缓存同 OD。
  *
  * ── 错误体口径（★ 以 AC-50d 为准）──────────────────────────────────────
- *   固定六枚举：`bad_request`(400) · `rate_limited`(429) · `upstream_error`(502)。
+ *   固定六枚举：`bad_request`(**400**) · `rate_limited`(**429**) · `upstream_error`(**500**)。
+ *   ⚠️ 状态码以 `lib/http/errors.ts#DEFAULT_STATUS` 为准（`upstream_error` = **500**，
+ *      不是 502 —— 本注释旧版写成 502 与代码漂了，已按代码更正）。
  *   ⚠️⚠️ **架构文档 §4.1.1 的「502 + 高德 `info`」已作废，勿按旧文档改回。**
  *      理由：AC-50d 是硬约束（响应体不含内部信息），而高德 `info` 会带
  *      `INVALID_USER_KEY` 这类串 —— 等于把**密钥状态**告诉调用方。
- *      高德 `info` / `infocode` 只进服务端 `console.warn`。
+ *      高德 `info` / `infocode` 只进服务端 `console.warn`（并区分「无路网 20003」与「服务/配置故障」）。
  */
 import { NextRequest } from "next/server";
 import { fetchWalkingSteps } from "@/lib/amap/walking";
@@ -92,6 +94,9 @@ export async function GET(req: NextRequest) {
       ok: true,
       steps: r.steps,
       totalDistM: r.totalDistM,
+      // ★ 几何链末值：前端算「还有 N 米」**必须**用 `stepsTotalM − doneM`
+      //   （`totalDistM` 含被丢弃的步，用它永远到不了 0 —— 见 walk-shared 的类型注释）
+      stepsTotalM: r.stepsTotalM,
       totalDurationS: r.totalDurationS,
       // ── 兼容别名（架构 §4.1.1 的字段名）──
       // **主用 `totalDistM` / `totalDurationS`**；`distanceM` / `durationS` 仅为兼容旧契约，

@@ -24,6 +24,20 @@
  *
  * GET 不校验：只读不写库，风控面由上游令牌桶 + 缓存覆盖（不属 AC-50 范围）。
  *
+ * ── 第二部分：错误码闭集（AC-50d）──────────────────────────────────────
+ *   PM 的 AC-50d：**4xx/5xx 响应体的 `error` 字段只允许 `API_ERROR` 里列出的取值**。
+ *   S6 评审阻断 ③ 就是破了这条：`route-stops` 回了第七个值 `route_not_found`，
+ *   而当时**没有任何自动门禁看得到它**（`.verify` 的断言里根本没覆盖这个接口）。
+ *   ⇒ 本脚本增加静态扫描：扫每个 `route.ts` 里形如 `error: "字面量"` 的响应，
+ *     字面量必须是六枚举之一（或者用 `API_ERROR.x` 标识符 —— 那种天然合规）。
+ *
+ *   为什么用静态扫描而不是 HTTP 断言：新接口一加，HTTP 断言就得跟着加，
+ *   **忘加就等于没门禁**（阻断 ③ 正是这么漏的）；静态扫描对新文件自动生效。
+ *
+ *   `KNOWN_DEBT` 是**遗留欠账基线**（按「路由 + 字面量」匹配，不按行号 ⇒ 行号漂移不会误报）。
+ *   基线内的只打印 `DEBT` 不算失败；**新出现的字面量一律 FAIL**。
+ *   修掉某条后本脚本会提示「可从基线移除」，请顺手删行（基线只应缩短，不应变长）。
+ *
  * ── 自检（`--self-test`）──────────────────────────────────────────────
  *   门禁脚本自己也会坏，且坏了的样子是「一直绿」。故内置三条反向断言：
  *     ① 裸奔 POST ⇒ 必须 FAIL；
@@ -385,5 +399,145 @@ function scan(): void {
   }
 }
 
+/* ══════════════════════════════════════════════════════════════════════
+ * 第二部分：错误码闭集（AC-50d）
+ * ══════════════════════════════════════════════════════════════════════ */
+
+/**
+ * **遗留欠账基线**（AC-50d 违规，先于本轮存在）。
+ *
+ * 键 = `${路由}|${字面量}`（**不按行号**，行号会漂）。基线内只打印 `DEBT`；
+ * **任何新出现的字面量都 FAIL**。修掉一条后本脚本会提示移除，**基线只应缩短**。
+ *
+ * ⚠️ 加基线=又一处空头支票。加之前先问：这个字面量是不是已经下线（该走 GONE_PREFIXES）、
+ *    或接口本身是不是 Bearer 保护（该走 ALLOWLIST）？两者都不是才是真欠账。
+ */
+const KNOWN_DEBT = new Set<string>([
+  "/api/card|缺少必填参数（from/to/plan/route/board/alight）",
+  "/api/nav|缺少或非法坐标：需 fromLng/fromLat/toLng/toLat（GCJ-02）",
+  "/api/plans|方案查询失败，请稍后重试",
+  "/api/recommend|缺少参数 from / to",
+  "/api/route-shapes|missing_code",
+  "/api/route-vehicles|缺少 code 参数（线路码，如 26 / 51A / N6）",
+  "/api/route-vehicles|缺少或非法 dir 参数（应为 0 或 1）",
+]);
+
+/** 允许出现任意 `error` 字面量的路由（必须打印理由） */
+const ERROR_LITERAL_ALLOW: { pattern: RegExp; reason: string }[] = [
+  {
+    pattern: /^\/api\/cron\/rebuild$/,
+    reason: "Bearer CRON_SECRET 保护的非公开运维接口，响应体不进公众面",
+  },
+];
+
+interface ErrorFinding {
+  file: string;
+  route: string;
+  literal: string;
+  /** ok = 字面量本身就是六枚举之一（合规）；其余见注释 */
+  status: "ok" | "new" | "debt" | "gone" | "allow";
+  reason?: string;
+}
+
+/** 扫 `error: "…"` / `error: '…'` 字面量（只认响应构造处，注释与模板串不算） */
+function scanErrorLiterals(): ErrorFinding[] {
+  const out: ErrorFinding[] = [];
+  for (const file of collectRouteFiles(API_ROOT).sort()) {
+    const route = routePathOf(file);
+    const code = stripNonCode(fs.readFileSync(file, "utf8"));
+    // 注意：stripNonCode 会把字符串内容清空 ⇒ 必须用**原文**取字面量值，用**剥注释版**判位置。
+    // 这里直接对原文按行扫（注释行前面会被 `//` 或 `*` 开头，简单跳过即可）。
+    const rawLines = fs.readFileSync(file, "utf8").split(/\r?\n/);
+    for (const line of rawLines) {
+      const trimmed = line.trim();
+      if (trimmed.startsWith("//") || trimmed.startsWith("*") || trimmed.startsWith("/*")) continue;
+      const m = /\berror:\s*"([^"]*)"/.exec(line) ?? /\berror:\s*'([^']*)'/.exec(line);
+      if (!m) continue;
+      const literal = m[1];
+      if (!literal) continue; // 空串不当错误码
+      let status: ErrorFinding["status"] = "new";
+      let reason: string | undefined;
+      if (ENUM_VALUES.has(literal)) {
+        // 直接写字面量但值在闭集内 ⇒ 合规（AC-50d 管的是**值**，不是写法）
+        status = "ok";
+      } else if (underPrefix(route, GONE_PREFIXES)) {
+        status = "gone";
+      } else {
+        const allow = ERROR_LITERAL_ALLOW.find((a) => a.pattern.test(route));
+        if (allow) {
+          status = "allow";
+          reason = allow.reason;
+        } else if (KNOWN_DEBT.has(`${route}|${literal}`)) {
+          status = "debt";
+        }
+      }
+      out.push({ file, route, literal, status, reason });
+    }
+    void code; // （保留：位置判定目前按行做，不需要剥注释版）
+  }
+  return out;
+}
+
+/**
+ * 六枚举闭集 —— **独立于 `API_ERROR` 再列一遍**，故意的。
+ *
+ * 若这里也 `import { API_ERROR }` 再取 `Object.values()`，那么有人往 `errors.ts`
+ * 里加第七个值，本脚本会自动跟着"认可"它 —— 闭集就白设了。
+ * ⇒ 脚本侧手工抄一份：**加枚举必须同时改两处**，改动会被 diff 看见。
+ */
+const ENUM_VALUES = new Set([
+  "unauthorized",
+  "forbidden",
+  "gone",
+  "rate_limited",
+  "bad_request",
+  "upstream_error",
+]);
+
+function scanErrors(): void {
+  const findings = scanErrorLiterals();
+  const ok = findings.filter((f) => f.status === "ok");
+  const gone = findings.filter((f) => f.status === "gone");
+  const allowed = findings.filter((f) => f.status === "allow");
+  const debt = findings.filter((f) => f.status === "debt");
+  const bad = findings.filter((f) => f.status === "new");
+
+  console.log("\n═══ 错误码闭集（AC-50d · 4xx/5xx 的 error 只允许六枚举）═══");
+  const checked = findings.length - ok.length - gone.length - allowed.length;
+  console.log(`扫描 ${findings.length} 处 error 字面量 · 需合规 ${checked} 处` +
+    `（已合规 ${ok.length} · 已下线 ${gone.length} · 豁免 ${allowed.length}）\n`);
+
+  for (const f of bad) {
+    console.log(`FAIL  ${f.route.padEnd(30)} ${JSON.stringify(f.literal)}`);
+    console.log(`      ↳ ${path.relative(process.cwd(), f.file)}`);
+  }
+  if (debt.length) {
+    console.log("── 遗留欠账（基线内，不阻塞；修掉后请从 KNOWN_DEBT 删行，基线只应缩短）──");
+    for (const f of debt) console.log(`DEBT  ${f.route.padEnd(30)} ${JSON.stringify(f.literal)}`);
+    console.log("");
+  }
+  if (allowed.length) {
+    console.log("── 错误字面量豁免（逐条打印理由）──");
+    // 同一路由多条字面量时只打一次理由行，避免重复刷屏
+    const seen = new Set<string>();
+    for (const f of allowed) {
+      if (seen.has(f.route)) continue;
+      seen.add(f.route);
+      console.log(`SKIP  ${f.route.padEnd(30)} ${f.reason}`);
+    }
+    console.log("");
+  }
+
+  console.log(`错误码闭集：新增违规 ${bad.length} · 遗留欠账 ${debt.length}`);
+  if (bad.length) {
+    console.error(
+      "\n❌ 有新增的 `error` 字面量不在六枚举内。改成 `errorResponse(API_ERROR.xxx)`，" +
+        "或 `{ error: API_ERROR.bad_request }`（状态码可自定义，值必须闭集内）。",
+    );
+    process.exit(1);
+  }
+}
+
 if (process.argv.includes("--self-test")) selfTest();
 scan();
+scanErrors();

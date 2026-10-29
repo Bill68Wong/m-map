@@ -102,10 +102,11 @@ export async function GET(req: NextRequest) {
       )
     ).rows[0] as RouteRow | undefined;
     if (!route) {
-      return NextResponse.json(
-        { ok: false, error: "route_not_found" },
-        { status: 404, headers: { "Cache-Control": "no-store" } },
-      );
+      // ★ 状态码用 404（前端靠**状态码**区分「线路不存在 ⇒ 空态」vs「服务端故障 ⇒ 重试」），
+      //   但 `error` 必须落在 AC-50d 的六值闭集内。
+      //   ⚠️ 旧实现回 `"route_not_found"` —— 那是**第七个**枚举值，破了闭集，
+      //      且因为门禁脚本没覆盖本接口而一路逃过检查（S6 评审阻断 ③）。
+      return errorResponse(API_ERROR.bad_request, 404);
     }
 
     // ② 可用方向（回给前端做方向切换器；缺省取第一个 —— 不猜"去程/回程"语义，只保证稳定）

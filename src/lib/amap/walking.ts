@@ -54,8 +54,24 @@ export const WALK_ACQUIRE_WAIT_MS = 600;
 export type WalkError = "rate_limited" | "no_key" | "no_path" | "upstream_error";
 
 export type WalkingResult =
-  | { ok: true; steps: WalkStep[]; totalDistM: number; totalDurationS: number }
+  | {
+      ok: true;
+      steps: WalkStep[];
+      /** 高德自报全线距离（显示用） */
+      totalDistM: number;
+      /** **几何链末值**（各步 polyline 累加）；前端算 remainM 必须用它，见 `WalkRouteResp.stepsTotalM` */
+      stepsTotalM: number;
+      totalDurationS: number;
+    }
   | { ok: false; error: WalkError };
+
+/**
+ * 几何链长度下限比例（S5 评审阻断 ②）：`stepsTotalM < totalDistM × 本值` ⇒ 判定有步被丢弃，直接降级。
+ *
+ * 0.8 的依据：正常路径的弦长/弧长差实测 ~1.4%（1662 vs 1686），远低于 20%；
+ * 而"中间步缺几何"实测能到 33%~62% ⇒ 0.8 把两类彻底分开，不会误伤正常路径。
+ */
+const GEOM_MIN_RATIO = 0.8;
 
 /**
  * 日调用计数告警（**本轮不建表**，进程内计数 + 阈值 warn）。
@@ -165,8 +181,16 @@ export async function fetchWalkingSteps(origin: LatLng, dest: LatLng): Promise<W
 
   const path = json?.route?.paths?.[0];
   if (json?.status !== "1" || !path) {
-    // 高德非成功（含 10003 参数错 / 10044 配额超限 / 20003 无路网数据）
-    console.warn(`[walking] 高德返回失败：info=${json?.info ?? "unknown"} infocode=${json?.infocode ?? "?"}`);
+    // ★ advisory 2：区分「无路网」与「服务故障」—— 两者对外都是 `no_path`（六值闭集里没有更细的位置），
+    //   但排查时完全不同：20003 是「这一带高德没有步行路网」（数据问题，改代码无用），
+    //   10003/10005/10044 是参数/密钥/配额（配置问题），其余无 infocode 是上游真故障。
+    const info = json?.info ?? "unknown";
+    const infocode = json?.infocode ?? "?";
+    if (infocode === "20003") {
+      console.warn(`[walking] 无步行路网（高德 20003，非服务故障）：info=${info}`);
+    } else {
+      console.warn(`[walking] 高德返回失败（服务/配置侧）：info=${info} infocode=${infocode}`);
+    }
     return { ok: false, error: "no_path" };
   }
 
@@ -196,7 +220,8 @@ export async function fetchWalkingSteps(origin: LatLng, dest: LatLng): Promise<W
     const road = typeof s.road_name === "string" ? s.road_name.trim() : "";
     steps.push({
       idx: steps.length,
-      turn: turnOf(instruction),
+      // ⚠️ 占位：turn 依赖「是否最后一步」，而此处还不知道总步数 ⇒ 循环结束后统一回填（见下）
+      turn: "straight",
       text: instruction,
       ...(road ? { sub: road } : {}),
       distM: Number.isFinite(amapDist) && amapDist > 0 ? Math.round(amapDist) : Math.round(geomM),
@@ -212,13 +237,34 @@ export async function fetchWalkingSteps(origin: LatLng, dest: LatLng): Promise<W
     return { ok: false, error: "no_path" };
   }
 
+  // ★ 统一回填 turn：`arrive` 只在最后一步允许（S5 评审裁定）——
+  //   高德在中途步会用「到达新馬路」这类措辞，不拦就会冒出中途到达旗。
+  const lastIdx = steps.length - 1;
+  for (const s of steps) s.turn = turnOf(s.text, s.idx === lastIdx);
+
   const amapDist = Number(path.distance);
   const amapDur = Number(path.cost?.duration);
+  const totalDistM = Number.isFinite(amapDist) && amapDist > 0 ? Math.round(amapDist) : Math.round(cum);
+  const stepsTotalM = Math.round(cum);
+
+  // ★★ 闸门（S5 评审阻断 ②）：几何链比高德自报距离短 20% 以上 ⇒ 说明**有步被丢弃**
+  //   （典型：中间步缺 instruction / polyline 只有 1 点）。
+  //   此时画出的线会在被丢段落处出现几百米直线横穿街区，且前端「还有 N 米」永远到不了 0。
+  //   ⇒ 按本项目自己的纪律「宁可少，不可假」**直接降级**为直线示意（前端走 fallback）。
+  //   1.4% 级的弦长/弧长差远低于 20%，正常路径不会误伤。
+  if (totalDistM > 0 && stepsTotalM < totalDistM * GEOM_MIN_RATIO) {
+    console.warn(
+      `[walking] 几何链显著短于高德距离（stepsTotal=${stepsTotalM}m vs 高德=${totalDistM}m，` +
+        `比值 ${(stepsTotalM / totalDistM).toFixed(2)} < ${GEOM_MIN_RATIO}）⇒ 判定有步被丢弃，降级`,
+    );
+    return { ok: false, error: "no_path" };
+  }
 
   return {
     ok: true,
     steps,
-    totalDistM: Number.isFinite(amapDist) && amapDist > 0 ? Math.round(amapDist) : Math.round(cum),
+    totalDistM,
+    stepsTotalM,
     totalDurationS: Number.isFinite(amapDur) && amapDur > 0 ? Math.round(amapDur) : 0,
   };
 }
