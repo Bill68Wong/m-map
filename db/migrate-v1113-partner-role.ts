@@ -22,6 +22,18 @@
  *   node --experimental-strip-types db/migrate-v1113-partner-role.ts --apply  # 执行
  *   ... --apply --rotate                                                      # 轮换密码
  *   ... --revoke                                                              # 撤销（删账号+策略）
+ *
+ * ── ⚠️⚠️ 凭据提示（执行前必读）────────────────────────────────────────────
+ *   本脚本会向 **stdout 打印一次新生成的 `dev_partner` 密码**
+ *   （建号时必须把密码交给人，否则拿不到账号；写盘的日志里**已打码**，
+ *     见文件末尾 `out.map((l) => l.replace(pw, "****（已打码）"))`）。
+ *
+ *   因此：**不要用 `| tee` 或 `>` 重定向捕获本脚本的输出** —— 否则 partner 密码
+ *   会以明文落进那个文件，等于把凭据写到了磁盘上。
+ *
+ *   它不是主库密码（只是只读+增删改的 B 档角色），但仍属凭据：
+ *   · 要留档就手工抄到密码管理器；
+ *   · 一旦怀疑泄漏，用 `--revoke` 删号或 `--apply --rotate` 换密码。
  */
 import fs from "node:fs";
 import crypto from "node:crypto";
