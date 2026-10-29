@@ -19,7 +19,7 @@
  *   （编码一律 `encodeURIComponent(JSON.stringify(<结构>))`）—— 承载用户自定义站链与步行参数。
  *   **缺省（不传）行为与 v2.2.0 完全一致**（向后兼容硬约束）；参数存在但非法 → 400。
  *
- * 鉴权：`/api/nav` 在 middleware 白名单（`PUBLIC_PREFIXES`，见 T04）。
+ * 鉴权：v3.6.0 起 middleware **全站公开**（口令门与白名单已拆）⇒ 本接口匿名可调。
  * 幂等：只写 `transit_cache`（缓存，属正常）、`dsat_call_logs`（记账，属正常）。
  */
 import { NextRequest, NextResponse } from "next/server";
@@ -29,6 +29,7 @@ import { decodeChain, decodeTiers, decodeWalk, type ChainStep, type TierOverride
 import type { NavPoint, NavPointKind } from "@/lib/nav/types";
 import { parsePrefs } from "@/lib/recommend/score";
 import { SCHOOL_ZONES, type SchoolZone } from "@/lib/recommend/types";
+import { API_ERROR, errorResponse } from "@/lib/http/errors";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -133,6 +134,9 @@ export async function GET(req: NextRequest) {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error("[api/nav] 失败：", msg);
-    return NextResponse.json({ ok: false, error: msg.slice(0, 500) }, { status: 500 });
+    // ★ v3.6.0（S2）信息外泄收口：原实现把 `msg.slice(0, 500)` 回给客户端，异常原文
+    //   可能含 SQL 片段 / 表名 / 环境线索。拆口令门后全站公开，一律改为固定枚举，
+    //   细节只留在上面那条服务端日志里。
+    return errorResponse(API_ERROR.upstream_error);
   }
 }

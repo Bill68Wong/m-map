@@ -15,6 +15,7 @@ import { NextResponse } from "next/server";
 import { getPool } from "@/lib/db";
 import { cardDetail } from "@/lib/recommend/card";
 import { parseCardQuery } from "@/lib/recommend/card-link";
+import { API_ERROR } from "@/lib/http/errors";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -46,6 +47,9 @@ export async function GET(req: Request) {
     return NextResponse.json({ ok: true, ...r.data }, { headers: { "cache-control": "no-store" } });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ ok: false, error: `詳情計算失敗：${msg.slice(0, 120)}` }, { status: 200, headers: { "cache-control": "no-store" } });
+    // ★ v3.6.0（S2）信息外泄收口：异常原文只进服务端日志，客户端只拿固定枚举。
+    //   前端负责把枚举翻成用户语言（`src/lib/ui/error-text.ts`），枚举值本身不上屏。
+    console.error("[api/card] 详情计算失败：", msg);
+    return NextResponse.json({ ok: false, error: API_ERROR.upstream_error }, { status: 200, headers: { "cache-control": "no-store" } });
   }
 }

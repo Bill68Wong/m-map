@@ -19,6 +19,7 @@
  */
 import { NextResponse } from "next/server";
 import { getPool } from "@/lib/db";
+import { API_ERROR } from "@/lib/http/errors";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -73,6 +74,7 @@ export async function GET() {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error("[api/route-lines] 失败：", msg);
-    return NextResponse.json({ lines: [], error: msg.slice(0, 300) }, { status: 500 });
+    // ★ v3.6.0（S2）：保留 `lines: []` 数组形状（客户端按 j.lines 取值），只把 error 换成枚举。
+    return NextResponse.json({ lines: [], error: API_ERROR.upstream_error }, { status: 500 });
   }
 }

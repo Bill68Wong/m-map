@@ -44,6 +44,13 @@ import { loadStatics } from "@/lib/recommend/query";
 import { fetchStationLive } from "@/lib/recommend/live";
 import { mainCodeOf } from "@/lib/recommend/segment-lookup";
 import type { BusLive } from "@/lib/recommend/types";
+import { API_ERROR, errorResponse } from "@/lib/http/errors";
+import {
+  DSAT_BUCKET_CAPACITY,
+  DSAT_QPS,
+  RATE_BUCKET,
+  acquireToken,
+} from "@/lib/amap/rate-limit";
 
 /** 就近部署：Supabase 新加坡池化器 → sin1；pg/DSAT 需要 Node 运行时；请求期动态执行 */
 export const runtime = "nodejs";
@@ -375,10 +382,18 @@ async function lrtItems(
 }
 
 export async function GET(req: NextRequest) {
+  // ★ v3.6.0（S2）：拆口令门后本接口公开（首页点站点卡就会调）⇒ 加 `dsat` 令牌桶出口限流
+  //   （复用 `amap_rate_bucket` 表，无 DDL）。超桶 ⇒ 429 固定枚举 `rate_limited`，绝不 500。
+  //   限流放在缓存之前：缓存省的是上游 DSAT 调用，省不了请求本身，而滥用面正是请求量。
+  const rl = await acquireToken(RATE_BUCKET.dsat, DSAT_QPS, DSAT_BUCKET_CAPACITY);
+  if (!rl.ok) {
+    return errorResponse(API_ERROR.rate_limited, undefined, { "Retry-After": "1" });
+  }
+
   const sp = req.nextUrl.searchParams;
   const code = sp.get("code")?.trim() ?? "";
   if (!code) {
-    return NextResponse.json({ error: "缺少 code 参数（站点主码）" }, { status: 400 });
+    return errorResponse(API_ERROR.bad_request);
   }
   const main = mainCodeOf(code);
   const nowMs = Date.now();

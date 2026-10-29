@@ -33,6 +33,7 @@ import { NextResponse } from "next/server";
 import { getPool } from "@/lib/db";
 import { wgs84ToGcj02 } from "@/lib/amap/coord";
 import { mainCodeOf } from "@/lib/recommend/segment-lookup";
+import { API_ERROR } from "@/lib/http/errors";
 
 /** 就近部署：Supabase 新加坡池化器 → sin1；pg 需要 Node 运行时；请求期动态执行 */
 export const runtime = "nodejs";
@@ -183,6 +184,7 @@ export async function GET(req: Request) {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error("[api/stations] 失败：", msg);
-    return NextResponse.json({ stations: [], error: msg.slice(0, 300) }, { status: 500 });
+    // ★ v3.6.0（S2）：保留 `stations: []` 数组形状（客户端按 j.stations 取值），只把 error 换成枚举。
+    return NextResponse.json({ stations: [], error: API_ERROR.upstream_error }, { status: 500 });
   }
 }

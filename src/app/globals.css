@@ -1731,17 +1731,6 @@ button[aria-disabled="true"] {
   }
 }
 
-/* ── 开发者门禁（/routes 对非开发者关闭；src/components/DevGate.tsx） ── */
-.devgate {
-  min-height: 40vh;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 2px;
-  padding: 24px 16px;
-}
-
 /* ══════════════════════════════════════════════════════════════════════
    ★ v1.1.8：预测卡片详情页（/card）与精简版外卡片
    用户口径：详情页承载全部信息；外卡片只留「决策坐哪条线」必需的。

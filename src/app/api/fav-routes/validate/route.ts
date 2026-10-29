@@ -23,6 +23,14 @@ import { NextResponse } from "next/server";
 import { getPool } from "@/lib/db";
 import { loadStatics } from "@/lib/recommend/query";
 import { mainCodeOf } from "@/lib/recommend/segment-lookup";
+import { API_ERROR, errorResponse } from "@/lib/http/errors";
+import { MAX_FAV_BODY_BYTES, readJsonLimited } from "@/lib/http/body-limit";
+import {
+  FAV_BUCKET_CAPACITY,
+  FAV_QPS,
+  RATE_BUCKET,
+  acquireToken,
+} from "@/lib/amap/rate-limit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -45,8 +53,18 @@ interface Body {
 
 export async function POST(req: Request) {
   try {
-    const body = (await req.json()) as Body;
-    const segs = Array.isArray(body.segs) ? body.segs : [];
+    // ★ v3.6.0（S2）护栏：`fav` 令牌桶 + 请求体 ≤ 16KB（与 `/api/fav-routes` 同一套，
+    //   三个收藏写接口共用配额，避免"绕开最严那个"）
+    const rl = await acquireToken(RATE_BUCKET.fav, FAV_QPS, FAV_BUCKET_CAPACITY);
+    if (!rl.ok) {
+      return errorResponse(API_ERROR.rate_limited, undefined, { "Retry-After": "1" });
+    }
+    const parsed = await readJsonLimited<Body>(req, MAX_FAV_BODY_BYTES);
+    if (!parsed.ok) {
+      return errorResponse(API_ERROR.bad_request, parsed.reason === "tooLarge" ? 413 : 400);
+    }
+    const body = parsed.value;
+    const segs = Array.isArray(body?.segs) ? body.segs : [];
     const errors: string[] = [];
     const warnings: string[] = [];
 
@@ -158,6 +176,7 @@ export async function POST(req: Request) {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error("[api/fav-routes/validate] 失败：", msg);
-    return NextResponse.json({ ok: false, errors: [`校验服务异常：${msg.slice(0, 200)}`], warnings: [] }, { status: 500 });
+    // ★ v3.6.0（S2）：异常原文只进服务端日志（原实现会回显 `msg.slice(0,200)` 给客户端）
+    return NextResponse.json({ ok: false, error: API_ERROR.upstream_error, errors: [], warnings: [] }, { status: 500 });
   }
 }

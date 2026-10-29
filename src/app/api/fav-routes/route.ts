@@ -21,6 +21,14 @@
  */
 import { NextResponse } from "next/server";
 import { getPool } from "@/lib/db";
+import { API_ERROR, errorResponse } from "@/lib/http/errors";
+import { MAX_FAV_BODY_BYTES, readJsonLimited } from "@/lib/http/body-limit";
+import {
+  FAV_BUCKET_CAPACITY,
+  FAV_QPS,
+  RATE_BUCKET,
+  acquireToken,
+} from "@/lib/amap/rate-limit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -65,12 +73,12 @@ export async function GET(req: Request) {
     const where: string[] = ["is_active = true"];
     const params: unknown[] = [];
     if (from) {
-      if (!SLUGS.has(from)) return NextResponse.json({ routes: [], error: "bad_from" }, { status: 400 });
+      if (!SLUGS.has(from)) return NextResponse.json({ routes: [], error: API_ERROR.bad_request }, { status: 400 });
       params.push(from);
       where.push(`from_slug = $${params.length}`);
     }
     if (to) {
-      if (!SLUGS.has(to)) return NextResponse.json({ routes: [], error: "bad_to" }, { status: 400 });
+      if (!SLUGS.has(to)) return NextResponse.json({ routes: [], error: API_ERROR.bad_request }, { status: 400 });
       params.push(to);
       where.push(`to_slug = $${params.length}`);
     }
@@ -86,7 +94,8 @@ export async function GET(req: Request) {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error("[api/fav-routes] GET 失败：", msg);
-    return NextResponse.json({ routes: [], error: msg.slice(0, 300) }, { status: 500 });
+    // ★ v3.6.0（S2）：异常原文只进服务端日志（原实现 `msg.slice(0,300)` 会回显 SQL/表名）
+    return NextResponse.json({ routes: [], error: API_ERROR.upstream_error }, { status: 500 });
   }
 }
 
@@ -104,13 +113,24 @@ interface PostBody {
 
 export async function POST(req: Request) {
   try {
-    const body = (await req.json()) as PostBody;
-    const r = body.route;
+    // ★ v3.6.0（S2）护栏二：`fav` 令牌桶（复用 `amap_rate_bucket`，无 DDL；3/s、容量 6）
+    const rl = await acquireToken(RATE_BUCKET.fav, FAV_QPS, FAV_BUCKET_CAPACITY);
+    if (!rl.ok) {
+      return errorResponse(API_ERROR.rate_limited, undefined, { "Retry-After": "1" });
+    }
+
+    // ★ v3.6.0（S2）护栏三：请求体 ≤ 16KB（超限 413）—— 先看 Content-Length，读后按字节复核
+    const parsed = await readJsonLimited<PostBody>(req, MAX_FAV_BODY_BYTES);
+    if (!parsed.ok) {
+      return errorResponse(API_ERROR.bad_request, parsed.reason === "tooLarge" ? 413 : 400);
+    }
+    const body = parsed.value;
+    const r = body?.route;
     if (!r?.routeKey || !r.fromSlug || !r.toSlug || !r.name || !Array.isArray(r.routeLabels) || !r.segs) {
-      return NextResponse.json({ ok: false, error: "bad_body" }, { status: 400 });
+      return errorResponse(API_ERROR.bad_request);
     }
     if (!SLUGS.has(r.fromSlug) || !SLUGS.has(r.toSlug)) {
-      return NextResponse.json({ ok: false, error: "bad_slug" }, { status: 400 });
+      return errorResponse(API_ERROR.bad_request);
     }
 
     const res = await getPool().query(
@@ -139,6 +159,7 @@ export async function POST(req: Request) {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error("[api/fav-routes] POST 失败：", msg);
-    return NextResponse.json({ ok: false, error: msg.slice(0, 300) }, { status: 500 });
+    // ★ v3.6.0（S2）：异常原文只进服务端日志（原实现 `msg.slice(0,300)` 会回显 SQL/表名）
+    return errorResponse(API_ERROR.upstream_error);
   }
 }
