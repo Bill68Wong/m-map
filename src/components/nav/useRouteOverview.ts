@@ -6,16 +6,20 @@
  * ── 职责（技术方案 §3.4）────────────────────────────────────────────────
  *   进入 detail pane 时并行取数并组装几何，供 `NavMap` 的 `overview` prop 绘制：
  *     (a) `POST /api/nav/detail-body`（含 `legs` 几何锚点）；
- *     (b) 各 distinct route 的 `GET /api/route-shapes`（polyline，GCJ-02）；
- *     (c) 各 **巴士** 乘车段的 `GET /api/route-vehicles`（按所选方向 `dir`）。
+ *     (b) 各 distinct route 的 `GET /api/route-shapes`（polyline，GCJ-02）。
  *   完成后：`buildColoredLegs(legs, shapesByRoute)` → `ColoredLeg[]` + 取景外包框 `box`。
+ *
+ * ── ★ v3.6.0 S4：**本 hook 不再拉车辆** ────────────────────────────────
+ *   原先这里还顺手拉各巴士段的 `route-vehicles`（(c) 段），但只在「进 detail」时拉**一次**
+ *   ⇒ 候车态地图上的车永远静止，「刷新」只更新列表不更新地图。
+ *   现在车辆**唯一来源 = `useRideTracking.mapVehicles`**（12s 帧驱动，候车态返回全部候选）。
+ *   ⇒ 不要在这里重新引入车辆请求，否则又会出现两个来源、两套刷新节奏。
  *
  * ── 降级铁律（永不阻塞地图）────────────────────────────────────────────
  *   · 单段 shapes 缺失 / 超容差 / 切割失败 ⇒ 该段 `degraded`（整线着色），其余照常；
- *   · 车辆请求失败 ⇒ 该段无车（不报错、不影响总览）；
  *   · detail-body 整体失败 ⇒ `legs=[]`（地图退回 OD 取景），详情 pane 自行显示失败 + 重试。
  *
- * ⚠️ 轻轨段无实时车辆（`route-vehicles` 对 `LRT-*` 返回空）⇒ 仅对 `kind==='bus'` 拉车。
+ * ⚠️ 轻轨段无实时车辆（`route-vehicles` 对 `LRT-*` 返回空）—— 与本节无关，车辆已不在此处取。
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -26,7 +30,6 @@ import {
 } from "@/lib/nav/route-overview";
 import type { RecommendCard } from "@/lib/recommend/types";
 import { useDetailBody, type DetailBody } from "./useDetailBody";
-import type { VehicleLite } from "./VehicleMarker";
 
 export interface OverviewBox {
   minLng: number;
@@ -34,8 +37,6 @@ export interface OverviewBox {
   maxLng: number;
   maxLat: number;
 }
-
-const VALID_STATES = new Set(["moving", "stopping", "terminal", "unknown"]);
 
 export interface UseRouteOverview {
   phase: "idle" | "loading" | "ready" | "failed";
@@ -45,8 +46,6 @@ export interface UseRouteOverview {
   legs: ColoredLeg[];
   /** 取景外包框（彩段 + 起终点）；无几何时为 null */
   box: OverviewBox | null;
-  /** 各巴士乘车段的在途车辆（已归一 status / company） */
-  vehicles: VehicleLite[];
   reload: () => void;
 }
 
@@ -63,7 +62,6 @@ export function useRouteOverview(
   const detail = useDetailBody(card, open);
   const [legs, setLegs] = useState<ColoredLeg[]>([]);
   const [box, setBox] = useState<OverviewBox | null>(null);
-  const [vehicles, setVehicles] = useState<VehicleLite[]>([]);
   const [geomReady, setGeomReady] = useState(false);
   const seqRef = useRef(0);
 
@@ -80,7 +78,6 @@ export function useRouteOverview(
       seqRef.current++;
       setLegs([]);
       setBox(null);
-      setVehicles([]);
       setGeomReady(false);
       return;
     }
@@ -119,53 +116,7 @@ export function useRouteOverview(
       setLegs(built);
       setBox(unionBox(paths, extra));
       setGeomReady(true);
-
-      // (c) 各巴士段的车辆（并行；no-store）
-      const busLegs = built.filter((l) => l.kind === "bus" && l.dir);
-      if (!busLegs.length) {
-        setVehicles([]);
-        return;
-      }
-      const lists = await Promise.all(
-        busLegs.map(async (leg): Promise<VehicleLite[]> => {
-          try {
-            const r = await fetch(
-              `/api/route-vehicles?code=${encodeURIComponent(leg.route)}&dir=${encodeURIComponent(leg.dir as string)}&kind=bus`,
-              { cache: "no-store" },
-            );
-            const j = (await r.json()) as {
-              company?: string;
-              badCar?: string[];
-              vehicles?: {
-                plate: string;
-                lat: number;
-                lng: number;
-                status?: string;
-                isLast?: boolean;
-                interval?: VehicleLite["interval"];
-                atStation?: VehicleLite["atStation"];
-              }[];
-            };
-            const bad = new Set(j.badCar ?? []);
-            return (j.vehicles ?? []).map((v) => ({
-              plate: v.plate,
-              lat: v.lat,
-              lng: v.lng,
-              status: bad.has(v.plate)
-                ? "lost"
-                : ((VALID_STATES.has(String(v.status)) ? String(v.status) : "unknown") as VehicleLite["status"]),
-              isLast: !!v.isLast,
-              interval: v.interval ?? null,
-              atStation: v.atStation ?? null,
-              company: j.company,
-            }));
-          } catch {
-            return [];
-          }
-        }),
-      );
-      if (id !== seqRef.current) return;
-      setVehicles(lists.flat());
+      // ★ v3.6.0 S4：车辆不在此处取 —— 唯一来源 = `useRideTracking.mapVehicles`（见文件头）
     })();
     // extra 由调用方 useMemo 稳定
   }, [open, card, detail.phase, legsInput, routeKey, extra]);
@@ -181,7 +132,6 @@ export function useRouteOverview(
     body: detail.body,
     legs,
     box,
-    vehicles,
     reload: detail.reload,
   };
 }

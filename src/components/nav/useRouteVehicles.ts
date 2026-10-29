@@ -14,9 +14,9 @@
  *     同一个 10 秒窗口；手动刷新在冷却中禁用，自动刷新始终放行（否则换向会看不到车）。
  *   · 信号丢失：车牌命中响应 `badCar` ⇒ `status = "lost"`（与后端 `status` 值正交合并）。
  */
-import { useCallback, useEffect, useRef, useState } from "react";
-import { REFRESH_COOLDOWN_SEC } from "./RefreshButton";
+import { useCallback, useRef, useState } from "react";
 import { errorTextOf } from "@/lib/ui/error-text";
+import { COOLDOWN_VEHICLE_SEC, useCooldown } from "./useCooldown";
 import type { VehicleLite } from "./VehicleMarker";
 import type { RouteLineItem } from "./RouteLinesSheet";
 
@@ -73,41 +73,22 @@ export function useRouteVehicles(): UseRouteVehicles {
   const [dirs, setDirs] = useState<string[]>([]);
   const [vehicles, setVehicles] = useState<VehicleLite[]>([]);
   const [fetchedAt, setFetchedAt] = useState<string | null>(null);
-  const [cooldownSec, setCooldownSec] = useState(0);
   const [fetching, setFetching] = useState(false);
   const [error, setError] = useState("");
   const [selected, setSelected] = useState<{ vehicle: VehicleLite; count: number } | null>(null);
 
-  const cdTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  /**
+   * ★ v3.6.0 S4：冷却改由 `useCooldown` 统一提供（时间戳口径，5s）。
+   *   原实现自带一个 `setInterval` 逐秒递减的 `setCooldownSec`（10s），
+   *   与 `useRideTracking` 各持一套 ⇒ 两处口径必然漂移，故整体删除换成本 hook。
+   */
+  const { sec: cooldownSec, start: startCooldown, reset: resetCooldown } = useCooldown(COOLDOWN_VEHICLE_SEC);
+
   /** 请求序号：忽略过期响应（快速换向时旧响应可能后到） */
   const seqRef = useRef(0);
   /** `picked` 的实时镜像：供事件回调读取最新值，避免在 setState 更新函数里塞副作用 */
   const pickedRef = useRef<PickedLine | null>(null);
   pickedRef.current = picked;
-
-  const stopCd = useCallback(() => {
-    if (cdTimer.current) {
-      clearInterval(cdTimer.current);
-      cdTimer.current = null;
-    }
-  }, []);
-
-  /** 重置并启动 10 秒冷却窗口（手动 / 自动刷新共用） */
-  const startCooldown = useCallback(() => {
-    stopCd();
-    setCooldownSec(REFRESH_COOLDOWN_SEC);
-    cdTimer.current = setInterval(() => {
-      setCooldownSec((s) => {
-        if (s <= 1) {
-          stopCd();
-          return 0;
-        }
-        return s - 1;
-      });
-    }, 1000);
-  }, [stopCd]);
-
-  useEffect(() => stopCd, [stopCd]);
 
   /** 拉取某线路某方向的在途车辆 */
   const fetchVehicles = useCallback(async (code: string, dir: string, kind: string) => {
@@ -172,9 +153,8 @@ export function useRouteVehicles(): UseRouteVehicles {
     setFetchedAt(null);
     setSelected(null);
     setError("");
-    stopCd();
-    setCooldownSec(0);
-  }, [stopCd]);
+    resetCooldown();
+  }, [resetCooldown]);
 
   const exitLine = useCallback(() => {
     setPicked(null);
@@ -183,9 +163,8 @@ export function useRouteVehicles(): UseRouteVehicles {
     setFetchedAt(null);
     setSelected(null);
     setError("");
-    stopCd();
-    setCooldownSec(0);
-  }, [stopCd]);
+    resetCooldown();
+  }, [resetCooldown]);
 
   /** `NavMap` 回报方向：首次补齐 `dir` 并自动刷新（副作用在 updater **之外**，避免 StrictMode 双执行） */
   const reportDirs = useCallback(
