@@ -1,18 +1,25 @@
 /**
- * 全自动上车判定 + 安全网（src/lib/nav/boarding-detect.ts，2026-09-25 · v2.14）
+ * 全自动上车判定 + 安全网（src/lib/nav/boarding-detect.ts，2026-09-25 · v2.14 · ★ v3.6.0 S3 重写）
  *
- * ── 职责（05-Spec §4.3 / 07 §1）────────────────────────────────────────
- *   把「车辆通道（R1）」与「GPS 通道（R2）」的判据抽成**纯函数**（可单测、可关开关），
- *   供 `useRideTracking` 调用：
- *     · `r1Of`      —— 车辆侧：车停靠/刚离开本上车站；
- *     · `r2Of`      —— GPS 侧：45s 窗口内投影 / 沿线位移 / 速度；
- *     · `autoBoardOf` —— 组合判定（巴士 R1 优先；轻轨仅 R2 收紧档）；
- *     · `anomalyOf` —— 安全网异常检出（A1 疑似未上车 / A2 疑似提前下车）。
+ * ── 职责（05-Spec §4.3 / 07 §1；★ v3.6.0 架构 §3.1）───────────────────
+ *   把判据抽成**纯函数**（可单测、可对拍），供 `useRideTracking` 调用：
+ *     · `r1Of`       —— 车辆侧（**★ v3.6.0 起不再作触发器**，仅用于候选排序/文案）；
+ *     · `auxOf`      —— 车辆辅助信号（只降门槛，**不得单独触发**）；
+ *     · `r2Of`       —— GPS 侧：45s 窗口内投影 / 沿线位移 / 速度；
+ *     · `autoBoardOf`—— 组合判定（★ **定位主导**；轻轨仅 R2 收紧档）；
+ *     · `detectPausedOf` —— 判定是否已「事实上停止」（AC-25a 的 `data-board-detect`）；
+ *     · `anomalyOf`  —— 安全网异常检出（A1 疑似未上车 / A2 疑似提前下车）。
+ *
+ * ── ★ v3.6.0 为什么改成「定位主导」（用户口径）───────────────────────
+ *   旧版 R1（车辆停靠/刚离上车站）是**触发器**：第一辆车到站就判「用户已上车」，
+ *   而用户可能还在路上 —— 实测高频误判。新版：R1 降级为**辅助**（只把位移门 ×0.6、
+ *   所需连续帧 3→2），单独出现**绝不**触发；真正的判据必须是「用户自己沿线在动」。
  *
  * ── 纪律 ──────────────────────────────────────────────────────────────
  *   · **client-safe 纯函数**：不 import `pg` / server-only；坐标一律 GCJ-02；
  *   · **宁可晚判、不误判**：保守阈值 + 冷却 + 单次会话单次自动；
- *   · 一切「对不上」都如实返回，**绝不猜测**（沿用项目铁律）。
+ *   · 一切「对不上」都如实返回，**绝不猜测**（沿用项目铁律）；
+ *   · 阈值/窗口/冷却的数值**只在本文件定义**（架构 §3.1 参数锁定表），组件只读不改。
  */
 import { cumDistM, distM, nearestOnPath, type LL } from "./route-overview";
 import { mainOf, rankBoardingVehicles, type TrackVehicle } from "./track";
@@ -28,34 +35,66 @@ export interface FixLite {
   ts: number;
 }
 
-/* ── R2 参数（07 §1.2 最终值）── */
+/* ══════════ 参数（★ v3.6.0 架构 §3.1 判定参数锁定表 = 唯一来源）══════════ */
+/** GPS 采样窗口 */
 export const R2_WINDOW_MS = 45_000;
-export const R2_TOL_M = 80; // 巴士 R2 投影容差
-export const R2_LRT_TOL_M = 60; // 轻轨收紧档
-export const R2_DISPLACE_M = 150; // 沿线位移（保留：R2Opts 缺省用）
-export const R2_SPEED_MIN_KMH = 8;
-export const R2_SPEED_MAX_KMH = 80;
-export const R2_LRT_SPEED_MIN_KMH = 12;
-export const R2_MIN_SAMPLES_WITH_R1 = 2; // 有 R1 佐证
-export const R2_MIN_SAMPLES_ALONE = 3; // R2 单独判定
-
-/* ── ★ 本批 R2 自适应 + 多帧确认（需求⑨ / AC-56）── */
-/** 位移下限（米）——按 dt 缩放后的**下限**，保证 GPS 慢速漂移不被误判 */
-export const R2_DISPLACE_MIN_M = 60;
-/** 巴士速度下限（原 8 太严 ⇒ 上车瞬间低速被判漏）；轻轨仍用 R2_LRT_SPEED_MIN_KMH */
-export const R2_SPEED_MIN_KMH_FLEX = 5.5;
+/** 巴士投影容差基准（与 `accuracy × R2_ACC_TOL_FACTOR` 取大） */
+export const R2_TOL_M = 80;
+/** 轻轨收紧档：轨道固定，容差可更小 */
+export const R2_LRT_TOL_M = 60;
 /** `tol = max(基准容差, accuracy × 1.5)` —— 手机在车内定位精度差时的自适应 */
 export const R2_ACC_TOL_FACTOR = 1.5;
-/** 多帧确认：连续命中帧数（R1 strong 立即切换，不等 streak） */
-export const R2_STREAK = 2;
-/** 精度门（米）：单帧 accuracy 超此值 ⇒ 该帧不可信，不参与 R2 */
+/** 精度门（米）：单帧 accuracy 超此值 ⇒ 该帧不可信，不参与判定 */
 export const R2_FIX_MAX_ACC_M = 150;
+/** 沿线位移下限（米）—— 防 GPS 慢速漂移 */
+export const R2_DISPLACE_MIN_M = 60;
+/**
+ * 巴士车速下限：**8 km/h 是步行与车速的分界**。
+ *
+ * ⚠️ 不要改回 5.5：位移门是 `max(R2_DISPLACE_MIN_M, (R2_SPEED_MIN_KMH_FLEX/3.6) × dt)`——
+ *   45s 满窗时 `5.5/3.6×45 = 68.75m`，与「5.5 km/h × 45s」是同一约束的两种写法 ⇒
+ *   位移门与速度门冗余，**速度门成了唯一实际生效的门**。
+ *   而 5.5 km/h 低于正常快走速度（6~7 km/h）⇒ 乘客步行沿线走向车站会被判成「已上车」
+ *   （即用户投诉的那类误判）。取 8 才能把「步行」与「车速」真正分开。
+ *   真实乘车（12 km/h 级）不受影响，无延迟。
+ */
+export const R2_SPEED_MIN_KMH_FLEX = 8;
+/** 轻轨车速下限（起速快，可抬高） */
+export const R2_LRT_SPEED_MIN_KMH = 12;
+/** 车速上限（超此值视为投影漂移，不是真随车移动） */
+export const R2_SPEED_MAX_KMH = 80;
+/** 有车辆佐证时所需连续命中帧数 */
+export const R2_STREAK_WITH_VEHICLE = 2;
+/** 纯定位判定所需连续命中帧数（也是单次判定的最少可信帧数） */
+export const R2_STREAK_ALONE = 3;
+/** 有车辆佐证时位移门的缩放系数（<1 = 降门槛，**不改** P1 邻线门与 P3 速度门） */
+export const R1_ACCEL_DISPLACE_FACTOR = 0.6;
+/** 无新帧多久视为「判定已暂停」（与 AC-25a 一致） */
+export const GPS_PAUSE_MS = 60_000;
+/**
+ * 启动宽限（毫秒）：点「开始导航」后的这段时间内**不判 paused**。
+ * 为什么需要：刚进导航时 GPS 缓冲还是空的，`detectPausedOf([], now)` 会立即返回 `true`，
+ * 界面在 1~3s 内先闪一句「定位不可用 · 判定已暂停」再转正常 —— 属于把"还没拿到第一帧"
+ * 误报成"定位不可用"。宽限期让第一帧有机会到达。
+ */
+export const BOARDING_START_GRACE_MS = 5_000;
 
 /** 状态切换后的冷却（毫秒）—— 防抖 + 防死循环 */
 export const SWITCH_COOLDOWN_MS = 20_000;
 /** 安全网：连续确认次数与最小间隔 */
 export const ANOMALY_CONFIRM = 2;
 export const ANOMALY_MIN_GAP_MS = 45_000;
+
+/* ── 以下三个为 v3.5.x 遗留常量：仅为向后兼容保留，★ v3.6.0 判定已不再读 ── */
+/** @deprecated v3.6.0：位移门改由 `adaptiveOpts` + `R1_ACCEL_DISPLACE_FACTOR` 计算 */
+export const R2_DISPLACE_M = 150;
+/** @deprecated v3.6.0：巴士速度下限统一用 `R2_SPEED_MIN_KMH_FLEX` */
+export const R2_SPEED_MIN_KMH = 8;
+/** @deprecated v3.6.0：判据改为「连续命中帧数」（`R2_STREAK_*`），单帧样本数恒为 `R2_STREAK_ALONE` */
+export const R2_MIN_SAMPLES_WITH_R1 = 2;
+/** 单次判定所需最少可信帧（与 `R2_STREAK_ALONE` 同值，保留旧名供 R2Opts 缺省） */
+export const R2_MIN_SAMPLES_ALONE = 3;
+
 
 /* ══════════════════════════ R1（车辆侧） ══════════════════════════ */
 
@@ -148,14 +187,53 @@ export function r2Of(fixes: FixLite[], colored: LL[], opts: R2Opts = {}): boolea
   const dtSec = (win[win.length - 1].ts - win[0].ts) / 1000;
   if (dtSec <= 0) return false;
   const kmh = (disp / dtSec) * 3.6;
-  return kmh >= vMin && kmh <= vMax;
+  /**
+   * 下限用**严格 `>`**（不是 `>=`）：`R2_SPEED_MIN_KMH_FLEX` = 8 是「步行 / 车速」的分界，
+   * 落在分界值上应归**步行**一侧。这一点必须严格，否则边界不确定：
+   *   45s 满窗时位移门 = `max(60, 8/3.6×45) = 100m`，而 8.0 km/h × 45s 的真实位移也正好 100m
+   *   —— 两条门同时取等号 ⇒ 用 `>=` 时 8.0 会命中（且是否命中取决于顶点量化误差，属偶发）。
+   * 上限仍用 `<=`（80 km/h 是"漂移"判据，取等不影响语义）。
+   */
+  return kmh > vMin && kmh <= vMax;
+}
+
+/* ══════════════════════════ 车辆辅助信号（★ v3.6.0 新增） ══════════════════════════ */
+
+/**
+ * 车辆辅助信号 —— **只用于降低门槛，本身绝不触发上车判定**。
+ *
+ * 为什么单独抽：`r1Of` 的 `strong`（车刚从本站开走）在旧版是**触发器**，导致
+ * 「第一辆车到站 ⇒ 判定用户已上车」的高频误判（用户可能还在路上）。
+ * v3.6.0 起它只做两件事：位移门 ×`R1_ACCEL_DISPLACE_FACTOR`、所需连续帧 3→2。
+ * 判据内核仍是「用户自己的定位沿线在动」（`r2Of`）。
+ *
+ * @param list      本帧车辆
+ * @param boardMain 本段上车站主码
+ * @param boardPos  上车站坐标（可空；用于多车歧义时的排序）
+ */
+export interface AuxSignal {
+  /** A1：存在车刚从本站开走（`interval.from` == 上车站）—— 最强佐证 */
+  strong: boolean;
+  /** A2：存在车停靠/挂靠本站（`status === "stopping"`） */
+  weak: boolean;
+  /** 佐证车牌（有歧义时为 null） */
+  plate: string | null;
+}
+
+export function auxOf(
+  list: TrackVehicle[],
+  boardMain: string,
+  boardPos?: { lng: number; lat: number } | null,
+): AuxSignal {
+  const r = r1Of(list, boardMain, boardPos);
+  return { strong: r.kind === "strong", weak: r.kind === "weak", plate: r.plate };
 }
 
 /* ══════════════════════════ 组合判定 ══════════════════════════ */
 
 export interface AutoBoardInput {
   legKind: "bus" | "lrt";
-  /** 几何不可用（colored < 2 或 degraded）⇒ 巴士退化为 R1-only；轻轨不自动 */
+  /** 几何不可用（colored < 2 或 degraded）⇒ **一律不自动判定**（v3.6.0 比旧版更严） */
   legDegraded: boolean;
   colored: LL[];
   boardMain: string;
@@ -167,7 +245,7 @@ export interface AutoBoardInput {
   nowMs: number;
   /** 本次会话该 leg 是否已自动触发过（单次会话单次） */
   autoUsed: boolean;
-  /** ★ 本批：调用方维护的连续命中帧数（多帧确认 R2_STREAK） */
+  /** 调用方维护的连续命中帧数 */
   streak?: number;
 }
 
@@ -175,21 +253,34 @@ export interface AutoBoardResult {
   hit: boolean;
   plate: string | null;
   source: "vehicle" | "gps";
-  reason: "r1" | "r1weak+r2" | "r2" | "none";
-  /** ★ 本批：更新后的连续命中帧数（`hit` 时累加，未命中归零） */
+  /** `gps` = 纯定位；`gps+vehicle` = 定位命中且有车辆佐证（**不代表车触发**） */
+  reason: "gps" | "gps+vehicle" | "none";
+  /** 更新后的连续命中帧数（`hit` 时累加，未命中归零） */
   streak: number;
+  /**
+   * ★ v3.6.0：本次判定要求的连续帧数。
+   *   调用方**唯一**的切换条件 = `hit && streak >= need`（不再按 `reason` 特判）。
+   */
+  need: number;
 }
 
 /** 未命中基线（`streak` 由调用方覆盖） */
-const NO_HIT: AutoBoardResult = { hit: false, plate: null, source: "vehicle", reason: "none", streak: 0 };
+const NO_HIT: AutoBoardResult = {
+  hit: false,
+  plate: null,
+  source: "gps",
+  reason: "none",
+  streak: 0,
+  need: R2_STREAK_ALONE,
+};
 
 /** 取「可信帧」（accuracy ≤ 精度门；缺失按 0 视为可信） */
 function trustedFixes(fixes: FixLite[]): FixLite[] {
   return fixes.filter((f) => !(Number.isFinite(f.accuracy) && f.accuracy > R2_FIX_MAX_ACC_M));
 }
 
-/** 由 GPS 采样自适应算 R2 阈值（tol 随 accuracy、displace 随 dt 缩放） */
-function adaptiveOpts(fixes: FixLite[], baseTolM: number): R2Opts {
+/** 由 GPS 采样自适应算 R2 阈值（tol 随 accuracy、displace 随 dt 缩放）—— 两项恒有值 */
+function adaptiveOpts(fixes: FixLite[], baseTolM: number): { tolM: number; displaceM: number } {
   const latest = fixes[fixes.length - 1] ?? null;
   const acc = latest && Number.isFinite(latest.accuracy) ? latest.accuracy : 0;
   const tol = Math.max(baseTolM, acc * R2_ACC_TOL_FACTOR);
@@ -199,61 +290,111 @@ function adaptiveOpts(fixes: FixLite[], baseTolM: number): R2Opts {
   return { tolM: tol, displaceM: displace };
 }
 
+/**
+ * 组合判定 —— ★ v3.6.0 **定位主导**（架构 §3.1）
+ *
+ * ```
+ * ① 硬门（任一不满足 ⇒ 不判）
+ *    G1 几何可用   G2 有 ≥3 帧可信 GPS   G3 冷却已过且本腿未自动触发过
+ * ② 定位三项（主判据）
+ *    P1 邻线投影 ≤ tol   P2 沿线位移 ≥ 门槛   P3 平均速度 ∈ [5.5, 80] km/h
+ * ③ 车辆辅助（只降门槛，不得单独触发）
+ *    A1/A2 成立 ⇒ 位移门 ×0.6、所需帧数 3→2
+ * ④ 出结论：hit = P1∧P2∧P3；调用方按 `hit && streak >= need` 切换
+ * ```
+ */
 export function autoBoardOf(input: AutoBoardInput): AutoBoardResult {
   const prevStreak = Math.max(0, input.streak ?? 0);
-  if (!AUTO_BOARDING_ENABLED) return { ...NO_HIT, streak: 0 };
-  if (input.autoUsed) return { ...NO_HIT, streak: 0 };
-  if (input.nowMs - input.lastSwitchTs < SWITCH_COOLDOWN_MS) return { ...NO_HIT, streak: 0 };
+  const noHit = (): AutoBoardResult => ({ ...NO_HIT, streak: 0 });
 
+  /* ① 硬门 G3：总开关 / 单次会话 / 冷却 */
+  if (!AUTO_BOARDING_ENABLED) return noHit();
+  if (input.autoUsed) return noHit();
+  if (input.nowMs - input.lastSwitchTs < SWITCH_COOLDOWN_MS) return noHit();
+
+  /* ① 硬门 G1：几何缺失 ⇒ 一律不自动判（旧版巴士会退化成 R1-only，那是误判来源） */
   const geomOk = input.colored.length >= 2 && !input.legDegraded;
-  const fixes = trustedFixes(input.fixes); // ★ 精度门：剔除不可信帧
+  if (!geomOk) return noHit();
 
+  /* ① 硬门 G2：定位主导 ⇒ 没有足够可信帧就不判 */
+  const fixes = trustedFixes(input.fixes);
+  if (fixes.length < R2_STREAK_ALONE) return noHit();
+
+  /* ── 轻轨：无逐车数据 ⇒ 仅 R2 收紧档（投影 ≤60m、速度 ≥12、≥3 帧、≥3 连续帧）── */
   if (input.legKind === "lrt") {
-    // 轻轨：仅 R2 收紧档（投影 ≤60m、速度 ≥12、采样 ≥3）；tol 随 accuracy 自适应
-    if (!geomOk) return { ...NO_HIT, streak: 0 };
     const opts = adaptiveOpts(fixes, R2_LRT_TOL_M);
     const hit = r2Of(fixes, input.colored, {
       tolM: opts.tolM,
       displaceM: opts.displaceM,
       speedMinKmh: R2_LRT_SPEED_MIN_KMH,
-      minSamples: R2_MIN_SAMPLES_ALONE,
+      minSamples: R2_STREAK_ALONE,
     });
-    return hit
-      ? { hit: true, plate: null, source: "gps", reason: "r2", streak: prevStreak + 1 }
-      : { ...NO_HIT, streak: 0 };
+    if (!hit) return noHit();
+    return {
+      hit: true,
+      plate: null,
+      source: "gps",
+      reason: "gps",
+      streak: prevStreak + 1,
+      need: R2_STREAK_ALONE,
+    };
   }
 
-  // 巴士：R1 优先
-  const r1 = r1Of(input.vehicles, input.boardMain, input.boardPos);
-  if (r1.kind === "strong") {
-    return { hit: true, plate: r1.plate, source: "vehicle", reason: "r1", streak: prevStreak + 1 };
-  }
-  if (!geomOk) return { ...NO_HIT, streak: 0 }; // 几何缺失 ⇒ 退化为 R1-only（已判定无 strong）
-
+  /* ── 巴士：定位主导 + 车辆辅助降门槛 ── */
+  const aux = auxOf(input.vehicles, input.boardMain, input.boardPos);
+  const assisted = aux.strong || aux.weak;
   const opts = adaptiveOpts(fixes, R2_TOL_M);
-  if (r1.kind === "weak") {
-    const ok = r2Of(fixes, input.colored, {
-      tolM: opts.tolM,
-      displaceM: opts.displaceM,
-      speedMinKmh: R2_SPEED_MIN_KMH_FLEX,
-      minSamples: R2_MIN_SAMPLES_WITH_R1,
-    });
-    if (ok) {
-      return { hit: true, plate: r1.plate, source: "vehicle", reason: "r1weak+r2", streak: prevStreak + 1 };
-    }
+  const displaceM = opts.displaceM * (assisted ? R1_ACCEL_DISPLACE_FACTOR : 1);
+  const need = assisted ? R2_STREAK_WITH_VEHICLE : R2_STREAK_ALONE;
+
+  const hit = r2Of(fixes, input.colored, {
+    tolM: opts.tolM,
+    displaceM,
+    speedMinKmh: R2_SPEED_MIN_KMH_FLEX,
+    minSamples: R2_STREAK_ALONE,
+  });
+  if (!hit) return noHit();
+
+  /**
+   * 车牌只在 **A1（车刚从本站开走）且唯一** 时锁定。
+   * ⚠️ A2（车正停靠在站）**不锁牌** —— 站里可能停着好几辆，锁错会让进度跟错站。
+   */
+  const lockedPlate = aux.strong ? aux.plate : null;
+  return {
+    hit: true,
+    plate: lockedPlate,
+    source: lockedPlate ? "vehicle" : "gps",
+    reason: lockedPlate ? "gps+vehicle" : "gps",
+    streak: prevStreak + 1,
+    need,
+  };
+}
+
+/* ══════════════════════════ 判定是否已暂停（AC-25a） ══════════════════════════ */
+
+/**
+ * 自动判定是否**事实上已停止**（纯函数，便于对拍）。
+ *
+ * 为什么需要：GPS 被拒权或长时间无帧时，系统已不再判定，但界面若仍写「正在检测车辆」，
+ * 用户会以为「车还没来」，实际是「我不看了」—— 这正是 AC-25a 要禁的
+ * 「把未判定渲染成正在判定」。
+ *
+ * ⚠️ 本函数**只管自动判定与文案**；地图蓝点仍走自己的冻结逻辑，两者不得合并成一个开关。
+ *
+ * @param startedAtMs 进入候车态的时刻（可选）。给了就在 `BOARDING_START_GRACE_MS` 内恒返回
+ *   `false` —— 避免刚点「开始导航」、第一帧还没到时闪一句"定位不可用"。
+ */
+export function detectPausedOf(fixes: FixLite[], nowMs: number, startedAtMs?: number | null): boolean {
+  // 启动宽限：还没拿到第一帧不等于定位不可用
+  if (startedAtMs != null && Number.isFinite(startedAtMs) && nowMs - startedAtMs < BOARDING_START_GRACE_MS) {
+    return false;
   }
-  // R2 单独（无车牌，进度来源 = GPS）
-  if (
-    r2Of(fixes, input.colored, {
-      tolM: opts.tolM,
-      displaceM: opts.displaceM,
-      speedMinKmh: R2_SPEED_MIN_KMH_FLEX,
-      minSamples: R2_MIN_SAMPLES_ALONE,
-    })
-  ) {
-    return { hit: true, plate: null, source: "gps", reason: "r2", streak: prevStreak + 1 };
-  }
-  return { ...NO_HIT, streak: 0 };
+  const latest = fixes[fixes.length - 1];
+  if (!latest) return true; // 一次定位都没拿到
+  if (nowMs - latest.ts > GPS_PAUSE_MS) return true; // 60s 无新帧 = 停了
+  // 连续 2 帧精度超门限 ⇒ 视为不可用（与 trustedFixes 同门限）
+  const tail = fixes.slice(-2);
+  return tail.length === 2 && tail.every((f) => Number.isFinite(f.accuracy) && f.accuracy > R2_FIX_MAX_ACC_M);
 }
 
 /* ══════════════════════════ 安全网 ══════════════════════════ */

@@ -38,6 +38,11 @@ export interface NavTrackBarProps {
   /** 是否轻轨段（决定纠错入口与来源文案） */
   lrt: boolean;
   traveling: boolean;
+  /**
+   * ★ v3.6.0（AC-25a）：自动上车判定的实际状态。
+   *   `paused`（拒权/超时/连续低精度）⇒ 文案必须说"已暂停"，**不得**再说"正在检测"。
+   */
+  boardDetect?: "on" | "paused";
   /** 安全网检出 */
   anomaly: "none" | "not_boarded" | "alighted";
   /** 状态提示（无车 / 丢信号 / 获取失败等；boarding/riding 可见） */
@@ -75,6 +80,7 @@ export default function NavTrackBar(props: NavTrackBarProps) {
     alarm,
     lrt,
     traveling,
+    boardDetect = "on",
     anomaly,
     note,
     freshSec,
@@ -107,7 +113,12 @@ export default function NavTrackBar(props: NavTrackBarProps) {
         等待上车 · <b>{boardLabel}</b>
       </>
     );
-    right = "正在检测车辆";
+    /**
+     * ★ v3.6.0（AC-25a）：判定已停止时**不得**再写「正在检测车辆」——
+     *   那会把"我不再看"渲染成"车还没来"。完整原因由下方 `note` 承担，
+     *   这里只给最短状态词，避免同一句话在状态行/提示行/按钮行说三遍。
+     */
+    right = boardDetect === "paused" ? "已暂停" : "正在检测车辆";
   } else if (phase === "riding") {
     if (alarm === "now") {
       left = (
@@ -136,7 +147,12 @@ export default function NavTrackBar(props: NavTrackBarProps) {
     anomaly === "not_boarded" ? "疑似还没上车" : anomaly === "alighted" ? "疑似已下车" : null;
 
   return (
-    <div className="nav-actions" data-nav-phase={phase} data-track-state={justAlighted ? "alighted" : phase}>
+    <div
+      className="nav-actions"
+      data-nav-phase={phase}
+      data-track-state={justAlighted ? "alighted" : phase}
+      data-board-detect={phase === "boarding" || phase === "off" ? boardDetect : undefined}
+    >
       <div className="nav-actions__staterow">
         <span className="nav-actions__dot" aria-hidden="true" />
         {left}
@@ -161,7 +177,9 @@ export default function NavTrackBar(props: NavTrackBarProps) {
             >
               {anomaly === "not_boarded" ? "我没上车" : "手动标记上车"}
             </button>
-            <span className="nav-actions__spacer nav-actions__hint">上车后自动开始跟踪</span>
+            <span className="nav-actions__spacer nav-actions__hint">
+              {boardDetect === "paused" ? "定位不可用，上车后请手动点左侧按钮" : "上车后自动开始跟踪"}
+            </span>
             <button type="button" className="btn btn--text btn--sm" onClick={onStop}>
               结束导航
             </button>
