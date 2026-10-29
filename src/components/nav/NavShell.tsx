@@ -441,15 +441,11 @@ export default function NavShell({
           navMode={navPhase !== "off"}
         />
 
-        {/* 顶置搜索条 + 提示条槽 */}
+        {/* 顶置搜索条 + 提示条槽（★ v3.6.0 AC-54：收藏带入横幅及其专用 props 已删除） */}
         <NavSearchBarSlot
           stage={stage}
           to={to}
-          from={from}
-          initialTo={initialTo}
-          initialFrom={initialFrom}
           error={!!rv.error}
-          myLocationLabel={MY_LOCATION}
           onOpenSearch={() => openSearch("dest")}
         />
       </div>
