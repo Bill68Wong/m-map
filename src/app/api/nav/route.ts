@@ -39,8 +39,32 @@ export const maxDuration = 30;
 const ZONE_VALUES = SCHOOL_ZONES.map((z) => z.value);
 const KIND_VALUES: NavPointKind[] = ["gps", "poi", "station", "place"];
 
-function numOf(sp: URLSearchParams, key: string): number | null {
-  const v = Number(sp.get(key));
+/**
+ * 取一个必需的数字参数；**未提供 / 空串 / 纯空白 / 非数字 ⇒ `null`**。
+ *
+ * ── ★ v3.6.0：修一个存在很久的 bug（v1.4.0 起）────────────────────────────
+ *   旧实现是 `const v = Number(sp.get(key)); return Number.isFinite(v) ? v : null;`
+ *   而 **`Number(null) === 0`、`Number("") === 0`** ⇒ 「没传参数」被当成坐标 `0`，
+ *   `pointOf()` 于是返回一个 `(lng=0, lat=0)` 的**看似合法**的点 ⇒ 上层那个
+ *   `if (!origin || !dest) return 400` **永远进不去**，空请求会一路走完整 `planNav`。
+ *
+ *   后果（实测）：`GET /api/nav`（完全无参数）**200 + 1.54s**，`transitMs=1332` ——
+ *   真的打了一次高德路径规划。这是**最省事的一种刷配额方式**（任何人都能刷），
+ *   与 AC-50 是同一件事的两面：一面是写接口防护，一面是只读接口的**成本放大**。
+ *
+ * ── 为什么先挡字符串再做 Number ──────────────────────────────────────────
+ *   `trim() === ""` 必须和 `null` 一起挡：`?fromLng=&fromLat=` 这种空值请求同样会变 0。
+ *   ⚠️ 显式传 `"0"` **仍返回 `0`**（合法数字 0）—— 本函数是通用取数，
+ *      不在这一层做「坐标是否在澳门」之类的**业务**判断（那会影响探针与跨岛测试）。
+ *
+ * 导出仅为让门禁/单测**直接调真实现**（`scripts/test-nav-params.ts`），
+ * 避免"复刻一份逻辑来测"导致实现改了测试还绿。Next 只把小写以外的
+ * HTTP 方法名（GET/POST/…）当路由，导出普通函数不产生新端点。
+ */
+export function numOf(sp: URLSearchParams, key: string): number | null {
+  const raw = sp.get(key);
+  if (raw === null || raw.trim() === "") return null;
+  const v = Number(raw);
   return Number.isFinite(v) ? v : null;
 }
 
