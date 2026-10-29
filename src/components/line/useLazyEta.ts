@@ -169,7 +169,18 @@ export function useLazyEta(stops: LineStop[], lineCode: string, kind: LineKind) 
     }, ETA_LIMITS.DEBOUNCE_MS);
   }, []);
 
-  /** 换方向 / 换线路 ⇒ 全部重置（缓存保留：同站台切回来不该再打一次 DSAT） */
+  /**
+   * 换方向 / 换线路 ⇒ 全部重置（**缓存保留**：同站台切回来不该再打一次 DSAT）
+   *
+   * ⚠️⚠️ `sent.current = 0`（硬闸计数随方向归零）是**有意的**，不要"修"成页面生命周期累计：
+   *   · `cache` 是 `useRef` ⇒ **跨方向保留**，flush 里**先查 60s 缓存**（`Date.now() - c.ts < CACHE_TTL_MS`），
+   *     命中即落结果、**不消耗 `sent` 额度**；
+   *   · ⇒ 60 秒内来回切方向 = 全是缓存命中，额度一分不花；只有超 60s 才会重新计入，
+   *     而那时数据本来已过期，重新请求是**必要**的；
+   *   · 若改成"一页生命周期累计"，用户来回切方向对比两条路线会**被自己的浏览行为锁死额度**
+   *     （切两三次就 30 次到顶、后半页永久无报站）—— 那是更差的体验。
+   *   评审判定：保持现状（见 S6 评审裁决 ②）。
+   */
   useEffect(() => {
     results.current.clear();
     visible.current.clear();
