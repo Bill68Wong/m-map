@@ -23,6 +23,18 @@
  *   ... --apply --rotate                                                      # 轮换密码
  *   ... --revoke                                                              # 撤销（删账号+策略）
  *
+ * ── ★ 密码语义（v3.6.0 修正，别再按旧文案理解）──────────────────────────
+ *   `--rotate` **真的控制行为了**（此前它只是个假开关：只改输出文案，`--apply` 照样
+ *   无条件重置密码 ⇒ 第二次 `--apply` 会静默作废已发给同学的密码）。现在的语义：
+ *
+ *     | 参数组合                 | 账号不存在     | 账号已存在                |
+ *     |--------------------------|----------------|---------------------------|
+ *     | 无 `--apply`（dry-run）   | 只打印计划     | 只打印计划（**不生成密码**）|
+ *     | `--apply`                | 建号 + 生成密码 | **不改密码**（幂等）      |
+ *     | `--apply --rotate`       | 建号 + 生成密码 | 轮换密码（旧密码立即失效）|
+ *
+ *   ⇒ 「重跑一次确认状态」用 `--apply` 是安全的；只有 `--rotate` 才会动密码。
+ *
  * ── ⚠️⚠️ 凭据提示（执行前必读）────────────────────────────────────────────
  *   本脚本会向 **stdout 打印一次新生成的 `dev_partner` 密码**
  *   （建号时必须把密码交给人，否则拿不到账号；写盘的日志里**已打码**，
@@ -126,16 +138,37 @@ async function main() {
   }
 
   // ── APPLY ──
-  const pw = genPassword();
+  //
+  // ★ v3.6.0 修复：`--rotate` 曾是**只改文案、不控制行为**的假开关 ——
+  //   只要带 `--apply`，账号已存在时也会无条件 `ALTER ROLE ... PASSWORD`，
+  //   于是第二次跑 `--apply`（本意是"幂等重跑"）会**静默作废**已发给同学的密码，
+  //   而对方收不到任何通知。现改为：
+  //     · 账号**不存在** ⇒ 必须建号 ⇒ 生成密码（唯一出口）
+  //     · 账号已存在 + **有 `--rotate`** ⇒ 生成新密码并轮换
+  //     · 账号已存在 + **无 `--rotate`** ⇒ **完全不动密码**（`pw = null`，也不打印密码）
+  const needNewPw = !exists || ROTATE;
+  const pw = needNewPw ? genPassword() : null;
+
+  say("");
+  // ── (b) 醒目提示：让人在执行前就知道这条命令会不会动密码 ──
+  say("⚠️ 本命令会修改 `dev_partner` 账号。");
+  say("   · 带 `--rotate` ⇒ 生成新密码，**旧密码立即失效**（同学需重新配置）");
+  say("   · 不带 `--rotate` 且账号已存在 ⇒ **不改密码**（可安全重复执行）");
   say("");
   say("② 执行中…");
+  if (exists && !ROTATE) {
+    say(`   ℹ️ 账号 ${ROLE} 已存在，**密码未改动**（要轮换请加 \`--rotate\`）`);
+  }
   try {
     await run("BEGIN");
     if (exists) {
-      await run(`ALTER ROLE ${ROLE} WITH LOGIN PASSWORD '${pw.replace(/'/g, "''")}'`);
-      say(`   ✅ 已更新账号 ${ROLE}${ROTATE ? "（密码已轮换）" : "（密码重置为新值）"}`);
+      if (ROTATE) {
+        await run(`ALTER ROLE ${ROLE} WITH LOGIN PASSWORD '${pw!.replace(/'/g, "''")}'`);
+        say(`   ✅ 已轮换账号 ${ROLE} 的密码（**旧密码已立即失效**）`);
+      }
+      // 无 --rotate ⇒ 不发 ALTER ROLE（这才是"幂等重跑"应有的行为）
     } else {
-      await run(`CREATE ROLE ${ROLE} WITH LOGIN PASSWORD '${pw.replace(/'/g, "''")}'`);
+      await run(`CREATE ROLE ${ROLE} WITH LOGIN PASSWORD '${pw!.replace(/'/g, "''")}'`);
       say(`   ✅ 已新建账号 ${ROLE}`);
     }
     // ⚠️ **不要**在这里 ALTER ROLE 去设 NOSUPERUSER / NOCREATEDB / NOBYPASSRLS ——
@@ -196,17 +229,24 @@ async function main() {
   say(`   账号属性：login=${attr.rolcanlogin} super=${attr.rolsuper} bypassrls=${attr.rolbypassrls} createdb=${attr.rolcreatedb} createrole=${attr.rolcreaterole}`);
 
   say("");
-  say("④ 发给同学的连接串（**只在下面显示一次，请立即保存**）");
-  say(`   postgresql://${ROLE}.${PROJ_REF}:${pw}@${POOLER_HOST}:${POOLER_PORT}/postgres`);
-  say("");
-  say("   ⚠️ 并告诉他把 .env 里这一行改成它（**其余照旧**）：");
-  say(`      DATABASE_URL_LOCAL=${"postgresql://" + ROLE + "." + PROJ_REF + ":" + pw + "@" + POOLER_HOST + ":" + POOLER_PORT + "/postgres"}`);
+  if (pw) {
+    // 只有**真的生成了新密码**才打印连接串（否则会把上一次的旧密码当成新的给出去）
+    say("④ 发给同学的连接串（**只在下面显示一次，请立即保存**）");
+    say(`   postgresql://${ROLE}.${PROJ_REF}:${pw}@${POOLER_HOST}:${POOLER_PORT}/postgres`);
+    say("");
+    say("   ⚠️ 并告诉他把 .env 里这一行改成它（**其余照旧**）：");
+    say(`      DATABASE_URL_LOCAL=${"postgresql://" + ROLE + "." + PROJ_REF + ":" + pw + "@" + POOLER_HOST + ":" + POOLER_PORT + "/postgres"}`);
+  } else {
+    say("④ 本次**未生成新密码**，故不打印连接串。");
+    say("   账号已存在且未加 `--rotate`：密码保持原样（上次发给同学的那个仍然有效）。");
+    say("   若要轮换：加 `--rotate` 重跑，新密码会立即生效、旧密码立即失效。");
+  }
 
   await c.release(); await pool.end();
 
-  // ⚠️ 输出文件里**打码**，不落明文
+  // ⚠️ 输出文件里**打码**，不落明文（pw 为 null 时无可打码，原样写出）
   fs.writeFileSync("D:/Projects/University/Studio/musttoukou/.verify/rls-partner.out.txt",
-    out.map((l) => l.replace(pw, "****（已打码）")).join("\n") + "\n", "utf8");
-  console.log("\n（写盘的日志里密码已打码）");
+    (pw ? out.map((l) => l.replace(pw, "****（已打码）")) : out).join("\n") + "\n", "utf8");
+  console.log(pw ? "\n（写盘的日志里密码已打码）" : "\n（本次未生成密码）");
 }
 main().catch((e) => { console.error("✗", e); process.exit(1); });
