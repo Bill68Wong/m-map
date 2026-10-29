@@ -21,6 +21,7 @@ import Icon from "@/components/ui/Icon";
 import { catchHintOf, directionNameOf, EtaText, macauClock, Row, TierBadge } from "@/components/RoutePieces";
 import StationStrip from "./StationStrip";
 import { lineNameOf } from "@/lib/route-label";
+import { errorTextOf } from "@/lib/ui/error-text";
 import { DEFAULT_ZONE, SCHOOL_ZONES, type CardDetailPayload, type SchoolZone } from "@/lib/recommend/types";
 
 export default function CardDetailClient({
@@ -39,14 +40,16 @@ export default function CardDetailClient({
   toLabel: string;
   zone: SchoolZone | null;
   rank?: number;
-  /** 保留（原「開始計時」入口已停用；`/card/page.tsx` 仍按原契约传入） */
-  authed: boolean;
   initial: CardDetailPayload | null;
   error: string | null;
 }) {
   const router = useRouter();
   const [data, setData] = useState<CardDetailPayload | null>(initial);
-  const [err, setErr] = useState<string | null>(error);
+  /**
+   * ★ v3.6.0：外部来的 `error` 可能是服务端枚举（`upstream_error` 等）⇒ 状态里**只存用户文案**，
+   *   原始枚举一律不上屏（见 `src/lib/ui/error-text.ts`）。服务端 props 与接口响应两条来源同处理。
+   */
+  const [err, setErr] = useState<string | null>(error ? errorTextOf(error) : null);
   const [openFold, setOpenFold] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -77,7 +80,7 @@ export default function CardDetailClient({
         setData(j);
         setErr(null);
       } else {
-        setErr(j.error);
+        setErr(errorTextOf(j.error));
       }
     } catch {
       setErr("重新整理失敗");
@@ -97,7 +100,8 @@ export default function CardDetailClient({
         </div>
         <div className="card rc-empty">
           <p className="t-body">
-            {err === "route_changed" ? "这条路线现在的班次变了，暂时算不出来。" : (err ?? "暂时没有资料。")}
+            {/* ★ v3.6.0：`route_changed` 的专属文案已统一由 `errorTextOf` 提供 ⇒ 此处不再分支 */}
+            {err ?? "暂时没有资料。"}
           </p>
           <Link
             className="btn btn--outline btn--sm"
@@ -338,8 +342,8 @@ export default function CardDetailClient({
         />
       </section>
 
-      {/* ⑥ 计时入口已停用（修复包 v2.2.1 第 5 条）：`/timer` 已冻结、`DevModeToggle` 不再渲染，
-          故此处不再挂 `CardDevActions`（组件文件与逻辑保留）。 */}
+      {/* ⑥ 计时入口已于 v3.6.0 彻底移除：`/timer` 下线（308 回首页）、`/api/timer*` 410、
+          `CardDevActions` 与开发者模式相关文件均已删除（见 ADR-106）。 */}
 
       <footer className="rc-footer">
         <p>

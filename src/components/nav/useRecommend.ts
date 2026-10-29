@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { RecommendCard } from "@/lib/recommend/types";
 import type { PrefMode } from "@/lib/recommend/score";
+import { errorTextOf } from "@/lib/ui/error-text";
 
 /** ★ 本批（需求⑧ / AC-52/53）：偏好档类型沿用后端 `score.ts`（唯一真源；避免跨层重复定义）。 */
 export type { PrefMode };
@@ -77,7 +78,8 @@ export function useRecommend(
       const res = await fetch(`/api/nav?${q}`, { cache: "no-store" });
       const j = (await res.json()) as NavResp;
       if (id !== reqIdRef.current) return;
-      if (!j.ok) throw new Error(j.error ?? "加载失败");
+      // ★ v3.6.0：`j.error` 是服务端枚举 ⇒ 先过 `errorTextOf`，`err` 会被 `RouteResultPane` 直接渲染
+      if (!j.ok) throw new Error(j.error ? errorTextOf(j.error) : "加载失败");
       setData({
         cards: j.cards ?? [],
         colors: j.colors ?? {},

@@ -11,14 +11,15 @@
  * 页脚：合规声明摘要 + 「關於」链接（四条红线的落地见 /about；推荐属派生值，必须注明算法）。
  *
  * ★ 修复包 v2.2.1（第 2 条 / 第 5 条）：
- *   · 「查看全部路线 → `/routes`」入口**已移除**（`/routes` 冻结、仍可直达，代码未删）；
- *   · `DevModeToggle` 门把手**不再渲染**（组件文件与逻辑保留）；
+ *   · 「查看全部路线 → `/routes`」入口**已移除**（v3.6.0 起 `src/app/routes/` 整目录已删除）；
+ *   · `DevModeToggle` 门把手与开发者模式**已在 v3.6.0 整体移除**；
  *   · 页脚「估算」字样改为「推算」（**不删该披露句** —— 条款 #7 要求说明计算方法）。
  */
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import RecommendCards from "./RecommendCards";
 import Icon from "./ui/Icon";
+import { errorTextOf } from "@/lib/ui/error-text";
 import type { RecommendCard, SchoolZone } from "@/lib/recommend/types";
 
 interface Payload {
@@ -88,8 +89,6 @@ export default function RecommendClient({
   fromLabel: string;
   toLabel: string;
   zone: SchoolZone | null;
-  /** 保留（原开发者入口已停用；`/recommend/page.tsx` 仍按原契约传入） */
-  authed: boolean;
   initial: Payload;
 }) {
   const [data, setData] = useState<Payload>(initial);
@@ -112,7 +111,8 @@ export default function RecommendClient({
         stats?: unknown;
         error?: string;
       };
-      if (!res.ok || !body.ok || !body.cards) throw new Error(body.error ?? "刷新失败");
+      // ★ v3.6.0：`body.error` 是服务端枚举 ⇒ 先过 `errorTextOf`（`e.message` 会被渲染到 `.rc-err`）
+      if (!res.ok || !body.ok || !body.cards) throw new Error(body.error ? errorTextOf(body.error) : "刷新失败");
       setData({
         cards: body.cards,
         colors: body.colors ?? initial.colors, // 线路色来自静态层，通常不变
