@@ -23,6 +23,8 @@
 import type { LineShape } from "@/lib/line/line-shared";
 
 export interface LineMapPaneProps {
+  /** 线路码（**只用于诊断日志**：方向缺 shape 时要能定位到是哪条线） */
+  routeCode?: string;
   /** 全部方向的走向（可能为空 = 无 shape 数据） */
   shapes: LineShape[];
   /** 当前方向（决定哪条画实线彩色） */
@@ -51,7 +53,7 @@ const W = 320;
 const H = 180;
 const PAD = 10;
 
-export default function LineMapPane({ shapes, dir, color, stops, loading }: LineMapPaneProps) {
+export default function LineMapPane({ routeCode, shapes, dir, color, stops, loading }: LineMapPaneProps) {
   const parsed = shapes.map((s) => ({ dir: s.dir, pts: parsePolyline(s.polyline) }));
   const all = parsed.flatMap((p) => p.pts);
 
@@ -84,6 +86,34 @@ export default function LineMapPane({ shapes, dir, color, stops, loading }: Line
 
   const dotStops = stops.filter((s) => s.lat != null && s.lng != null).slice(0, 120);
 
+  /**
+   * 当前方向要画实线的 shape。
+   *
+   * ── ★ 为什么需要兜底（v3.6.0 S6 评审裁决）──────────────────────────────
+   *   「每个站序方向都有对应 shape」是一条 **数据不变量**（实测成立：24 条双向线都有
+   *   2 条 shape、69 条单 shape 线 dir 完全对齐；`npm run check:shape-coverage` 会持续断言它）。
+   *   但**数据不变量不是代码保证** —— 它会被"下次跑采集脚本只抓到一半"破坏，而破坏时
+   *   **没有任何编译错误、类型错误、测试失败**；表现只是「地图少画一条线」，用户不会报 bug
+   *   （他没觉得缺什么）。⇒ 这里必须兜底，且必须留**能被看见**的痕迹。
+   *
+   *   兜底行为：退回画**第一条** shape 当当前方向（不确定方向，但至少不空白）。
+   */
+  const cur = parsed.filter((p) => p.dir === dir);
+  if (cur.length === 0 && parsed.length > 0) {
+    // ⚠️ 用 console.error 而非 warn：这是「数据管道出问题」的信号，不是轻微异常。
+    //    warn 会被当噪音过滤掉，而 S7 / 上线首周正是要靠它发现问题。
+    //    日志里必须带 code + 现有 dirs 列表，否则只看到"方向 1 无 shape"不知道是哪个线路。
+    console.error(
+      "[line-map] 方向 %s 无对应 shape（code=%s, 现有 dirs=%s）⇒ 退回画第一条。" +
+        "数据管道可能只抓到一半，请检查 fetch-route-shapes。",
+      dir,
+      routeCode ?? "?",
+      parsed.map((p) => p.dir).join(","),
+    );
+  }
+  const solid = cur.length > 0 ? cur : parsed.slice(0, 1);
+  const gray = parsed.filter((p) => !solid.includes(p));
+
   return (
     <div className="lp-map" data-map-state="ok">
       <svg
@@ -94,35 +124,31 @@ export default function LineMapPane({ shapes, dir, color, stops, loading }: Line
         aria-label="线路走向示意图"
         preserveAspectRatio="xMidYMid meet"
       >
-        {/* ① 整线灰虚（其余方向）—— 设计要求的双层语言底层 */}
-        {parsed
-          .filter((p) => p.dir !== dir)
-          .map((p) => (
-            <path
-              key={`gray-${p.dir}`}
-              d={toD(p.pts)}
-              fill="none"
-              stroke="var(--lp-map-gray, #9aa4ae)"
-              strokeWidth={2}
-              strokeDasharray="4 4"
-              strokeLinecap="round"
-              opacity={0.75}
-            />
-          ))}
-        {/* ② 当前方向实线彩色 —— 顶层 */}
-        {parsed
-          .filter((p) => p.dir === dir)
-          .map((p) => (
-            <path
-              key={`color-${p.dir}`}
-              d={toD(p.pts)}
-              fill="none"
-              stroke={color}
-              strokeWidth={3}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          ))}
+        {/* ① 整线灰虚（**非**当前实线的那几条）—— 设计要求的双层语言底层 */}
+        {gray.map((p) => (
+          <path
+            key={`gray-${p.dir}`}
+            d={toD(p.pts)}
+            fill="none"
+            stroke="var(--lp-map-gray, #9aa4ae)"
+            strokeWidth={2}
+            strokeDasharray="4 4"
+            strokeLinecap="round"
+            opacity={0.75}
+          />
+        ))}
+        {/* ② 当前方向实线彩色 —— 顶层（无对应 shape 时是兜底的第一条，见上方 cur 的注释） */}
+        {solid.map((p) => (
+          <path
+            key={`color-${p.dir}`}
+            d={toD(p.pts)}
+            fill="none"
+            stroke={color}
+            strokeWidth={3}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        ))}
         {/* ③ 站点小点（有坐标才画；最多 120 个，防 78 站 × 复杂路径拖慢渲染） */}
         {dotStops.map((s, i) => (
           <circle
