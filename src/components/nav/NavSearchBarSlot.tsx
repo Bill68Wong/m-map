@@ -5,7 +5,8 @@
  *
  * · 搜索条：只在「非全屏搜索」时出现；面板打开期间 200ms 淡出（`body[data-sheet=open]`）；
  * · ★ v3.3.0（AC-114）：右上角原「已选」位改**「收藏地点」入口**（确认选点后出现；44 热区；已/未收藏双态）；
- * · 收藏带入提示条：可出发态且未选出发地时显示；
+ * · ★ v3.6.0（AC-54）：**收藏带入提示条已删除** —— 收藏页选点进入导航时不再出现该横幅；
+ *   起终点预填仍由 `NavShell` 的 `initialFrom/initialTo` 负责（本组件不再需要这三个 prop）；
  * · 车辆位置获取失败提示：不阻塞地图与线路走向。
  *
  * ⚠️ DOM 结构（v3.3.0）：搜索条由 `<button>` 改 **`<div>` + 内部主按钮 `<button.nav-searchbar__main>`**
@@ -25,23 +26,15 @@ import type { NavPoint } from "@/lib/nav/types";
 export interface NavSearchBarSlotProps {
   stage: "map" | "search" | "panel";
   to: NavPoint | null;
-  from: NavPoint | null;
-  initialTo: NavPoint | null;
-  initialFrom: NavPoint | null;
   /** 车辆位置获取失败 */
   error?: boolean;
-  myLocationLabel: string;
   onOpenSearch: () => void;
 }
 
 export default function NavSearchBarSlot({
   stage,
   to,
-  from,
-  initialTo,
-  initialFrom,
   error = false,
-  myLocationLabel,
   onOpenSearch,
 }: NavSearchBarSlotProps) {
   const fav = useCombos();
@@ -117,12 +110,7 @@ export default function NavSearchBarSlot({
         </div>
       )}
 
-      {/* 带入收藏提示条（可出发态才显示） */}
-      {initialTo && stage === "panel" && !from && (
-        <div className="nav-banner t-label" role="status">
-          已带入收藏：{initialFrom?.label ?? myLocationLabel} → {initialTo.label}
-        </div>
-      )}
+      {/* ★ v3.6.0（AC-54）：收藏带入横幅（原渲染在可出发态）已整块删除 */}
 
       {/* 车辆位置获取失败提示（不阻塞地图与线路走向） */}
       {error && (
