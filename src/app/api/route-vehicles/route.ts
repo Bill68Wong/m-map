@@ -59,7 +59,7 @@ interface Vehicle {
   lat: number;
   /** GCJ-02 经度 */
   lng: number;
-  speed: number | null;
+  /** ★ v3.6.0：`speed` 已从出口删除（DSAT 该字段延迟极大、不可信，不做任何参考） */
   status: "moving" | "stopping" | "terminal" | "unknown";
   isLast: boolean;
   interval: { from: StopRef; to: StopRef } | null;
@@ -95,7 +95,7 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   });
 }
 
-/** 速度归一：空串/非数 → null（DSAT 该字段本身不可靠，仅展示参考） */
+/** 数值归一：空串/非数 → null（用于 lat/lng；DSAT 的 `speed` 已于 v3.6.0 停用，不再经此归一） */
 function numOrNull(v: unknown): number | null {
   if (v === null || v === undefined || v === "") return null;
   const n = Number(v);
@@ -231,7 +231,6 @@ export async function GET(req: NextRequest) {
         busType: b.busType != null ? String(b.busType) : null,
         lat: gcj.lat,
         lng: gcj.lng,
-        speed: numOrNull(b.speed),
         status,
         isLast: !!lastBusPlate && plate === lastBusPlate,
         interval,

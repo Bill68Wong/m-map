@@ -26,8 +26,6 @@ export interface VehicleLite {
   /** GCJ-02 */
   lat: number;
   lng: number;
-  /** km/h（接口缺省为 null） */
-  speed?: number | null;
   status: "moving" | "stopping" | "terminal" | "unknown" | "lost";
   isLast?: boolean;
   /** 精确行驶区间（报站接口给；失败为 null） */

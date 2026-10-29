@@ -16,6 +16,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { REFRESH_COOLDOWN_SEC } from "./RefreshButton";
+import { errorTextOf } from "@/lib/ui/error-text";
 import type { VehicleLite } from "./VehicleMarker";
 import type { RouteLineItem } from "./RouteLinesSheet";
 
@@ -26,7 +27,6 @@ interface RawVehicle {
   plate: string;
   lat: number;
   lng: number;
-  speed?: number | null;
   status?: string;
   isLast?: boolean;
   interval?: VehicleLite["interval"];
@@ -128,7 +128,8 @@ export function useRouteVehicles(): UseRouteVehicles {
       const j = (await r.json()) as VehiclesResponse;
       if (seq !== seqRef.current) return; // 过期响应，丢弃
       if (j.error) {
-        setError(j.error);
+        // ★ v3.6.0：`j.error` 是服务端枚举 ⇒ 存用户文案（当前只当布尔用，但不留英文枚举在这个字段里）
+        setError(errorTextOf(j.error));
         setVehicles([]);
         setFetchedAt(null);
         return;
@@ -143,7 +144,6 @@ export function useRouteVehicles(): UseRouteVehicles {
           plate: v.plate,
           lat: v.lat,
           lng: v.lng,
-          speed: v.speed ?? null,
           status,
           isLast: !!v.isLast,
           interval: v.interval ?? null,

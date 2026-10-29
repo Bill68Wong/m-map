@@ -3,8 +3,11 @@
 /**
  * 车辆信息卡（src/components/nav/VehicleCard.tsx，v2.10.0）
  *
- * ── 内容（Spec AC-06）─────────────────────────────────────────────────
- *   状态 / 车速 / 行驶区间（站号+站名 → 站号+站名）/ 车牌 / 数据时间。
+ * ── 内容（Spec AC-06；★ v3.6.0 AC-20 起不再含「车速」）────────────────
+ *   状态 / 行驶区间（站号+站名 → 站号+站名）/ 车牌 / 数据时间。
+ *
+ * ★ v3.6.0（AC-20）：DSAT 的 `speed` 延迟极大、不可信 ⇒ 卡片**不再展示任何速度数值**
+ *   （原「N km/h」行已删除；接口出口与前端类型也同步删除该字段，避免复活）。
  *
  * ── 设计裁定（设计师已论证，务必遵守）────────────────────────────────
  *   「行驶区间」**只表方向**：实心点 →（虚线）→ 空心点。
@@ -52,7 +55,6 @@ export default function VehicleCard({
 }: VehicleCardProps) {
   const state = vehicle.status;
   const stateLabel = VEHICLE_STATE_LABEL[state] ?? "状态未知";
-  const speed = typeof vehicle.speed === "number" ? `${vehicle.speed} km/h` : "—";
   const interval = vehicle.interval;
   const at = vehicle.atStation;
 
@@ -92,13 +94,7 @@ export default function VehicleCard({
           </span>
         </div>
 
-        {/* 车速（运营商行已按用户口径移除） */}
-        <div className="nav-vehicle-card__row">
-          <span className="nav-vehicle-card__k t-label">
-            <Icon name="gauge" size={16} /> 车速
-          </span>
-          <span className="nav-vehicle-card__v">{speed}</span>
-        </div>
+        {/* ★ v3.6.0（AC-20）：原「车速 km/h」行已删除 —— 该字段延迟极大、不可信，不再作为任何参考 */}
 
         {/*
           ★ v2.10.1（用户口径）：**区间改为两行**（站号+站名 ‖ 站号+站名）

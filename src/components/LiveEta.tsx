@@ -43,7 +43,6 @@ interface EtaNearest {
   atStation: string;
   atStationName: string;
   status: string | null; // '1' 停靠挂载站 / '0' 已离挂载站驶向下一站（v0.8.4 口径）
-  speed: string | number | null;
 }
 
 interface EtaResult {
