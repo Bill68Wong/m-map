@@ -12,6 +12,12 @@ function resolveConnStr(): string | undefined {
   return (
     (process.env.NODE_ENV === "production"
       ? process.env.DATABASE_URL
+      // ⚠️ 换数据库密码时，`DATABASE_URL_LOCAL` 与 `DATABASE_URL` **两处都要改**。
+      //    LOCAL 在这里**优先于** DATABASE_URL，若只改了 DATABASE_URL：
+      //    生产正常、本地 dev 却用旧密码连不上 —— 这种「只有本地坏」最难排查
+      //    （看起来像代码问题，实际是 .env 少改一处）。
+      //    当前仓库 `.env` 只配了 DATABASE_URL（无 LOCAL），故本机无此风险；
+      //    但任何人若自行加了 LOCAL，必须同步。
       : process.env.DATABASE_URL_LOCAL || process.env.DATABASE_URL) || undefined
   );
 }
