@@ -41,7 +41,13 @@ import {
   type PoiCallHook,
 } from "@/lib/amap/poi";
 import type { LatLng } from "@/lib/amap/coord";
-import type { PoiPendingMatch, PoiSearchResult, PoiSuggestResponse, PoiSource } from "@/lib/nav/types";
+import type {
+  PoiPendingMatch,
+  PoiSearchResult,
+  PoiSuggestResponse,
+  PoiSource,
+  RouteSuggestion,
+} from "@/lib/nav/types";
 import { normalizeQuery } from "@/lib/shared/normalize";
 import { aliasToResult, resolveAliases } from "./alias-resolve";
 import { circuitState, recordSearchCall } from "./quota";
@@ -72,6 +78,11 @@ export interface LocalSuggest {
   results: PoiSearchResult[];
   /** 本地命中但**无坐标**（选中需走高德确认） */
   pending: PoiPendingMatch[];
+  /**
+   * 线路建议（v3.6.0 · AC-40/41）—— **独立分区**，与 `results` / `pending` 互不干扰。
+   * 最多 3 条，按 score 降序；无匹配时为空数组（由 `suggest()` 决定是否下发该键）。
+   */
+  routes: RouteSuggestion[];
 }
 
 // ─────────────────────────── 进程内 TTL 缓存 ───────────────────────────
@@ -117,10 +128,23 @@ export async function suggestLocal(query: string, opts: SuggestOptions = {}): Pr
   try {
     matches = await resolveAliases(query, { userPos: opts.userPos, limit: opts.limit ?? 12 });
   } catch {
-    return { results: [], pending: [] }; // 本地库不可用 → 退化为「未命中」（不抛错）
+    return { results: [], pending: [], routes: [] }; // 本地库不可用 → 退化为「未命中」（不抛错）
   }
   const results: PoiSearchResult[] = [];
   const pending: PoiPendingMatch[] = [];
+  /**
+   * 线路建议（v3.6.0 · AC-40/41）。
+   *
+   * ★ 历史：2026-09-21 的「搜索优化」把 `route` 匹配**整条丢弃**（见下方 `continue` 的理由）；
+   *   v3.6.0 起改为**收集到独立数组** —— 它们仍然**不进 `results`**（那个契约不能动，
+   *   否则「输入 25 就把 25 路巴士当终点」的老问题会回来），但可以在搜索结果里
+   *   以**独立分区**的形式让用户点进「线路全景页」（AC-41）。
+   *   ⇒ 语义从「丢弃」变成「分流」：`results` 仍只装目的地，线路走 `routes`。
+   */
+  const routes: RouteSuggestion[] = [];
+  const seenRoute = new Set<string>();
+  /** 线路分区最多几条（AC-40：3 条，再多会盖住真正的地点结果） */
+  const MAX_ROUTES = 3;
   const seen = new Set<string>();
   // ★ 去重：同站多站台（M1/2·M1/3·M1/4…）在 UI 里应合成一行 ⇒ 按【主码】去重（保留得分最高者，
   //   因 matches 已按 score 降序，先到者即最优）；place/poi 按显示名去重。
@@ -128,11 +152,30 @@ export async function suggestLocal(query: string, opts: SuggestOptions = {}): Pr
     m.targetKind === "station" || m.targetKind === "lrt_station"
       ? `${m.targetKind}|${mainCodeOf(m.targetCode)}`
       : `${m.targetKind}|${m.nameTc}`;
+  // matches 已按 score 降序 ⇒ 先到者即分数最高、也是 `code` 最该保留的那个
   for (const m of matches) {
+    // ★★ v3.6.0：`route` 不再丢弃，改走独立分区（见 `routes` 的注释）。
+    //    注意**先收集再 continue**：`routes` 不受下方「只有站点进下拉」的约束。
+    if (m.targetKind === "route") {
+      const code = (m.targetCode || "").trim();
+      if (!code || seenRoute.has(code)) continue;
+      if (routes.length >= MAX_ROUTES) continue; // 已满，只是不再追加（不 break：让后续站点匹配继续）
+      seenRoute.add(code);
+      routes.push({
+        code,
+        name: m.nameTc || code,
+        // 与 `/api/route-stops`、`line-shared.ts#LineKind` 同口径
+        kind: code.startsWith("LRT-") ? "lrt" : "bus",
+        score: m.score,
+      });
+      continue;
+    }
     // ★ 搜索优化（2026-09-21，产品口径）：下拉候选**只允许巴士站 / 轻轨站** ——
-    //   线路名（`route`）、已知地点（`place`，如校内部位/口岸）、泛 POI（`poi`）**一律不进下拉**。
+    //   线路名（`route`，上方已分流到 routes）、已知地点（`place`，如校内部位/口岸）、
+    //   泛 POI（`poi`）**一律不进下拉**。
     //   理由：
-    //     ① 线路名不是「想去的地点」，且造成「输入 25 就返回 25 路巴士」的困惑（产品实测）；
+    //     ① 线路名不是「想去的地点」，且造成「输入 25 就返回 25 路巴士」的困惑（产品实测）
+    //        ⇒ 故只进 `routes` 分区、绝不进 `results`（否则会变成"把 25 路当终点"）；
     //     ② 泛 POI 会带来**同名歧义** —— 实测「大三巴」会命中媽閣站旁 445m 的**同名餐厅**
     //        （「大三巴美食」）：终点被带到离大三巴牌坊 1.5km 处，做出「媽閣站下车步行数分钟」
     //        的假方案 ⇒ 用户在到达前 1.5km 就以为快到了 ✗；
@@ -156,7 +199,8 @@ export async function suggestLocal(query: string, opts: SuggestOptions = {}): Pr
     }
   }
   results.sort((a, b) => b.score - a.score);
-  return { results, pending };
+  // routes 天然有序（matches 已按 score 降序、先到者先 push）⇒ 无需再排
+  return { results, pending, routes };
 }
 
 // ─────────────────────────── 第二段：高德（消耗配额） ───────────────────────────
@@ -270,6 +314,12 @@ export async function suggest(
     pending: local.pending,
     quotaConsumed: 0,
   };
+  // ★ v3.6.0（AC-40）：线路分区在 **type / enter 两种模式下都下发**（打字阶段就要能看见）。
+  //   无匹配时**不给这个键**（不是空数组）—— 前端按 `?.length` 判断，无键天然不渲染分区标题。
+  //   线路**不参与**下方高德合并与 pending 去重：它不是目的地，混进 `results` 会破坏排序契约
+  //   并把"输入 25"重新变成"把 25 路当终点"。⚠️ 高德可能出现同名"XX路"POI，那是**地点**，
+  //   留在 `results` 里是对的（用户点它当终点），与线路分区并存不冲突。
+  if (local.routes.length) resp.routes = local.routes;
 
   if (opts.mode === "type") {
     // 本地完全无命中（有坐标/无坐标都没有）且输入 ≥2 字符 → 灰字提示「按搜索」

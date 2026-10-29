@@ -46,7 +46,15 @@ export interface NavPoint {
 export type PoiSource = "local" | "amap-inputtips" | "amap-text";
 
 /** 结果类型 */
-export type PoiKind = "station" | "lrt_station" | "poi" | "place";
+/**
+ * 搜索结果种类。
+ *
+ * ★ v3.6.0（AC-40）：新增 `"route"` —— **线路结果**不再混进 `results`，
+ *   而是走独立的 `PoiSuggestResponse.routes`（见该字段注释）。
+ *   ⚠️ 加了这一项后，`Record<PoiKind, string>` 的徽章文案表会**编译报错** ——
+ *      这是**有意的护栏**（漏写文案在运行时会显示成「undefined」，很难在走查中发现）。
+ */
+export type PoiKind = "station" | "lrt_station" | "poi" | "place" | "route";
 
 /** 一条 POI 搜索结果（确认后即成为 transit 的 destination） */
 export interface PoiSearchResult {
@@ -69,6 +77,35 @@ export interface PoiSearchResult {
   /** 与用户当前位置的距离（米）；未知则不填（inputtips 无 dist，见调研 §6 坑#8） */
   distM?: number;
   /** 排序分（越大越靠前；本地命中普遍高于高德） */
+  score: number;
+}
+
+/**
+ * 线路建议（`/api/poi/suggest` 的 `routes[]`，v3.6.0 · AC-40/41 · S6）
+ *
+ * ── ⚠️⚠️ 为什么**不能**复用 `PoiSearchResult` ────────────────────────────
+ *   `PoiSearchResult` 的 `lng` / `lat` 是**必填 number**（它代表"一个可以去的地点"）。
+ *   而**线路不是地点** —— `poi_aliases` 里 106 条 `target_kind='route'` 的行
+ *   **`lng`/`lat` 全部为 null**（实测）。硬塞进 `PoiSearchResult` 只有两条路：
+ *     ① 给假坐标（骗下游：万一被当终点用，会把用户导到几内亚湾 / 某个默认点）；
+ *     ② 把 `lng`/`lat` 改成可选（波及所有把搜索结果当目的地的调用点，风险极大）。
+ *   ⇒ 定义**独立类型**，字段就是前端点线路、渲染徽章所需的全部信息。
+ *
+ * ── 与 `PoiKind` 的关系 ────────────────────────────────────────────────
+ *   **不往 `PoiKind` 里加 `"route"`**：那样会让 `Record<PoiKind, string>`（如
+ *   `TYPE_LABEL`）全部编译报错，而线路**从不进入 `results`/`pending`**，
+ *   加进去只会制造"线路是一种 POI"的误解。这里的 `kind` 用 `bus | lrt`，
+ *   与 `/api/route-stops`、`lib/line/line-shared.ts#LineKind` **同口径**，
+ *   前端据此分「巴士线路 / 轻轨线路」两区（AC-40）。
+ */
+export interface RouteSuggestion {
+  /** 线路码原文（`26` / `51A` / `LRT-氹仔线`）—— 前端跳 `/line/[code]` 时必须 `encodeURIComponent` */
+  code: string;
+  /** 线路显示名（繁体官方原文，**不做简繁转换**；巴士即线路码本身） */
+  name: string;
+  /** 载具种类（决定分区与徽章样式） */
+  kind: "bus" | "lrt";
+  /** 别名匹配分（越大越靠前，与 `results` 同一套打分） */
   score: number;
 }
 
@@ -127,6 +164,20 @@ export interface PoiSuggestResponse {
   amapCircuitOpen?: boolean;
   /** 本次消耗的搜索配额次数（回车命中缓存时为 0） */
   quotaConsumed?: number;
+  /**
+   * 线路建议（v3.6.0 · AC-40/41）：**独立分区**，不进 `results`。
+   *
+   * ── 为什么单独一个字段而不是混进 `results` ──────────────────────────────
+   *   `results` 的语义是「可以去的目的地」，顺序与内容被多个调用点依赖（含高德合并、
+   *   pending 去重）。把线路塞进去会破坏「本地优先 → 近者优先」的排序契约。
+   *
+   * ── 契约细节 ───────────────────────────────────────────────────────────
+   *   · 最多 **3** 条，按 `score` 降序；
+   *   · **无匹配时不给这个键**（不是空数组）—— 前端用 `?.length` 判断，天然满足
+   *     「无结果就不渲染分区标题」；
+   *   · `mode=type`（打字）与 `mode=enter`（回车）**都给**（AC-40 要求打字阶段可见）。
+   */
+  routes?: RouteSuggestion[];
 }
 
 // ─────────────────────────── 站码映射 ───────────────────────────
