@@ -54,7 +54,17 @@ export default function LineClient({ initial }: LineClientProps) {
   const router = useRouter();
   const [data, setData] = useState<RouteStopsOk>(initial);
   const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
+  /**
+   * ★ v3.6.0（AC-41 配套）：错误**分两类**，因为用户的下一步动作不同：
+   *   · `notfound` —— 这条线路**不存在**（输错码 / 已停运）。
+   *     给「重试」等于骗用户"再等等就好了"，而再试一万次也不会有 ⇒ 只给**返回搜索**。
+   *   · `error` —— 服务真的挂了（500/502），重试是有意义的。
+   *
+   * 后端在 `/api/route-stops` 特意**保留 404 状态码**就是为这个区分留的口子
+   * （见该 route 文件头「HTTP 语义」）。只按 `!r.ok` 一律译成「稍后再试」会把两者压平，
+   * 属于把"可恢复"与"不可恢复"混为一谈。
+   */
+  const [err, setErr] = useState<{ kind: "notfound" | "error"; text: string } | null>(null);
 
   const [shapes, setShapes] = useState<LineShape[]>([]);
   const [mapLoading, setMapLoading] = useState(true);
@@ -120,6 +130,11 @@ export default function LineClient({ initial }: LineClientProps) {
     try {
       const qs = new URLSearchParams({ code, dir: nextDir });
       const r = await fetch(`/api/route-stops?${qs}`, { cache: "no-store" });
+      /** ★ 404 = 该方向不存在（或线路已停运）⇒ **不可恢复**，与「服务故障」分开报 */
+      if (r.status === 404) {
+        setErr({ kind: "notfound", text: "找不到这条线路" });
+        return;
+      }
       if (!r.ok) throw new Error(errorTextOf("upstream_error"));
       const j = (await r.json()) as RouteStopsResp;
       if (!j.ok) throw new Error(errorTextOf(j.error));
@@ -127,7 +142,10 @@ export default function LineClient({ initial }: LineClientProps) {
       // 设计 §2.8：切向后滚动位置回到顶部
       window.scrollTo({ top: 0, behavior: "auto" });
     } catch (e) {
-      setErr(e instanceof Error ? e.message : errorTextOf("upstream_error"));
+      setErr({
+        kind: "error",
+        text: e instanceof Error ? e.message : errorTextOf("upstream_error"),
+      });
     } finally {
       setBusy(false);
       switching.current = false;
@@ -184,9 +202,31 @@ export default function LineClient({ initial }: LineClientProps) {
       {isLrt && <p className="lp-notice">暂无实时车辆数据</p>}
 
       {err && (
-        <p className="lp-notice lp-notice--err" role="alert">
-          {err}
-        </p>
+        <div className="lp-notice lp-notice--err" role="alert">
+          <p className="lp-notice__txt">{err.text}</p>
+          {/*
+            ★ 两类错误的动作**必须不同**：
+              · notfound ⇒ 不提供「重试」（再试也没用），只给「返回搜索」重新选线路；
+              · error    ⇒ 给「重试」，但**不做自动轮询**（避免故障时疯狂打后端）。
+          */}
+          <div className="lp-notice__acts">
+            {err.kind === "error" && (
+              <button type="button" className="btn btn--outline btn--sm" onClick={() => void switchDir()}>
+                重试
+              </button>
+            )}
+            <button
+              type="button"
+              className="btn btn--text btn--sm"
+              onClick={() => {
+                // 回搜索层（不是浏览器后退：用户可能是直接输 URL 进来的，后退会退出站点）
+                router.push("/");
+              }}
+            >
+              返回搜索
+            </button>
+          </div>
+        </div>
       )}
 
       {/* ── 站序 ── */}

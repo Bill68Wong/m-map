@@ -103,9 +103,6 @@ const TYPE_LABEL: Record<PoiKind, string> = {
   lrt_station: "轻轨站",
   place: "地点",
   poi: "地点",
-  /** ★ v3.6.0（AC-40）：线路结果的徽章。行内实际用**主题色徽章**（见 `.linechip`），
-   *  本项只作为 `Record<PoiKind, string>` 的完整性兜底（例如 pending 分支）。 */
-  route: "线路",
 };
 
 /** 巴士站显示名带站码（`M1 關閘總站`）；轻轨站/地点用原名 */
