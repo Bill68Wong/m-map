@@ -8,13 +8,16 @@
  *   ⇒ 空请求走完整 `planNav`（实测 200 + 1.54s，真的打了一次高德）。
  *   这个 bug 活了很久（v1.4.0 起）没有任何断言兜住，所以补这个文件。
  *
- * ⚠️ 直接 import **真实现**（`numOf` 已从 route 导出），不是复刻逻辑 ——
- *    复刻的测试只能证明"我以为的规则"，实现改了它照样绿。
+ * ⚠️ 直接 import **真实现**（`numOf` 已从 route 移到 `lib/nav/query-params.ts`），
+ *    不是复刻逻辑 —— 复刻的测试只能证明"我以为的规则"，实现改了它照样绿。
+ * ⚠️ **不要**从 `src/app/api/nav/route.ts` import：route 文件只允许导出 Next 白名单
+ *    名字（HTTP 方法 + runtime/dynamic 等），多导出一个函数会让 `next build` 在
+ *    类型检查阶段直接失败（详见 `lib/nav/query-params.ts` 文件头）。
  *
  * 跑法：`node node_modules/tsx/dist/cli.mjs scripts/test-nav-params.ts`
  *      （或 `npm run test:nav-params`）
  */
-import { numOf } from "../src/app/api/nav/route";
+import { numOf } from "../src/lib/nav/query-params";
 
 let fail = 0;
 let pass = 0;

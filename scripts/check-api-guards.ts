@@ -45,6 +45,17 @@
  *     ③ **GET 有防护 + POST 裸奔 ⇒ POST 必须 FAIL**（切片回归的固定哨兵）。
  *   改本脚本后请跑 `--self-test`，或连同 `--self-test` 一起跑正式扫描。
  *
+ * ── ⚠️ 三条"看起来绿、实际没守住"的陷阱（都真踩过）──────────────────────
+ *   ① **`tsc --noEmit` 通过 ≠ `next build` 通过**：Next 会生成 `.next/types` 检查
+ *      route 文件的导出白名单（只允许 HTTP 方法 + runtime/dynamic 等配置）。
+ *      route 里多导出一个辅助函数，tsc 不报、build 必炸 —— 见第三部分 `scanRouteExports()`。
+ *   ② **门禁的变异测试要用"最容易被误认为合规的写法"来验**，不能用"它显然该抓的写法"。
+ *      曾用 `error: "route_not_found"`（明显违规）验通过就以为完事，而真正的盲区在
+ *      `errorResponse(API_ERROR.x)` —— 本项目**最规范**的写法，第一版扫描完全没覆盖。
+ *   ③ **门禁"假红"和"假绿"一样糟糕**：检测不到该抓的 = 假绿；报了本该通过的 = 假红。
+ *      例：`export interface` / `export type` 会被 TS 擦除，Next 不拦，
+ *      若把它们算成"非法导出"就会误伤绿构建。
+ *
  * ── 部署须知（配环境变量的人看这里）──────────────────────────────────
  *   `POST /api/dsat/grab` 需在生产环境配 `GRAB_TOKEN`，未配时仅非生产环境放行（fail-closed）。
  *   本节说明的常规落点是 `.env.example`，但该文件被 `scripts/check-commit-scope.mjs` 的
@@ -563,6 +574,92 @@ function scanErrors(): void {
   }
 }
 
+/* ══════════════════════════════════════════════════════════════════════
+ * 第三部分：route 文件的导出白名单
+ *     ⚠️ `tsc --noEmit` 通过 **不等于** `next build` 通过：Next 会生成 `.next/types`
+ *        检查 route 文件的导出白名单（只允许 HTTP 方法 + runtime/dynamic 等配置项）。
+ *        route 里多导出一个辅助函数，tsc 不报、build 必炸。
+ *     真实事故（v3.6.0）：为让单测直接调真实现，把 `numOf` 从 `api/nav/route.ts`
+ *        `export` 了出去 ⇒ build 报
+ *          「Property 'numOf' is incompatible with index signature … not assignable to
+ *           type 'never'」⇒ build worker 异常退出 ⇒ 表面现象是 `EPERM: open '.next/trace'`
+ *          （**次生症状**）。被误当成环境故障排查了很久。
+ *     ⇒ 这类错误只有 build 能抓，所以这里用静态扫描提前拦。
+ * ══════════════════════════════════════════════════════════════════════ */
+
+/**
+ * route.ts 允许导出的名字（Next App Router 的白名单）。
+ *
+ * ⚠️ 只拦**值导出**（`function`/`const`/`let`/`var`/`class`）。
+ *    `export interface` / `export type` **不算违规** —— 它们被 TS 完全擦除，
+ *    运行时不产生绑定，Next 的 `OmitWithTag` 检查只看值。
+ *    实测佐证：`api/nav/switch-plans/route.ts` 导出了 `SwitchPlanItem` /
+ *    `SwitchPlansResponse` 两个 interface，`next build` **是通过的**。
+ *    （第一版扫描把它们报成违规 ⇒ 会误伤绿构建，属"门禁假红"，比漏检更糟。）
+ */
+const ROUTE_EXPORT_ALLOW = new Set([
+  // HTTP 方法
+  "GET",
+  "POST",
+  "PUT",
+  "PATCH",
+  "DELETE",
+  "HEAD",
+  "OPTIONS",
+  // 段配置项
+  "runtime",
+  "dynamic",
+  "dynamicParams",
+  "revalidate",
+  "fetchCache",
+  "preferredRegion",
+  "maxDuration",
+  "generateStaticParams",
+  "generateMetadata",
+]);
+
+interface ExportFinding {
+  file: string;
+  route: string;
+  name: string;
+}
+
+function scanRouteExports(): void {
+  const bad: ExportFinding[] = [];
+  let total = 0;
+
+  for (const file of collectRouteFiles(API_ROOT).sort()) {
+    const route = routePathOf(file);
+    const raw = fs.readFileSync(file, "utf8");
+    const lines = raw.split(/\r?\n/);
+    // 只认**值导出**（顶层、行首允许缩进）。`export type` / `export interface`
+    // 被 TS 擦除、运行时不产生绑定 ⇒ Next 不拦，故**不扫**（避免假红）。
+    for (const line of lines) {
+      const m = /^\s*export\s+(?:async\s+)?(?:function|const|let|var|class)\s+([A-Za-z0-9_]+)/.exec(line);
+      if (!m) continue;
+      total++;
+      const name = m[1];
+      if (!ROUTE_EXPORT_ALLOW.has(name)) bad.push({ file, route, name });
+    }
+  }
+
+  console.log("\n═══ route 文件导出白名单（tsc 抓不到、build 才炸的一类）═══");
+  console.log(`扫描 ${collectRouteFiles(API_ROOT).length} 个 route.ts · 顶层 export ${total} 个\n`);
+  for (const b of bad) {
+    console.log(`FAIL  ${b.route.padEnd(30)} 非法导出 \`${b.name}\``);
+    console.log(`      ↳ ${path.relative(process.cwd(), b.file)}`);
+  }
+  console.log(`导出白名单：违规 ${bad.length}`);
+  if (bad.length) {
+    console.error(
+      "\n❌ route.ts 只允许导出 HTTP 方法（GET/POST/…）与段配置（runtime/dynamic/…）。" +
+        "\n   辅助函数请移到 `src/lib/`，route 里只 import —— 否则 next build 会在类型检查阶段失败。",
+    );
+    process.exit(1);
+  }
+}
+
 if (process.argv.includes("--self-test")) selfTest();
 scan();
 scanErrors();
+scanRouteExports();

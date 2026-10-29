@@ -26,7 +26,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getPool } from "@/lib/db";
 import { planNav } from "@/lib/nav/nav-service";
 import { decodeChain, decodeTiers, decodeWalk, type ChainStep, type TierOverride, type WalkOverride } from "@/lib/nav/combo-params";
-import type { NavPoint, NavPointKind } from "@/lib/nav/types";
+import { pointOf } from "@/lib/nav/query-params";
 import { parsePrefs } from "@/lib/recommend/score";
 import { SCHOOL_ZONES, type SchoolZone } from "@/lib/recommend/types";
 import { API_ERROR, errorResponse } from "@/lib/http/errors";
@@ -37,51 +37,11 @@ export const preferredRegion = "sin1";
 export const maxDuration = 30;
 
 const ZONE_VALUES = SCHOOL_ZONES.map((z) => z.value);
-const KIND_VALUES: NavPointKind[] = ["gps", "poi", "station", "place"];
 
-/**
- * 取一个必需的数字参数；**未提供 / 空串 / 纯空白 / 非数字 ⇒ `null`**。
- *
- * ── ★ v3.6.0：修一个存在很久的 bug（v1.4.0 起）────────────────────────────
- *   旧实现是 `const v = Number(sp.get(key)); return Number.isFinite(v) ? v : null;`
- *   而 **`Number(null) === 0`、`Number("") === 0`** ⇒ 「没传参数」被当成坐标 `0`，
- *   `pointOf()` 于是返回一个 `(lng=0, lat=0)` 的**看似合法**的点 ⇒ 上层那个
- *   `if (!origin || !dest) return 400` **永远进不去**，空请求会一路走完整 `planNav`。
- *
- *   后果（实测）：`GET /api/nav`（完全无参数）**200 + 1.54s**，`transitMs=1332` ——
- *   真的打了一次高德路径规划。这是**最省事的一种刷配额方式**（任何人都能刷），
- *   与 AC-50 是同一件事的两面：一面是写接口防护，一面是只读接口的**成本放大**。
- *
- * ── 为什么先挡字符串再做 Number ──────────────────────────────────────────
- *   `trim() === ""` 必须和 `null` 一起挡：`?fromLng=&fromLat=` 这种空值请求同样会变 0。
- *   ⚠️ 显式传 `"0"` **仍返回 `0`**（合法数字 0）—— 本函数是通用取数，
- *      不在这一层做「坐标是否在澳门」之类的**业务**判断（那会影响探针与跨岛测试）。
- *
- * 导出仅为让门禁/单测**直接调真实现**（`scripts/test-nav-params.ts`），
- * 避免"复刻一份逻辑来测"导致实现改了测试还绿。Next 只把小写以外的
- * HTTP 方法名（GET/POST/…）当路由，导出普通函数不产生新端点。
- */
-export function numOf(sp: URLSearchParams, key: string): number | null {
-  const raw = sp.get(key);
-  if (raw === null || raw.trim() === "") return null;
-  const v = Number(raw);
-  return Number.isFinite(v) ? v : null;
-}
-
-function pointOf(sp: URLSearchParams, side: "from" | "to"): NavPoint | null {
-  const lng = numOf(sp, `${side}Lng`);
-  const lat = numOf(sp, `${side}Lat`);
-  if (lng === null || lat === null) return null;
-  const kindRaw = sp.get(`${side}Kind`)?.trim() ?? "";
-  const kind: NavPointKind = (KIND_VALUES as string[]).includes(kindRaw) ? (kindRaw as NavPointKind) : "poi";
-  return {
-    kind,
-    label: sp.get(`${side}Label`)?.trim() || (kind === "gps" ? "我的位置" : `${side === "from" ? "起點" : "終點"}`),
-    lng,
-    lat,
-    code: sp.get(`${side}Code`)?.trim() || undefined,
-  };
-}
+// ⚠️ 参数解析（`numOf` / `pointOf`）已移到 `src/lib/nav/query-params.ts`。
+//   **不要**把它们放回本文件并 export —— route.ts 只允许导出白名单名字
+//   （HTTP 方法 + runtime/dynamic 等配置），多导出一个辅助函数会让 `next build`
+//   在生成 `.next/types` 时类型检查失败（`tsc --noEmit` 抓不到，见该文件头注释）。
 
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
