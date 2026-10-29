@@ -50,6 +50,13 @@ import { loadStationGeoCached, loadWalkCacheCached } from "@/lib/nav/nav-service
 import { makeCacheWalkResolver } from "@/lib/nav/recompute";
 import { splitPlanCards } from "@/lib/nav/switch-plans-shared";
 import type { NavCandidate, NavPoint } from "@/lib/nav/types";
+import { API_ERROR, errorResponse } from "@/lib/http/errors";
+import {
+  DSAT_BUCKET_CAPACITY,
+  DSAT_QPS,
+  RATE_BUCKET,
+  acquireToken,
+} from "@/lib/amap/rate-limit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -109,11 +116,6 @@ export interface SwitchPlansResponse {
   degraded?: string;
 }
 
-interface SwitchPlansError {
-  ok: false;
-  error: string;
-}
-
 const g = globalThis as unknown as {
   __switchPlansCache?: Map<string, { ts: number; data: SwitchPlansResponse }>;
 };
@@ -128,26 +130,35 @@ const cmpPath = (a: StationPath, b: StationPath): number =>
 //   已抽到 `src/lib/nav/switch-plans-shared.ts`（纯函数，便于单测）—— 见该模块说明。
 
 export async function POST(req: Request) {
+  // ★ v3.6.0（S2 评审阻断 2）：本接口是全站**最高的匿名放大面** —— 一次请求会经 `fetchLive`
+  //   打出 9~13 次 DSAT 调用。拆口令门后必须限流，否则一个脚本就能把 DSAT 配额和风控额度吃光。
+  //   与 `/api/station/eta`、`/api/nav/detail-body` 共用 `dsat` 桶（复用 `amap_rate_bucket`，无 DDL）。
+  //   ⚠️ 放在解析 body / 读库之前。
+  const rl = await acquireToken(RATE_BUCKET.dsat, DSAT_QPS, DSAT_BUCKET_CAPACITY);
+  if (!rl.ok) {
+    return errorResponse(API_ERROR.rate_limited, undefined, { "Retry-After": "1" });
+  }
+
   // ── ① 解析 + 校验（非法 → 400）──
   let body: { card?: RecommendCard; dest?: { lng?: unknown; lat?: unknown; name?: unknown } };
   try {
     body = (await req.json()) as typeof body;
   } catch {
-    return NextResponse.json({ ok: false, error: "bad_json" } satisfies SwitchPlansError, { status: 400 });
+    return errorResponse(API_ERROR.bad_request);
   }
   const card = body?.card;
   if (!card || !Array.isArray(card.rides) || !card.rides.length) {
-    return NextResponse.json({ ok: false, error: "missing_card" } satisfies SwitchPlansError, { status: 400 });
+    return errorResponse(API_ERROR.bad_request);
   }
   for (const r of card.rides) {
     if (!r || typeof r.route !== "string" || typeof r.board !== "string" || typeof r.alight !== "string") {
-      return NextResponse.json({ ok: false, error: "bad_rides" } satisfies SwitchPlansError, { status: 400 });
+      return errorResponse(API_ERROR.bad_request);
     }
   }
   const dLng = Number(body?.dest?.lng);
   const dLat = Number(body?.dest?.lat);
   if (!Number.isFinite(dLng) || !Number.isFinite(dLat)) {
-    return NextResponse.json({ ok: false, error: "bad_dest" } satisfies SwitchPlansError, { status: 400 });
+    return errorResponse(API_ERROR.bad_request);
   }
   const destName = typeof body?.dest?.name === "string" ? body.dest.name.trim() : "";
 

@@ -59,6 +59,14 @@ export function errorResponse(
   // ⚠️ 动态 import 会拉长冷启动，这里用静态 JSON 响应构造（Edge 与 Node 运行时都可用）
   return new Response(JSON.stringify({ ok: false, error: code }), {
     status: status ?? DEFAULT_STATUS[code],
-    headers: { "Content-Type": "application/json; charset=utf-8", ...(headers ?? {}) },
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      // ★ v3.6.0（S2）：错误响应一律**不进 CDN / 浏览器缓存**。
+      //   410 尤其必须如此 —— HTTP 语义上 410 默认**可缓存**，若被边缘节点记住，
+      //   将来恢复某接口时用户会继续看到「已下线」，且我们无法远程清除。
+      //   401/403/429 同理：限流窗口是秒级，缓存住就把临时状态固化了。
+      "Cache-Control": "no-store",
+      ...(headers ?? {}),
+    },
   });
 }
