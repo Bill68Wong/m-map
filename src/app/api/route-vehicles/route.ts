@@ -35,6 +35,7 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { getPool } from "@/lib/db";
+import { API_ERROR } from "@/lib/http/errors";
 import { attachProgress, type VehicleProgress } from "@/lib/nav/progress";
 import { getBusLocations, getBusPositions } from "@/lib/dsat/client";
 import { wgs84ToGcj02 } from "@/lib/amap/coord";
@@ -109,11 +110,13 @@ export async function GET(req: NextRequest) {
   const kindParam = sp.get("kind")?.trim() ?? "";
 
   // ① 参数校验（缺参数 = 客户端错误，返回 400）
+  // ★ v3.6.0（AC-50d）：`error` 只允许六枚举。`useRouteVehicles` 已用
+  //   `errorTextOf(j.error)` 翻译 ⇒ 旧中文串会被当未知值回落到通用文案。
   if (!code) {
-    return NextResponse.json({ error: "缺少 code 参数（线路码，如 26 / 51A / N6）" }, { status: 400 });
+    return NextResponse.json({ error: API_ERROR.bad_request }, { status: 400 });
   }
   if (dir !== "0" && dir !== "1") {
-    return NextResponse.json({ error: "缺少或非法 dir 参数（应为 0 或 1）" }, { status: 400 });
+    return NextResponse.json({ error: API_ERROR.bad_request }, { status: 400 });
   }
 
   const fetchedAt = new Date().toISOString();

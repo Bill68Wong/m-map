@@ -34,7 +34,8 @@ export async function GET(req: NextRequest) {
   const from = sp.get("from")?.trim();
   const to = sp.get("to")?.trim();
   if (!from || !to) {
-    return NextResponse.json({ error: "缺少参数 from / to" }, { status: 400 });
+    // ★ v3.6.0（AC-50d）：`error` 只允许六枚举（前端 `errorTextOf` 负责翻译）
+    return NextResponse.json({ error: API_ERROR.bad_request }, { status: 400 });
   }
 
   const zoneParam = sp.get("zone")?.trim();

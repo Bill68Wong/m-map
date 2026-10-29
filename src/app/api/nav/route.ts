@@ -64,8 +64,10 @@ export async function GET(req: NextRequest) {
   const origin = pointOf(sp, "from");
   const dest = pointOf(sp, "to");
   if (!origin || !dest) {
+    // ★ v3.6.0（AC-50d）：`error` 只允许六枚举。`useRecommend` 已用 `errorTextOf(j.error)`
+    //   翻译后渲染 ⇒ 回枚举才是与前端契约一致（旧中文串会被当未知值回落）。
     return NextResponse.json(
-      { ok: false, error: "缺少或非法坐标：需 fromLng/fromLat/toLng/toLat（GCJ-02）" },
+      { ok: false, error: API_ERROR.bad_request },
       { status: 400 },
     );
   }
