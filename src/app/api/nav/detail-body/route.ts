@@ -34,7 +34,13 @@ import { loadStatics } from "@/lib/recommend/query";
 import { mainCodeOf } from "@/lib/recommend/segment-lookup";
 import { wgs84ToGcj02 } from "@/lib/amap/coord";
 import type { RecommendCard } from "@/lib/recommend/types";
-import { API_ERROR } from "@/lib/http/errors";
+import { API_ERROR, errorResponse } from "@/lib/http/errors";
+import {
+  DSAT_BUCKET_CAPACITY,
+  DSAT_QPS,
+  RATE_BUCKET,
+  acquireToken,
+} from "@/lib/amap/rate-limit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -147,12 +153,20 @@ async function buildOverviewLegs(pool: Pool, rides: RecommendCard["rides"]): Pro
 }
 
 export async function POST(req: Request) {
+  // ★ v3.6.0（S2 评审阻断 2）：拆口令门后本接口公开，且内部会读静态索引 + 打 DSAT 报站
+  //   ⇒ 与 `/api/station/eta` 同源同桶限流（`dsat` 桶，复用 `amap_rate_bucket`，无 DDL）。
+  //   ⚠️ 放在解析 body / 读库之前：省掉无效请求的 JSON 解析与连接占用。
+  const rl = await acquireToken(RATE_BUCKET.dsat, DSAT_QPS, DSAT_BUCKET_CAPACITY);
+  if (!rl.ok) {
+    return errorResponse(API_ERROR.rate_limited, undefined, { "Retry-After": "1" });
+  }
+
   try {
     const body = (await req.json()) as { card?: RecommendCard };
     const card = body?.card;
     // 浅校验：必须有非空 rides，且逐条含 route / board / alight 字符串
     if (!card || !Array.isArray(card.rides) || !card.rides.length) {
-      return NextResponse.json({ ok: false, error: "missing_card" }, { status: 400 });
+      return errorResponse(API_ERROR.bad_request);
     }
     for (const r of card.rides) {
       if (
@@ -161,7 +175,7 @@ export async function POST(req: Request) {
         typeof r.board !== "string" ||
         typeof r.alight !== "string"
       ) {
-        return NextResponse.json({ ok: false, error: "bad_rides" }, { status: 400 });
+        return errorResponse(API_ERROR.bad_request);
       }
     }
 
