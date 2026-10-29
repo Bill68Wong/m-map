@@ -81,6 +81,8 @@ export interface RouteSheetProps {
     onStart: (seg: "out", steps: import("@/lib/walk/walk-shared").WalkStep[]) => void;
     onExpand: () => void;
     preview: import("./NavDetailBody").WalkPreview;
+    /** ★ 是否**正在跟随**（walk 态）—— 决定是否禁 peek */
+    active?: boolean;
   } | null;
   /** ★ 2026-09-25：全屏化（导航中隐藏底导、收敛间距） */
   immersive?: boolean;
@@ -122,6 +124,24 @@ export default function RouteSheet({
       : `${dLegRide.route} 路`
     : "";
   const dLrt = dLegRide?.kind === "lrt";
+  /**
+   * ★★ S4 评审阻断 ③：**刷新作用域**。
+   *   `fetchFrame` 对非巴士腿直接 return（刷不出任何东西）⇒ 轻轨段点刷新
+   *   若仍进冷却，就是"给了一个什么都不会发生的冷却"（设计 §2.6 特意禁用该反模式）。
+   *
+   * ★★ S4 复验阻断（语域过宽）：**推荐 pane 恒 `"bus"`** —— 整表重查（`/api/nav`）
+   *   与车辆数据无关，不做「追踪腿」意义上的刷新。
+   *   ⚠️ 旧实现按「首卡首段是否轻轨」归零 scope ⇒ 若首卡是轻轨，推荐 pane 的
+   *      `data-cooldown` 变 `off`、`paneCoolingVisible` 归 0，但 `recCooldown` **仍在跑**
+   *      ⇒ **冷却在跑但视觉静默 = 点了没反应**（正是用户原投诉的翻版）。
+   *   ⇒ 只有 detail pane 才按当前追踪腿的 `kind` 判定。
+   */
+  const refreshScope: "bus" | "lrt" =
+    pane === "recommend"
+      ? "bus" /* 推荐 pane 恒 bus：整表重查不依赖车辆数据；若按首卡类型归零 ⇒ 冷却在跑但视觉静默 */
+      : detail?.card?.rides?.[detail.track?.legIndex ?? 0]?.kind === "lrt"
+        ? "lrt"
+        : "bus";
   /** 新鲜度（AC-24）：每秒重算「上次更新：N 秒前」 */
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
@@ -151,6 +171,7 @@ export default function RouteSheet({
         lrt={dLrt}
         traveling={dTrack.traveling}
         coolingSec={dTrack.refreshCoolingSec}
+        refreshScope={refreshScope}
         boardDetect={dTrack.boardDetect}
         anomaly={dTrack.anomaly}
         note={dTrack.note}
@@ -193,20 +214,6 @@ export default function RouteSheet({
    */
   const paneCoolingSec = pane === "recommend" ? recCoolingSec : (detail?.track?.refreshCoolingSec ?? 0);
 
-  /**
-   * ★★ S4 评审阻断 ③：**刷新作用域**。
-   *   `feedbackFrame` 对非巴士腿直接 return（刷不出任何东西）⇒ 轻轨段点刷新
-   *   若仍进冷却，就是"给了一个什么都不会发生的冷却"（设计 §2.6 特意禁用该反模式）。
-   *   口径：当前追踪腿的 `kind`；无追踪（pane=recommend）取 `card.rides[0].kind`。
-   */
-  const refreshScope: "bus" | "lrt" =
-    pane === "recommend"
-      ? rec.data?.cards?.[0]?.rides?.[0]?.kind === "lrt"
-        ? "lrt"
-        : "bus"
-      : detail?.card?.rides?.[detail.track?.legIndex ?? 0]?.kind === "lrt"
-        ? "lrt"
-        : "bus";
   /** 轻轨段刷新永不进冷却（也永不显示倒计时） */
   const paneCoolingVisible = refreshScope === "bus" ? paneCoolingSec : 0;
 
@@ -234,12 +241,23 @@ export default function RouteSheet({
    */
   const sheetRef = useRef<HTMLElement | null>(null);
 
+  /**
+   * ★ v3.6.0 S5：**walk 态禁 peek**（设计要求：强制 half、允许 full、禁 peek ——
+   *   peek 会把"当前步"藏掉）。
+   *   · `walkActive` 时只允许 `full` + `half`；其余 pane **不传**该参 ⇒ 行为一行不变；
+   *   · 进 walk 时若停在 peek ⇒ 立即 snap 到 half（不能停在 peek）；
+   *   · 退出 walk **不强制跳档**（用户拖到哪就是哪），但恢复完整三档（下面 effect 自然生效）。
+   */
+  const walkActive = pane === "detail" && !!walk?.active;
+  const allowedDetents = walkActive ? (["full", "half"] as Detent[]) : undefined;
+
   const snap = useSnapSheet({
     open,
     detent,
     topsPx,
     sheetRef,
     onDetentChange,
+    allowedDetents,
     onDismiss: onContextClose,
     /**
      * ★ 2026-09-24（用户实测反馈·二轮）：**两个 pane 统一禁用**「最低档继续下拉关闭」——
@@ -248,6 +266,17 @@ export default function RouteSheet({
      */
     dismissible: false,
   });
+
+  /**
+   * ★ v3.6.0 S5：进 walk 时若停在 peek ⇒ **立即 snap 到 half**（peek 会把当前步藏掉）。
+   *   退出 walk **不强制跳档** —— 用户拖到哪就是哪；只是恢复完整三档（`allowedDetents` 变 undefined）。
+   *   ⚠️ 依赖只放 `walkActive`：若依赖 `detent`，用户手动拖到 half 也会反复触发（虽幂等但不必要）。
+   */
+  useEffect(() => {
+    if (!walkActive) return;
+    if (detent === "peek") onDetentChange("half");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [walkActive]);
 
   /** peek 点整区 → 回该 pane 的默认档（推荐→full / 详情→half） */
   const defaultDetent: Detent = pane === "detail" ? "half" : "full";

@@ -89,6 +89,13 @@ export function useRecommend(
 
   /** ★ 本批：query + `prefs` 组合键（偏好切换 ⇒ 重新拉取并重排）；
    *  ★ v3.3.0：并入 `lrtFirst`（开关切换 ⇒ 同样重拉重排）。 */
+  /**
+   * ★★ **query 键 = merge 守卫的判定依据**（见下方 `mergedForRef`）。
+   *   ⇒ 凡是会改变「这批方案是哪一批」的输入，**必须**进本键，否则换值时会残留旧路线
+   *     （表现：旧条件下的卡排在最前，且顺序被锁死）。
+   *   ⚠️ **若将来接入「座区选择」（zone）**：`zone` 必须加进本键。
+   *      `query` 目前只含 from/to 坐标，不含 zone —— 届时漏加 = 换座区仍显示旧座区的方案。
+   */
   const fullQuery = query ? `${query}&prefs=${prefs}&lrtFirst=${lrtFirst ? 1 : 0}` : query;
 
   const load = useCallback(async (q: string, opts?: { nocache?: boolean }) => {

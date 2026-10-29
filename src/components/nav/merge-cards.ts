@@ -98,8 +98,6 @@ function mergeCard(next: RecommendCard, prev: RecommendCard): RecommendCard {
       const n = next.transfers[i];
       return n ? { ...p, minutes: n.minutes, waitMin: n.waitMin, slackMin: n.slackMin } : p;
     }),
-    // ── 标记：本卡在最新一轮里仍有对应方案 ──
-    stale: false,
   };
 }
 
@@ -108,7 +106,8 @@ function mergeCard(next: RecommendCard, prev: RecommendCard): RecommendCard {
  *
  * @param prev  旧列表（用户当前看到的顺序 / 结构）
  * @param next  新列表（本轮 `/api/nav` 返回，已按 score 排序）
- * @returns 合并后的列表（长度 ≥ `prev.length`；旧有新无的标 `stale: true`）
+ * @returns 合并后的列表。**长度不保证 ≥ `prev.length`** —— 本轮已无对应的旧卡会被**丢弃**
+ *          （保留会让列表随每次刷新单调膨胀，实测 5→7；详见函数内注释）
  */
 export function mergeCardsStable(prev: RecommendCard[], next: RecommendCard[]): RecommendCard[] {
   // 同一 sig 可能重复（极少：同线同上下站的不同方案）⇒ 队列消费，避免一串匹配到同一张
