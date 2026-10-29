@@ -8175,3 +8175,99 @@ body[data-nav-phase="walk"] .bottom-nav { display: none; }
   color: var(--meta, var(--muted));
   text-align: center;
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   ★ v3.6.0 · 线路搜索结果分区（AC-40 / 设计 §2.4 / §2.8）
+   零硬编码色值：徽章底色来自数据（`routes.color`），字色由 `chipInkOf()` 算好内联。
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* 分区标题（沿用既有 `.ssheet__sect-title` 排版，只补"两区之间"的分隔） */
+.ssheet__sect-title--split {
+  border-top: 1px solid var(--border);
+  margin-top: var(--space-2);
+  padding-top: var(--space-3);
+  padding-left: 14px;
+  padding-right: 14px;
+}
+
+/* 线路分区容器：与「附近站点」等同容器内距，但行本身撑满（行内自带 padding） */
+.ssheet__sect--routes {
+  padding: 12px 0 4px;
+}
+/* 分区标题在 0 内距容器里要自己补回左右留白 */
+.ssheet__sect--routes .ssheet__sect-title {
+  padding: 0 14px;
+}
+
+/* ── 线路行（整行可点，56px 高）── */
+.line-result {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  min-height: 56px;
+  padding: var(--space-2) 14px;
+  background: none;
+  border: 0;
+  text-align: left;
+  color: var(--fg);
+  cursor: pointer;
+}
+.line-result:active { background: var(--surface-2); }
+.line-result:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-chip);
+}
+
+/* 主题色徽章：**列宽固定 72px** —— 否则 `25`（2 字）与 `石排灣線`（4 字）会让
+   右侧名称左缘忽左忽右（同屏多行时非常刺眼）。 */
+.linechip {
+  flex: 0 0 72px;
+  width: 72px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 6px;
+  border-radius: var(--radius-chip);
+  font-size: var(--text-2xs);
+  font-weight: var(--fw-announce);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* 兜底分支（底色非 6 位 hex）：小圆点承载线路色 */
+.linechip__dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+.linechip__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.line-result__main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.line-result__name {
+  font-size: var(--text-md);
+  line-height: 1.35;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 副标题「查看全线站点」—— 承担"点了会跳页"的预告（AC-40 必需） */
+.line-result__sub {
+  font-size: var(--text-2xs);
+  color: var(--muted);
+}

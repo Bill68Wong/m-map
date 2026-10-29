@@ -102,7 +102,29 @@ export default function NavShell({
   const [station, setStation] = useState<StationCardStation | null>(null);
 
   /** 底层舞台（带 initialTo 时直接进「半屏可出发」= 与旧版一致） */
-  const [stage, setStage] = useState<Stage>(initialTo ? "panel" : "map");
+  /**
+   * ★ v3.6.0（AC-45）：从 `/line/[code]` 返回时**重新打开搜索层**。
+   *
+   * 只恢复输入内容不够 —— 这里若还是 `map`/`panel`，用户看到的是首页，
+   * 得自己再点一次进搜索才看到「26」，那就不是"返回后它还在"。
+   * 标记由 `SearchSheet.openLine` 在跳转前写入、**读到即删**（一次性）：
+   *   · 刷新页面 / 新开 tab ⇒ 标记不存在 ⇒ 行为不变（不会莫名弹搜索层）；
+   *   · 正常从 `/line` 返回 ⇒ 直接进 `search`，`SearchSheet` 再从 `SS_KEY` 读回 `q`/`resp`。
+   * ⚠️ 这段必须在 `useState` 的初始化函数里同步读（不能放 effect）—— 否则首帧会先闪一下地图。
+   */
+  const [stage, setStage] = useState<Stage>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        if (window.sessionStorage.getItem("mmap.search.return") === "1") {
+          window.sessionStorage.removeItem("mmap.search.return");
+          return "search";
+        }
+      } catch {
+        /* 隐私模式 ⇒ 退化为原行为 */
+      }
+    }
+    return initialTo ? "panel" : "map";
+  });
   /** 全屏搜索态正在编辑哪个端点 */
   const [editing, setEditing] = useState<"dest" | "from">("dest");
   /** 重新定位触发计数（右上定位按钮） */
