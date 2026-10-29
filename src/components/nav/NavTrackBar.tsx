@@ -45,6 +45,12 @@ export interface NavTrackBarProps {
    */
   coolingSec?: number;
   /**
+   * ★ S4 评审 advisory 3：刷新作用域（观测钩子 `data-cooldown` 用）。
+   *   `"lrt"` ⇒ 该腿刷不出任何东西（`fetchFrame` 对非 bus 腿直接 return）⇒ `off`。
+   *   行为已由上层门控保证；本属性只补观测钩子，供 e2e 稳定断言。
+   */
+  refreshScope?: "bus" | "lrt";
+  /**
    * ★ v3.6.0（AC-25a）：自动上车判定的实际状态。
    *   `paused`（拒权/超时/连续低精度）⇒ 文案必须说"已暂停"，**不得**再说"正在检测"。
    */
@@ -87,6 +93,7 @@ export default function NavTrackBar(props: NavTrackBarProps) {
     lrt,
     traveling,
     coolingSec = 0,
+    refreshScope = "bus",
     boardDetect = "on",
     anomaly,
     note,
@@ -216,6 +223,7 @@ export default function NavTrackBar(props: NavTrackBarProps) {
             <button
               type="button"
               className="nav-actions__iconbtn"
+              data-cooldown={refreshScope === "bus" ? "on" : "off"}
               onClick={() => {
                 if (traveling || coolingSec > 0) return;
                 onRefresh();
