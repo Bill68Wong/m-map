@@ -410,8 +410,15 @@ export default function NavShell({
           /* ★ v2.10.0：路线查看模式 + 实时车辆；★ 2026-09-23：detail pane 打开时让位给总览 */
           routeLine={detailActive ? null : rv.picked}
           onRouteDirs={rv.reportDirs}
-          /* ★ 本批（需求⑥ / AC-45/46）：riding 只显示当前班车（12s 轮询驱动）；否则沿用路线查看车辆 */
-          vehicles={detailActive ? (ride.phase === "riding" ? ride.mapVehicles : ov.vehicles) : rv.vehicles}
+          /**
+           * ★ v3.6.0 S4（需求 R3 · 候车态地图车辆实时化）：
+           *   detail pane 一律用 `ride.mapVehicles` —— 它由 12s 车辆帧驱动，
+           *   候车态返回**本帧全部候选车**（riding 时只返回当前这辆）。
+           *   旧版候车态用 `ov.vehicles`（进 detail 时**一次性**拉取）⇒ 地图上的车永远不动，
+           *   「刷新」只更新下方列表，用户会当成"刷新没反应"。
+           *   ⚠️ 因此 `useRouteOverview` 不再拉车（车辆只有一个来源 = `useRideTracking`）。
+           */
+          vehicles={detailActive ? ride.mapVehicles : rv.vehicles}
           onVehicleClick={onVehicleClick}
           /* ★ 2026-09-23：路线总览（灰底线 + 彩段） */
           overview={detailActive ? ov.legs : null}
@@ -542,7 +549,8 @@ export default function NavShell({
                 destLabel: to.label,
                 phase: ov.phase,
                 body: ov.body,
-                vehicles: ov.vehicles.length,
+                /* ★ v3.6.0 S4：观测钩子改用唯一车辆来源（`ov.vehicles` 已删除） */
+                vehicles: ride.mapVehicles.length,
                 reload: ov.reload,
                 /* ★ 2026-09-24：导航追踪态 + 可切换方案上下文 */
                 track: ride,

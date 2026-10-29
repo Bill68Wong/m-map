@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * 刷新键 + 10 秒冷却（src/components/nav/RefreshButton.tsx，v2.10.0）
+ * 刷新键（src/components/nav/RefreshButton.tsx，v2.10.0 · ★ v3.6.0 S4 改纯展示）
  *
  * ── 形态（Spec §8）────────────────────────────────────────────────────
  *   44×44 圆 + 1.5px 青花蓝描边 + 3px 硬投影；
@@ -13,33 +13,37 @@
  *   · 倒计时**只在冷却开始时播报一次**（`role="status"`），**不逐秒播报**；
  *   · 按钮 `aria-label` 实时反映剩余秒数（聚焦时可见）；
  *   · `prefers-reduced-motion`：进度环按秒跳变、不做补间。
+ *
+ * ── ★ v3.6.0 S4：本组件**只负责画** ────────────────────────────────────
+ *   冷却时长与倒计时一律由 `useCooldown` 提供，经 `cooling` / `seconds` / `total` 传入。
+ *   原先在此硬编码 `REFRESH_COOLDOWN_SEC = 10` 会让「组件」与「调度」耦合 ——
+ *   不同场景冷却不同（车辆 5s / 推荐 5s / 步行 3s），常量留在这里必然出现两个真相。
  */
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import Icon from "@/components/ui/Icon";
-
-/** 冷却时长（秒）—— 手动/自动刷新**共用**同一窗口 */
-export const REFRESH_COOLDOWN_SEC = 10;
 
 export interface RefreshButtonProps {
   /** 是否处于冷却中 */
   cooling: boolean;
   /** 剩余秒数（整数，冷却中才有意义） */
   seconds: number;
+  /** ★ v3.6.0：本轮冷却总时长（秒）—— 用于进度环比例与播报文案；由调用方传（`COOLDOWN_*`） */
+  total: number;
   onRefresh: () => void;
 }
 
-export default function RefreshButton({ cooling, seconds, onRefresh }: RefreshButtonProps) {
+export default function RefreshButton({ cooling, seconds, total, onRefresh }: RefreshButtonProps) {
   const [announce, setAnnounce] = useState("");
   const prev = useRef(false);
 
   // 冷却**开始时**播报一次（不逐秒播报）
   useEffect(() => {
-    if (cooling && !prev.current) setAnnounce(`${REFRESH_COOLDOWN_SEC} 秒后可再次刷新`);
+    if (cooling && !prev.current) setAnnounce(`${total} 秒后可再次刷新`);
     else if (!cooling) setAnnounce("");
     prev.current = cooling;
-  }, [cooling]);
+  }, [cooling, total]);
 
-  const ringPct = cooling ? Math.max(0, Math.min(100, (seconds / REFRESH_COOLDOWN_SEC) * 100)) : 100;
+  const ringPct = cooling && total > 0 ? Math.max(0, Math.min(100, (seconds / total) * 100)) : 100;
 
   return (
     <button

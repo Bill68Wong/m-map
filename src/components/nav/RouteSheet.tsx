@@ -36,6 +36,7 @@ import NavTrackBar from "./NavTrackBar";
 import RouteDetailPane from "./RouteDetailPane";
 import RouteResultPane from "./RouteResultPane";
 import { useRecommend, type PrefMode } from "./useRecommend";
+import { COOLDOWN_RECOMMEND_SEC, useCooldown } from "./useCooldown";
 import { useSnapSheet } from "./useSnapSheet";
 import type { DetailBody } from "./useDetailBody";
 import type { RideTrackView } from "./useRideTracking";
@@ -142,6 +143,7 @@ export default function RouteSheet({
         alarm={dTrack.alarm}
         lrt={dLrt}
         traveling={dTrack.traveling}
+        coolingSec={dTrack.refreshCoolingSec}
         boardDetect={dTrack.boardDetect}
         anomaly={dTrack.anomaly}
         note={dTrack.note}
@@ -166,10 +168,29 @@ export default function RouteSheet({
    *      ⇒ 在把手区形成死区、破坏拖拽；`aria-disabled` + 点击守卫即可防重复点击且保留无障碍语义。
    */
   const refreshBusy = pane === "recommend" ? rec.phase === "loading" : detail?.phase === "loading";
+  /**
+   * ★ v3.6.0 S4：**推荐列表刷新的 5s 冷却**（口径表：每次 ≈1 次高德 transit + 9~13 个 DSAT 桶，
+   *   成本最高）。旧版只有 `refreshBusy`（HTTP 往返 ≈1s）⇒ 用户可「一秒刷一次」，既重复扣配额
+   *   又让列表数字高频跳动。detail/riding 的刷新冷却在 `useRideTracking.refreshNow` 内。
+   */
+  const recCooldown = useCooldown(COOLDOWN_RECOMMEND_SEC);
+  const recCoolingSec = recCooldown.sec;
+
+  /**
+   * ★ v3.6.0 S4：推荐 pane 的刷新改走 `reload({ nocache: true })` ——
+   *   用户主动点刷新时不接受服务端 `transit_cache` 的旧结果；
+   *   自动首载/切换偏好仍走缓存（`load` 不带 nocache），省配额。
+   *   列表合并在 `useRecommend` 内完成（`mergeCardsStable`），此处无需关心。
+   */
   const onRefreshClick = () => {
     if (refreshBusy) return;
-    if (pane === "recommend") rec.reload();
-    else if (detail?.track?.onRefresh) detail.track.onRefresh();
+    if (pane === "recommend") {
+      if (recCooldown.cooling) return; // ★ 5s 冷却门（与 UI 的 aria-disabled 双重保障）
+      rec.reload({ nocache: true });
+      recCooldown.start();
+      return;
+    }
+    if (detail?.track?.onRefresh) detail.track.onRefresh();
     else detail?.reload?.();
   };
 
@@ -275,20 +296,41 @@ export default function RouteSheet({
           {/* 收藏（仅 recommend 栏；位于刷新按钮左侧） */}
           {/* ★ v3.3.0（AC-115）：推荐弹窗顶部「收藏组合」chip（图标 + 文字，与起终点页**同一常量**） */}
           {pane === "recommend" && fav && <FavoriteButton from={fav.from} to={fav.to} />}
-          {/* 右上：情境化刷新（AC-87）——recommend 重查推荐 / detail·riding 刷新巴士数据；busy 自旋 */}
+          {/* 右上：情境化刷新（AC-87）——recommend 重查推荐 / detail·riding 刷新巴士数据。
+              ★ v3.6.0 S4：**加 5s 时间戳冷却**（口径见 useCooldown）。
+                旧版只有 `refreshBusy`（= HTTP 往返 ≈1s）⇒ 表现为「一秒冷却一次」。 */}
           <button
             type="button"
-            className={`route-sheet__iconbtn${refreshBusy ? " is-spin" : ""}`}
+            className={`route-sheet__iconbtn${refreshBusy || recCoolingSec > 0 ? " is-cooling" : ""}`}
             data-refresh-scope={pane === "recommend" ? "recommend" : "detail"}
             onClick={onRefreshClick}
-            aria-disabled={refreshBusy || undefined}
+            aria-disabled={refreshBusy || recCoolingSec > 0 || undefined}
             aria-busy={refreshBusy || undefined}
             aria-label={
-              refreshBusy ? "刷新中" : pane === "recommend" ? "刷新路线推荐" : "刷新巴士数据"
+              recCoolingSec > 0
+                ? `刷新，${recCoolingSec} 秒后可再次刷新`
+                : refreshBusy
+                  ? "刷新中"
+                  : pane === "recommend"
+                    ? "刷新路线推荐"
+                    : "刷新巴士数据"
             }
-            title={refreshBusy ? "刷新中" : pane === "recommend" ? "刷新路线推荐" : "刷新巴士数据"}
+            title={
+              recCoolingSec > 0
+                ? `${recCoolingSec} 秒后可再次刷新`
+                : refreshBusy
+                  ? "刷新中"
+                  : pane === "recommend"
+                    ? "刷新路线推荐"
+                    : "刷新巴士数据"
+            }
           >
             <Icon name="refresh" size={20} />
+            {recCoolingSec > 0 && (
+              <span className="route-sheet__cd" aria-hidden="true">
+                {recCoolingSec}
+              </span>
+            )}
           </button>
         </>
       }

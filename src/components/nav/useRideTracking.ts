@@ -26,8 +26,7 @@ import {
   type TrackProgress,
   type TrackVehicle,
 } from "@/lib/nav/track";
-import { advanceLrt, buildLrtLadder, type LrtLadder } from "@/lib/nav/lrt-progress";
-import { nearestOnPath } from "@/lib/nav/route-overview";
+import { advanceLrt, buildLrtLadder, type LrtLadder } from "@/lib/nav/lrt-progress";import { nearestOnPath } from "@/lib/nav/route-overview";
 import { autoAlightOf } from "@/lib/nav/alight-detect";
 import {
   ANOMALY_CONFIRM,
@@ -35,11 +34,13 @@ import {
   autoBoardOf,
   anomalyOf,
   detectPausedOf,
+  nextLegCooldownOf,
   type Anomaly,
   type FixLite,
 } from "@/lib/nav/boarding-detect";
 import type { LL, ColoredLeg, OverviewLegInput } from "@/lib/nav/route-overview";
 import type { RecommendCard, SegmentStrip } from "@/lib/recommend/types";
+import { COOLDOWN_VEHICLE_SEC, useCooldown } from "./useCooldown";
 import type { VehicleLite } from "./VehicleMarker";
 import type { UserFix } from "./useUserFix";
 
@@ -117,6 +118,12 @@ export interface RideTrackView {
    *   只驱动文案与钩子（`.nav-actions[data-board-detect]`），不影响地图蓝点。
    */
   boardDetect: "on" | "paused";
+  /**
+   * ★ v3.6.0 S4：车辆刷新冷却剩余秒数（0 = 可刷新）。
+   *   来源 = `useCooldown`（时间戳口径，5s）。**仅作用于车辆数据刷新**，
+   *   不影响定位刷新 / 步行进度推进 / 步行路径重算。
+   */
+  refreshCoolingSec: number;
   note: string;
   candidates: { plate: string; hint: string }[];
   /** 本次 riding 是否由自动判定进入 */
@@ -267,27 +274,37 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
   );
 
   /**
-   * ★ 本批（需求⑥ / AC-45/46）：**在显车辆** —— riding 时按 `plate` 过滤 ⇒ 0/1 辆；
-   *   随 12s 帧（`listTick`）重算 ⇒ `VehicleLayer` 重定位（不再只拉一次）。
-   *   非 riding（boarding/off/done）⇒ `[]`。
+   * ★ 在显车辆（`NavMap` 的 `vehicles` prop）。
+   *
+   * · `riding` + 有车牌 ⇒ 只显**当前这一辆**（AC-45/46：不干扰判断"我坐的车在哪"）；
+   * · `boarding` ⇒ 显**本帧全部候选车**（★ v3.6.0 S4 新增）——
+   *   否则候车态地图上的车只在开场拉一次、之后永远不动，
+   *   「刷新」只更新下方列表，用户看到的是静止的车（最容易被当成"刷新没反应"）；
+   * · 其他相位 ⇒ `[]`。
+   *
+   * 随 12s 帧（`listTick`）重算 ⇒ `VehicleLayer` 重定位（不是只拉一次）。
    */
   const mapVehicles = useMemo<VehicleLite[]>(() => {
-    if (phase !== "riding" || !plate) return [];
+    if (phase !== "riding" && phase !== "boarding") return [];
+
+    /** 帧内单车 → 视图模型（`company` 由帧顶层注入，决定涂装色） */
+    const toLite = (v: TrackVehicle): VehicleLite => ({
+      plate: v.plate,
+      lat: v.lat,
+      lng: v.lng,
+      status: (v.status as VehicleLite["status"]) ?? "unknown",
+      interval: v.interval
+        ? { from: { code: v.interval.from.code, name: "" }, to: { code: v.interval.to?.code ?? "", name: "" } }
+        : null,
+      atStation: v.atStation ? { code: v.atStation.code, name: "" } : null,
+      company: lastCompanyRef.current ?? undefined,
+    });
+
+    if (phase === "boarding") return listRef.current.map(toLite);
+
+    if (!plate) return [];
     const v = listRef.current.find((x) => x.plate === plate);
-    if (!v) return [];
-    return [
-      {
-        plate: v.plate,
-        lat: v.lat,
-        lng: v.lng,
-        status: (v.status as VehicleLite["status"]) ?? "unknown",
-        interval: v.interval
-          ? { from: { code: v.interval.from.code, name: "" }, to: { code: v.interval.to?.code ?? "", name: "" } }
-          : null,
-        atStation: v.atStation ? { code: v.atStation.code, name: "" } : null,
-        company: lastCompanyRef.current ?? undefined,
-      },
-    ];
+    return v ? [toLite(v)] : [];
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, plate, listTick]);
 
@@ -916,23 +933,17 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
         setPhase("boarding");
         autoUsedRef.current = false;
         /**
-         * ★ 冷却复位：默认**故意置 0**（与 `start()` 的「不清零」相反，勿"统一"成 `Date.now()`）。
-         *   下一段是**全新行程**（用户刚下车、人就站在换乘站台）⇒ 上车判定应**立刻可用**；
-         *   给新段保留 20s 冷却 = 让同站换乘用户干等 20 秒才可能被判上车，
-         *   那是把「防抖」错误地推广成「惩罚」。
-         *
-         * ⚠️ **唯一例外：GPS 源的自动下车**（架构终审加的精准护栏）。
-         *   GPS 源自动下车是唯一「可能判错、且判错后没有车辆信号能纠正」的路径 ——
-         *   `autoAlightOf` 的 gps 分支靠「里程越站 30m」判断，误差直接来自投影；
-         *   一旦误判提前下车，新段会立刻在错误的站台重新开始判定。
-         *   ⇒ 只对这条路径保留 20s 冷却（防抖）；手动下车、车辆源自动下车仍置 0
-         *     （它们要么是用户本人操作，要么有车牌可核，主流换乘零延迟）。
+         * ★ 冷却复位：策略由 `nextLegCooldownOf` 决定（纯函数 + 有断言，别在这里内联判断）。
+         *   默认**归零**（与 `start()` 的「不清零」相反，勿"统一"成 `Date.now()`）：
+         *   下一段是全新行程（用户刚下车、就在换乘站台）⇒ 上车判定应**立刻可用**。
+         *   唯一例外 = `auto && progressSource === "gps"`（GPS 源自动下车）⇒ 保留冷却，
+         *   理由见 `nextLegCooldownOf` 的注释（无车牌可核、判错无法纠正）。
          *
          * 启动宽限另行打点（下一行）—— 两件事不冲突：宽限防"首帧未到的误报"，
          * 冷却决定"新段多久后才能被判上车"。
          */
-        const gpsAutoAlight = auto && progressSource === "gps";
-        lastSwitchTsRef.current = gpsAutoAlight ? Date.now() : 0;
+        lastSwitchTsRef.current =
+          nextLegCooldownOf({ auto, progressSource }) === "now" ? Date.now() : 0;
         boardingStartedAtRef.current = Date.now(); // ★ 下一段同样有启动宽限（防首帧闪烁）
         setNote("");
       } else {
@@ -974,13 +985,35 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
     autoUsedRef.current = true; // 撤销后不再自动（防抖）
   }, []);
 
-  const onRefresh = useCallback(() => {
+  /**
+   * ★ v3.6.0 S4：车辆数据刷新的冷却（时间戳口径，5s）。
+   *   **作用域局部** —— 只挡「巴士车辆数据刷新」，不影响定位刷新、
+   *   步行进度推进、步行路径重算（各自独立成本，混用会误伤）。
+   */
+  const vehicleCooldown = useCooldown(COOLDOWN_VEHICLE_SEC);
+
+  /**
+   * ★ v3.6.0 S4：手动刷新（走**同一通道** `fetchFrame`，受 5s 冷却门控）。
+   *   · 旧 `onRefresh` 直接调 `fetchFrame` ⇒ 连点即连发（后端成了唯一防线）；
+   *   · 现在点下就起算冷却，与请求快慢无关（旧版「冷却」实为一次 HTTP 往返 ≈1s，
+   *     用户看到的「一秒冷却一次」即由此而来）。
+   * @returns 是否真的发起了请求（`false` = 冷却中，被拦下）
+   */
+  const refreshNow = useCallback((): boolean => {
+    if (vehicleCooldown.cooling) return false;
     if (phase === "riding" && plate) void fetchFrame(plate);
     else if (phase === "boarding") void fetchFrame(null);
-  }, [phase, plate, fetchFrame]);
+    else return false;
+    vehicleCooldown.start();
+    return true;
+  }, [vehicleCooldown, phase, plate, fetchFrame]);
 
-  /** 安全网纠错：「我没上车」→ 回等车（保留方案） */
-  const onNotBoard = useCallback(() => {
+  /** 兼容旧调用点：`onRefresh` = `refreshNow`（面板顶栏与品牌栏都用它） */
+  const onRefresh = useCallback(() => {
+    void refreshNow();
+  }, [refreshNow]);
+
+  /** 安全网纠错：「我没上车」→ 回等车（保留方案） */  const onNotBoard = useCallback(() => {
     setPhase("boarding");
     setPlate(null);
     setProg(null);
@@ -1059,6 +1092,7 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
     traveled,
     traveling,
     boardDetect: phase === "boarding" && boardPaused ? "paused" : "on",
+    refreshCoolingSec: vehicleCooldown.sec,
     /**
      * ★ v3.6.0（AC-25a）：paused 时**强制覆盖**提示文案 —— 不能把"未判定"渲染成"正在检测"。
      *   放在返回值里派生（而非塞进 `note` state）：候车轮询会不断改写 `note`，

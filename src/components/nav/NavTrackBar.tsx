@@ -39,6 +39,12 @@ export interface NavTrackBarProps {
   lrt: boolean;
   traveling: boolean;
   /**
+   * ★ v3.6.0 S4：车辆刷新冷却剩余秒数（0 = 可刷新）。
+   *   与 `traveling` 一起构成刷新键的禁用条件 —— 冷却来自 `useCooldown` 的时间戳，
+   *   不是请求状态（旧版只挡 `traveling`，等于「一次 HTTP 往返」就成了冷却）。
+   */
+  coolingSec?: number;
+  /**
    * ★ v3.6.0（AC-25a）：自动上车判定的实际状态。
    *   `paused`（拒权/超时/连续低精度）⇒ 文案必须说"已暂停"，**不得**再说"正在检测"。
    */
@@ -80,6 +86,7 @@ export default function NavTrackBar(props: NavTrackBarProps) {
     alarm,
     lrt,
     traveling,
+    coolingSec = 0,
     boardDetect = "on",
     anomaly,
     note,
@@ -209,12 +216,27 @@ export default function NavTrackBar(props: NavTrackBarProps) {
             <button
               type="button"
               className="nav-actions__iconbtn"
-              onClick={onRefresh}
-              disabled={traveling}
-              aria-label="刷新"
-              title="刷新"
+              onClick={() => {
+                if (traveling || coolingSec > 0) return;
+                onRefresh();
+              }}
+              /**
+               * ★ v3.6.0 S4：用 `aria-disabled`（**不用原生 `disabled`**）——
+               *   本栏是面板拖动把手附近区域，原生 `disabled` 会**吞掉 pointerdown**
+               *   （`RouteSheet.tsx` 头部同样记过这个坑）⇒ 形成拖拽死区。
+               *   同时把「冷却」纳入禁用条件：旧版只挡 `traveling`（= 一次 HTTP 往返 ≈1s），
+               *   用户看到的就是「一秒冷却一次」。
+               */
+              aria-disabled={traveling || coolingSec > 0 || undefined}
+              aria-label={coolingSec > 0 ? `刷新，${coolingSec} 秒后可再次刷新` : "刷新"}
+              title={coolingSec > 0 ? `${coolingSec} 秒后可再次刷新` : "刷新"}
             >
               <Icon name="refresh" size={20} />
+              {coolingSec > 0 && (
+                <span className="nav-actions__cd" aria-hidden="true">
+                  {coolingSec}
+                </span>
+              )}
             </button>
           </>
         )}

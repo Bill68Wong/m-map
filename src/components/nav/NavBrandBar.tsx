@@ -15,6 +15,7 @@ import Link from "next/link";
 import BrandMark from "@/components/brand/BrandMark";
 import Icon from "@/components/ui/Icon";
 import RefreshButton from "./RefreshButton";
+import { COOLDOWN_VEHICLE_SEC } from "./useCooldown";
 
 export interface NavBrandBarProps {
   /** 当前查看的线路（null = 未进入路线查看模式） */
@@ -77,7 +78,12 @@ export default function NavBrandBar({
       {/* 右栏：竖排按钮组（刷新 → 公共交通路线 → M Map）※「定位」已移至页面级 `.nav-locate-fab` */}
       <div className="nav-brandbar__acts">
         {picked?.kind === "bus" && (
-          <RefreshButton cooling={cooldownSec > 0} seconds={cooldownSec} onRefresh={onRefresh} />
+          <RefreshButton
+            cooling={cooldownSec > 0}
+            seconds={cooldownSec}
+            total={COOLDOWN_VEHICLE_SEC}
+            onRefresh={onRefresh}
+          />
         )}
         {/* ★ 需求 10 / AC-84：导航语境（navMode）⇒ 隐藏「查看路线」与「M Map logo」 */}
         {!navMode && (

@@ -28,6 +28,7 @@ import {
   auxOf,
   detectPausedOf,
   GPS_PAUSE_MS,
+  nextLegCooldownOf,
   type AutoBoardInput,
   type FixLite,
 } from "@/lib/nav/boarding-detect";
@@ -410,6 +411,35 @@ console.log("\n[⑬ 安全网参数契约]");
    */
   ok(ANOMALY_CONFIRM >= 2, "ANOMALY_CONFIRM ≥ 2（单次抖动不得判异常）", `实际=${ANOMALY_CONFIRM}`);
   ok(ANOMALY_MIN_GAP_MS >= 20_000, "ANOMALY_MIN_GAP_MS ≥ 20s（确认间隔不得过短）", `实际=${ANOMALY_MIN_GAP_MS}`);
+}
+
+/* ══════════ ⑭ 换乘后下一段的冷却起点（nextLegCooldownOf） ══════════ */
+/**
+ * 这条分支被两人各推演过一次（架构找出反例、主理人批准护栏），靠注释守不住 —— 必须断言。
+ * 语义：`"now"` = 保留冷却（=`Date.now()`）；`"zero"` = 归零（立即可判）。
+ */
+console.log("\n[⑭ 换乘后冷却起点]");
+{
+  eq(
+    nextLegCooldownOf({ auto: true, progressSource: "gps" }),
+    "now",
+    "自动下车 + GPS 源 ⇒ 保留冷却（无车牌可核、判错无法纠正）",
+  );
+  eq(
+    nextLegCooldownOf({ auto: true, progressSource: "vehicle" }),
+    "zero",
+    "自动下车 + 车辆源 ⇒ 归零（有车牌可核）",
+  );
+  eq(
+    nextLegCooldownOf({ auto: false, progressSource: "gps" }),
+    "zero",
+    "手动下车 + GPS 源 ⇒ 归零（用户本人操作）",
+  );
+  eq(
+    nextLegCooldownOf({ auto: false, progressSource: "vehicle" }),
+    "zero",
+    "手动下车 + 车辆源 ⇒ 归零",
+  );
 }
 
 /* ══════════ 汇总 ══════════ */
