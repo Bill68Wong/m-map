@@ -146,7 +146,13 @@ export interface NavOutput {
 
 // ─────────────────────────── 缓存（映射表 / 站点地理） ───────────────────────────
 
-const TTL_MS = 60_000;
+/**
+ * 站点映射 / 站点地理的进程内缓存 TTL。
+ * ★ 2026-10-30（性能）：60s → **10 分钟**。这两份是**静态参考数据**（站点表 + 主码去重坐标），
+ *   只在数据重建时才变；60s 会让「静态层 / 高德 / 实时」三份缓存在同一时刻集体过期，
+ *   每次过期都要多付一次跨区查询（本地实测 ≈1.7s，且不在 `staticMs` 统计口径内）。
+ */
+const REF_TTL_MS = 10 * 60_000;
 const g = globalThis as unknown as {
   __navCaches?: { map?: { ts: number; data: StationMap }; geo?: { ts: number; data: GeoStation[] } };
 };
@@ -154,7 +160,7 @@ if (!g.__navCaches) g.__navCaches = {};
 
 async function loadStationMapCached(pool: Pool, force = false): Promise<StationMap> {
   const c = g.__navCaches!.map;
-  if (!force && c && Date.now() - c.ts < TTL_MS) return c.data;
+  if (!force && c && Date.now() - c.ts < REF_TTL_MS) return c.data;
   const data = await loadStationMap(pool);
   g.__navCaches!.map = { ts: Date.now(), data };
   return data;
@@ -163,7 +169,7 @@ async function loadStationMapCached(pool: Pool, force = false): Promise<StationM
 /** 站点地理（主码去重；**WGS84**，供本地图枚举的近站筛选） */
 export async function loadStationGeoCached(pool: Pool, force = false): Promise<GeoStation[]> {
   const c = g.__navCaches!.geo;
-  if (!force && c && Date.now() - c.ts < TTL_MS) return c.data;
+  if (!force && c && Date.now() - c.ts < REF_TTL_MS) return c.data;
   const res = await pool.query(`SELECT code, lat, lng FROM stations WHERE lat IS NOT NULL AND lng IS NOT NULL`);
   const seen = new Set<string>();
   const data: GeoStation[] = [];
@@ -181,7 +187,7 @@ export async function loadStationGeoCached(pool: Pool, force = false): Promise<G
 const gWalk = globalThis as unknown as { __navWalkCache?: { ts: number; data: WalkCacheMap } };
 export async function loadWalkCacheCached(pool: Pool, force = false): Promise<WalkCacheMap> {
   const c = gWalk.__navWalkCache;
-  if (!force && c && Date.now() - c.ts < TTL_MS) return c.data;
+  if (!force && c && Date.now() - c.ts < REF_TTL_MS) return c.data;
   const m: WalkCacheMap = new Map();
   try {
     const res = await pool.query(`SELECT cache_key, distance_m, corrected_m FROM walk_cache LIMIT 20000`);
@@ -372,13 +378,14 @@ export async function planNav(pool: Pool, input: NavInput): Promise<NavOutput> {
   // ★ B4（需求 8）：偏好三档（缺省 balanced）
   const prefs = input.prefs ?? PREF_DEFAULTS.balanced;
 
-  // ① 静态
+  // ① 静态 / 站点映射 / 站点地理 —— ★ 2026-10-30（性能）：三者互不依赖，**并行发**（原来串行 3 波）。
   const tStatic = Date.now();
-  const st: RecStatic = await loadStatics(pool);
+  const [st, map, geo]: [RecStatic, StationMap, GeoStation[]] = await Promise.all([
+    loadStatics(pool),
+    loadStationMapCached(pool),
+    loadStationGeoCached(pool),
+  ]);
   const staticMs = Date.now() - tStatic;
-
-  const map = await loadStationMapCached(pool);
-  const geo = await loadStationGeoCached(pool);
   const validRoutes = new Set<string>(st.routeIdx.dirsOf.keys());
   const bridgeCtx: BridgeContext = { map, validRoutes, routeIdx: st.routeIdx, geo };
   const placeSlugs = new Set(Object.keys(st.placeIds));
@@ -495,11 +502,16 @@ export async function planNav(pool: Pool, input: NavInput): Promise<NavOutput> {
 
   // ⑥ 实时（两来源共用一次）
   const tLive = Date.now();
-  const nowBucket = await nowBucketOfHolidayAware(pool, nowMs);
-  // ★ B4（需求 7）：发车间隔索引 —— 既供 `fetchLive` 做「未发车估算」（旧行为），
-  //   **也注入 `ModelContext.headway`** 供 `model.ts` 第 2 段巴士等车按到达时刻查班距（§h.2）。
-  //   失败/表不存在 ⇒ `loadHeadway` 内部兜底（空索引）⇒ 第 2 段等车明示降级（waitMin=null）。
-  const headway = await loadHeadway(pool);
+  // ★ 2026-10-30（性能）：两条查询互不依赖 —— 并行发，省一次跨区 RTT（本地直连新加坡主库
+  //   单程约 60~120ms；原来串行等待）。语义不变：任一失败仍走各自的内部兜底。
+  //   · `nowBucketOfHolidayAware`：节假日感知的时段桶；
+  //   · ★ B4（需求 7）`loadHeadway`：发车间隔索引 —— 既供 `fetchLive` 做「未发车估算」（旧行为），
+  //     也注入 `ModelContext.headway` 供 `model.ts` 第 2 段巴士等车按到达时刻查班距（§h.2）。
+  //     失败/表不存在 ⇒ 内部兜底（空索引）⇒ 第 2 段等车明示降级（waitMin=null）。
+  const [nowBucket, headway] = await Promise.all([
+    nowBucketOfHolidayAware(pool, nowMs),
+    loadHeadway(pool),
+  ]);
   const batch = await fetchLive(pool, allSeeds, st.routeIdx, st.segIdx, {
     nowBucket,
     nowMs,

@@ -37,6 +37,8 @@
  *   · ★ 取景**全部自算**（`fit-box`），**禁用** `setBounds`/`setFitView`（会撑到珠海）。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import WalkNavPanel from "./WalkNavPanel";
+import type { WalkNavPhase, WalkNavRequest, WalkNavResult } from "./walk-nav";
 import Icon from "@/components/ui/Icon";
 import NavMap from "./NavMap";
 import NavBrandBar from "./NavBrandBar";
@@ -64,6 +66,15 @@ import type { RecommendCard } from "@/lib/recommend/types";
 import type { NavPoint } from "@/lib/nav/types";
 
 const MY_LOCATION = "我的位置";
+
+/** 屏幕常亮 API 的最小类型（避免 `any`；Safari/Firefox 可能没有该能力） */
+interface WakeLockSentinelLike {
+  release: () => Promise<void>;
+  released: boolean;
+}
+interface WakeLockApiLike {
+  request: (type: "screen") => Promise<WakeLockSentinelLike>;
+}
 /** 底层舞台：全屏地图 / 全屏搜索 / 半屏可出发 */
 type Stage = "map" | "search" | "panel";
 
@@ -118,6 +129,87 @@ export default function NavShell({
   /** ★ 2026-09-25：导航阶段镜像（决定 GPS 节流 15s/30s 与全屏化） */
   const [ridePhase, setRidePhase] = useState<RidePhase>("off");
   const [detailCard, setDetailCard] = useState<{ card: RecommendCard; degraded: boolean } | null>(null);
+
+  /**
+   * ★ 2026-10-29：**步行导航会话**（详情内任意步行段）。
+   *   `req` 非空 ⇒ NavMap 用高德 Walking 查询并画线；`phase` 驱动面板（loading/ready/failed）。
+   *   关闭 / 返回推荐 / 换方案 ⇒ 置 null ⇒ 地图清线。
+   */
+  const [walkSession, setWalkSession] = useState<{
+    req: WalkNavRequest;
+    phase: WalkNavPhase;
+    result: WalkNavResult | null;
+  } | null>(null);
+  const walkIdRef = useRef(0);
+  /**
+   * ★ 2026-10-29（第二期）：**步行跟随态**。
+   *   · `true` ⇒ 相机钉在 GPS、屏幕常亮、面板显示剩余距离/当前步；用户拖地图或点「停止跟随」退出；
+   *   · 新开一段步行 / 关闭会话 / 离开详情 ⇒ 自动复位（见下方 effects）。
+   */
+  const [walkFollowing, setWalkFollowing] = useState(false);
+  /** 会话镜像（重新规划时读最新 req，避免闭包过期） */
+  const walkSessionRef = useRef(walkSession);
+  walkSessionRef.current = walkSession;
+  /** 最新 GPS 点镜像（重新规划用；GPS 由 `useUserFix` 驱动） */
+  const walkFixRef = useRef<{ lng: number; lat: number } | null>(null);
+  /** 屏幕常亮（Wake Lock）；退出跟随/关闭会话即释放 */
+  const wakeRef = useRef<WakeLockSentinelLike | null>(null);
+  const releaseWake = useCallback(() => {
+    const s = wakeRef.current;
+    wakeRef.current = null;
+    if (s) void s.release().catch(() => undefined);
+  }, []);
+  const acquireWake = useCallback(() => {
+    if (typeof navigator === "undefined") return;
+    const api = (navigator as Navigator & { wakeLock?: WakeLockApiLike }).wakeLock;
+    if (!api) return;
+    if (wakeRef.current && !wakeRef.current.released) return;
+    void api
+      .request("screen")
+      .then((s) => {
+        wakeRef.current = s;
+      })
+      .catch(() => undefined);
+  }, []);
+  const startWalkNav = useCallback(
+    (seg: Omit<WalkNavRequest, "id">) => {
+      walkIdRef.current += 1;
+      setWalkFollowing(false);
+      releaseWake();
+      setWalkSession({ req: { ...seg, id: walkIdRef.current }, phase: "loading", result: null });
+    },
+    [releaseWake],
+  );
+  const closeWalkNav = useCallback(() => {
+    setWalkFollowing(false);
+    releaseWake();
+    setWalkSession(null);
+  }, [releaseWake]);
+  /**
+   * ★ 第二期：**从当前位置重新规划** —— 保持跟随态，用最新 GPS 作起点重新查询；
+   *   无定位时回落到原起点（至少不会把线段丢掉）。
+   */
+  const rerouteWalkNav = useCallback(() => {
+    const prev = walkSessionRef.current;
+    if (!prev) return;
+    const f = walkFixRef.current;
+    const from = f ? { lng: f.lng, lat: f.lat, label: "当前位置" } : prev.req.from;
+    walkIdRef.current += 1;
+    setWalkSession({
+      req: { ...prev.req, id: walkIdRef.current, from, hintMinutes: null, hintDistanceM: null },
+      phase: "loading",
+      result: null,
+    });
+  }, []);
+  /** 开始跟随（用户手势内：申请定位 + 屏幕常亮）—— 定义在 `userFixR` 之后（依赖其 `start`） */
+  const stopWalkFollow = useCallback(() => {
+    setWalkFollowing(false);
+    releaseWake();
+  }, [releaseWake]);
+  /** 地图回传：只在会话仍存在时写入，防旧查询覆盖（NavMap 侧另有 cancelled 兜底） */
+  const onWalkNavResult = useCallback((r: WalkNavResult) => {
+    setWalkSession((prev) => prev && { ...prev, phase: r.ok ? "ready" : "failed", result: r });
+  }, []);
   /** 面板状态镜像（供稳定回调读取最新值，避免闭包过期） */
   const rsOpenRef = useRef(rsOpen);
   rsOpenRef.current = rsOpen;
@@ -144,6 +236,14 @@ export default function NavShell({
     return () => document.body.removeAttribute("data-sheet");
   }, [rsOpen]);
 
+  /** ★ 2026-10-29：离开详情（返回推荐/关面板/换方案）⇒ 结束步行导航并清线 */
+  useEffect(() => {
+    if (!(rsOpen && pane === "detail")) setWalkSession(null);
+  }, [rsOpen, pane]);
+  useEffect(() => {
+    setWalkSession(null);
+  }, [detailCard]);
+
   const onLocate = useCallback((pos: { lng: number; lat: number } | null) => setUserPos(pos), []);
 
   const myLocation: NavPoint | null = userPos
@@ -153,6 +253,32 @@ export default function NavShell({
   const canGo = !!fromPoint && !!to;
   /** 推荐/详情共用查询串（与 `/nav` URL 同口径） */
   const resultQuery = fromPoint && to ? queryOf(fromPoint, to) : "";
+
+  /**
+   * ★ 2026-10-30（性能）：**起终点就绪即后台预热一次规划**。
+   *
+   * 为什么要它：新起终点首次 `/api/nav` 实测 ≈ 4.5s（高德两波查询 1.3s+1.7s、实时 0.9s），
+   *   用户按下「出发」才开始查 ⇒ 一直是干等骨架屏。
+   *   本 effect 在「半屏可出发」态（起终点都已确定、面板未打开）静默预热，
+   *   用户点「出发」时多半已在 60s 缓存窗口内 ⇒ 体感从 ~4.5s 降到 ~1s（仍会重算实时）。
+   *
+   * 口径与正式请求完全一致（`prefs=balanced` / `lrtFirst=0`，即默认档），
+   * 同一 query 60s 内不重复预热；失败静默（不影响任何交互）。
+   */
+  const prewarmRef = useRef<{ q: string; ts: number } | null>(null);
+  useEffect(() => {
+    if (stage !== "panel" || rsOpen || !resultQuery) return;
+    const prev = prewarmRef.current;
+    if (prev && prev.q === resultQuery && Date.now() - prev.ts < 60_000) return;
+    const t = window.setTimeout(() => {
+      prewarmRef.current = { q: resultQuery, ts: Date.now() };
+      void fetch(`/api/nav?${resultQuery}&prefs=balanced&lrtFirst=0`, { cache: "no-store" }).catch(
+        () => undefined,
+      );
+    }, 700);
+    return () => window.clearTimeout(t);
+  }, [stage, rsOpen, resultQuery]);
+
   const odLabel = fromPoint && to ? `${fromPoint.label} → ${to.label}` : "";
 
   /** 取景额外纳入的点（起点/终点）—— useMemo 稳定引用 */
@@ -215,8 +341,37 @@ export default function NavShell({
    *   全程只要有定位就显示蓝点）；采纳间隔按档位：riding **1.5s** / 候车（detail 非 riding）**3s** / 浏览 **10s**；
    *   `maximumAge: 0` ⇒ 只用新鲜坐标（避免陈旧点导致蓝点/读数跳变）。
    */
-  const gpsIntervalMs = ridePhase === "riding" ? 1_500 : navActive ? 3_000 : 10_000;
+  const gpsIntervalMs = walkFollowing ? 1_500 : ridePhase === "riding" ? 1_500 : navActive ? 3_000 : 10_000;
   const userFixR = useUserFix({ enabled: true, intervalMs: gpsIntervalMs, maximumAge: 0 });
+  /** 稳定引用（`useUserFix` 每次渲染返回新对象，但 `start` 自身 useCallback 稳定） */
+  const startFix = userFixR.start;
+  /** ★ 第二期：最新 GPS 镜像（重新规划用） */
+  walkFixRef.current = userFixR.fix;
+  /** 开始跟随（用户手势内 ⇒ 申请定位 + 屏幕常亮；权限弹窗必须由手势触发） */
+  const startWalkFollow = useCallback(() => {
+    startFix();
+    setWalkFollowing(true);
+    acquireWake();
+  }, [startFix, acquireWake]);
+
+  /** 会话结束（关闭/离开详情）⇒ 退出跟随并释放常亮 */
+  useEffect(() => {
+    if (!walkSession) {
+      setWalkFollowing(false);
+      releaseWake();
+    }
+  }, [walkSession, releaseWake]);
+  /** 回到前台时补申请常亮（Wake Lock 在页面隐藏时会被系统自动释放） */
+  useEffect(() => {
+    if (!walkFollowing) return;
+    const onVis = () => {
+      if (document.visibilityState === "visible") acquireWake();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, [walkFollowing, acquireWake]);
+  /** 卸载兜底释放常亮 */
+  useEffect(() => () => releaseWake(), [releaseWake]);
 
   /** ★ 2026-09-24：乘车追踪（自动上车 + 安全网 + 轻轨 GPS 推进） */
   const ride = useRideTracking({
@@ -286,7 +441,6 @@ export default function NavShell({
    *   拒权 / 失败 ⇒ `denied` 置位但不抛错：页面**不空白**、默认视野与搜索照常、仅不显示蓝点（AC-75）。
    *   `startFix` 经 `useCallback([doWatch])` 恒稳定 ⇒ 该 effect 只在 mount 跑一次。
    */
-  const startFix = userFixR.start;
   useEffect(() => {
     startFix();
   }, [startFix]);
@@ -424,6 +578,13 @@ export default function NavShell({
           lineStops={detailActive ? lineStops : null}
           /* ★ v3.2.0（需求 7 / AC-80）：蓝点移动插值时长 = 采样间隔；仅 ≤5s 才插值（浏览 10s ⇒ 0） */
           userDotSmoothMs={gpsIntervalMs <= 5_000 ? gpsIntervalMs : 0}
+          /* ★ 2026-10-29：步行导航 —— 查询高德步行路径、画线、取景；null ⇒ 清线 */
+          walkNav={walkSession?.req ?? null}
+          onWalkNavResult={onWalkNavResult}
+          /* ★ 第二期：跟随相机（钉在 GPS 上）；用户拖图 ⇒ 自动退出跟随 */
+          walkFollow={walkFollowing}
+          walkPos={walkFollowing ? userFixR.fix : null}
+          onWalkFollowBreak={stopWalkFollow}
         />
 
         {/* 品牌栏（三栏网格）：左=空 · 中=换向键+线路标签 · 右=竖排按钮组（导航态右列隐藏，AC-84） */}
@@ -525,6 +686,25 @@ export default function NavShell({
         />
       )}
 
+      {/* ★ 2026-10-29：步行导航结果面板（`.nav-card-overlay` fixed z90 ⇒ 浮在详情面板之上，
+          但保留地图可拖；关闭即结束会话并清线） */}
+      {walkSession && (
+        <WalkNavPanel
+          key={walkSession.req.id}
+          request={walkSession.req}
+          phase={walkSession.phase}
+          result={walkSession.result}
+          fix={walkFollowing ? userFixR.fix : null}
+          denied={userFixR.denied}
+          following={walkFollowing}
+          onClose={closeWalkNav}
+          onRetry={() => startWalkNav(walkSession.req)}
+          onStartFollow={startWalkFollow}
+          onStopFollow={stopWalkFollow}
+          onReroute={rerouteWalkNav}
+        />
+      )}
+
       {/* ★ 单一三档面板宿主（推荐 ⇄ 详情；必须在 wrap 之外） */}
       <RouteSheet
         open={rsOpen}
@@ -552,6 +732,10 @@ export default function NavShell({
                 track: ride,
                 destCoord: { lng: to.lng, lat: to.lat },
                 onSwitchCard: openDetail,
+                /* ★ 2026-10-29：步行导航（首段需要出发地；换乘/末段用 body.legs） */
+                originCoord: fromPoint ? { lng: fromPoint.lng, lat: fromPoint.lat } : null,
+                originLabel: fromPoint?.label,
+                onWalkNav: startWalkNav,
               }
             : null
         }

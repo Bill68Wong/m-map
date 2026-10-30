@@ -18,7 +18,7 @@
  * 结构（自上而下）：头部 → 步行/等车行 → 进度纵条（NavStrip）→ 下车步行行
  *   → 折叠区（StationReachFold）→ 来源脚注。
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import NavStrip from "./NavStrip";
 import StationReachFold from "./StationReachFold";
 import RouteStack from "@/components/RouteStack";
@@ -26,6 +26,8 @@ import { LrtEtaInline } from "@/components/LrtEta";
 import { catchHintOf, directionNameOf, EtaText, Row, TierBadge, macauClock } from "@/components/RoutePieces";
 import type { FavoriteEndpoint, PlanSnapshot, RouteSeg } from "@/lib/favorites/types";
 import type { RecommendCard, SegmentStrip } from "@/lib/recommend/types";
+import type { OverviewLegInput } from "@/lib/nav/route-overview";
+import { TRANSFER_WALK_MIN_M, walkGapM, type WalkNavRequest } from "./walk-nav";
 import type { RideTrackView } from "./useRideTracking";
 
 export interface NavDetailBodyProps {
@@ -64,6 +66,20 @@ export interface NavDetailBodyProps {
   onSwitchCard?: (card: RecommendCard, degraded: boolean) => void;
   /** ★ 全屏化（导航中收敛间距） */
   immersive?: boolean;
+  /**
+   * ★ 2026-10-29：逐段几何锚点（`body.legs`，与 `card.rides` 同序；GCJ-02）——
+   *   首末步行段与换乘步行段的端点坐标都从这里取。
+   */
+  legs?: OverviewLegInput[];
+  /** 出发地坐标（GCJ-02）；缺省 ⇒ 不渲染「起点 → 上车站」的步行导航入口 */
+  originCoord?: { lng: number; lat: number } | null;
+  /** 出发地展示名（默认「我的位置」） */
+  originLabel?: string;
+  /**
+   * 点「步行导航」→ 交给宿主查询并绘制。
+   * 不传（收藏页无地图上下文）⇒ 所有步行导航入口不渲染。
+   */
+  onWalkNav?: (req: Omit<WalkNavRequest, "id">) => void;
 }
 
 export default function NavDetailBody({
@@ -80,6 +96,10 @@ export default function NavDetailBody({
   destCoord = null,
   onSwitchCard,
   immersive = false,
+  legs = [],
+  originCoord = null,
+  originLabel = "我的位置",
+  onWalkNav,
 }: NavDetailBodyProps) {
   const colorOf = (c: string) => colors[c] ?? null;
   const first = card.rides[0];
@@ -87,6 +107,59 @@ export default function NavDetailBody({
   const firstHint = first ? catchHintOf(first) : { text: "", isHint: false };
   /** ★ v3.3.0（AC-102）：总览栏线路标签 = 与推荐卡同构的分段结构（含段内并行线） */
   const routeSegments = card.rides.map((r) => ({ codes: [r.route, ...(r.parallelRoutes ?? [])] }));
+
+  // ── ★ 2026-10-29：步行导航入口（首段 / 换乘 / 末段）──
+  //  坐标全部来自 `body.legs`（GCJ-02；与 rides 同序）；收藏页无地图/无 legs ⇒ 不渲染入口。
+  type WalkSeg = Omit<WalkNavRequest, "id">;
+
+  const walkOutSeg = useMemo<WalkSeg | null>(() => {
+    if (!onWalkNav || !originCoord) return null;
+    const board = legs[0]?.board;
+    if (!board) return null;
+    return {
+      from: { lng: originCoord.lng, lat: originCoord.lat, label: originLabel },
+      to: { lng: board.lng, lat: board.lat, label: card.walkOut.toLabel },
+      hintMinutes: card.walkOut.minutes,
+      hintDistanceM: card.walkOut.distanceM ?? null,
+    };
+  }, [onWalkNav, originCoord, originLabel, legs, card.walkOut]);
+
+  const walkInSeg = useMemo<WalkSeg | null>(() => {
+    if (!onWalkNav || !destCoord) return null;
+    const alight = legs[legs.length - 1]?.alight;
+    if (!alight) return null;
+    // ★ 修复：`walkIn.toLabel` 是**目的地**名（见 model.ts 的注释），不是下车站名；
+    //   起点标签必须取本腿站条的 `alightLabel`，否则弹层 OD 会显示「新馬路 → 新馬路」。
+    const alightLabel =
+      strips[legs.length - 1]?.alightLabel ||
+      card.rides[legs.length - 1]?.alightLabel ||
+      "下车站";
+    return {
+      from: { lng: alight.lng, lat: alight.lat, label: alightLabel },
+      to: { lng: destCoord.lng, lat: destCoord.lat, label: destLabel },
+      hintMinutes: card.walkIn.minutes,
+      hintDistanceM: card.walkIn.distanceM ?? null,
+    };
+  }, [onWalkNav, destCoord, destLabel, legs, card.walkIn, card.rides, strips]);
+
+  /** 换乘步行：i = 第 i 段下车 → 第 i+1 段上车的步行（同站台 / 距离过近 ⇒ 不列入） */
+  const transferSegs = useMemo<Record<number, WalkSeg>>(() => {
+    const out: Record<number, WalkSeg> = {};
+    if (!onWalkNav) return out;
+    for (let i = 0; i < legs.length - 1; i++) {
+      const from = legs[i]?.alight;
+      const to = legs[i + 1]?.board;
+      const tr = card.transfers[i];
+      if (!from || !to || !tr || tr.sameField) continue;
+      if (walkGapM(from, to) < TRANSFER_WALK_MIN_M) continue;
+      out[i] = {
+        from: { lng: from.lng, lat: from.lat, label: tr.atLabel },
+        to: { lng: to.lng, lat: to.lat, label: strips[i + 1]?.boardLabel ?? tr.atLabel },
+        hintMinutes: tr.minutes,
+      };
+    }
+    return out;
+  }, [onWalkNav, legs, card.transfers, strips]);
   const legIdx = track ? track.legIndex : 0;
   const trackStops = track && track.phase !== "off" ? (strips[legIdx]?.stops ?? []) : [];
   const stopLabel = (k: number | null): string =>
@@ -162,6 +235,18 @@ export default function NavDetailBody({
               {card.walkOut.toLabel}
             </>
           }
+          aside={
+            walkOutSeg ? (
+              <button
+                type="button"
+                className="btn btn--text btn--sm rc-walk-nav"
+                data-walk-nav="out"
+                onClick={() => onWalkNav?.(walkOutSeg)}
+              >
+                步行导航
+              </button>
+            ) : null
+          }
         />
         {first && (
           <Row
@@ -213,27 +298,50 @@ export default function NavDetailBody({
       {/* 进度纵条（一趟一条；导航中仅当前乘车段显示实时进度） */}
       <div className={`rc-strips${immersive ? " rc-strips--immersive" : ""}`}>
         {strips.map((strip, i) => (
-          <NavStrip
-            key={`${strip.route}-${strip.board}-${i}`}
-            strip={strip}
-            color={colorOf(strip.route)}
-            last={i === strips.length - 1}
-            nav={
-              track && track.phase === "riding" && track.prog && i === track.legIndex
-                ? {
-                    passedIdx: track.prog.passedIdx,
-                    nextIdx: track.prog.nextIdx,
-                    atIdx: track.prog.atIdx,
-                    alarm: track.alarm,
-                    /* ★ 本批：段内插值用户点（AC-43/44）+ 观测钩子 data-nav-leg */
-                    youAt: track.youAt,
-                    legIndex: track.legIndex,
-                  }
-                : null
-            }
-            nextKind={strips[i + 1]?.kind ?? null}
-            frozen={!!track && track.phase === "riding" && !!track.note}
-          />
+          <Fragment key={`${strip.route}-${strip.board}-${i}`}>
+            <NavStrip
+              strip={strip}
+              color={colorOf(strip.route)}
+              last={i === strips.length - 1}
+              nav={
+                track && track.phase === "riding" && track.prog && i === track.legIndex
+                  ? {
+                      passedIdx: track.prog.passedIdx,
+                      nextIdx: track.prog.nextIdx,
+                      atIdx: track.prog.atIdx,
+                      alarm: track.alarm,
+                      /* ★ 本批：段内插值用户点（AC-43/44）+ 观测钩子 data-nav-leg */
+                      youAt: track.youAt,
+                      legIndex: track.legIndex,
+                    }
+                  : null
+              }
+              nextKind={strips[i + 1]?.kind ?? null}
+              frozen={!!track && track.phase === "riding" && !!track.note}
+            />
+            {/* ★ 2026-10-29：换乘步行行（非同站台且距离 ≥ 阈值才出现）*/}
+            {transferSegs[i] && (
+              <Row
+                dot="walk"
+                main={
+                  <>
+                    步行{" "}
+                    <b>{card.transfers[i]?.minutes ?? 1}</b> 分 → 换乘 {strips[i + 1]?.boardLabel ?? ""}
+                  </>
+                }
+                aside={
+                  <button
+                    type="button"
+                    className="btn btn--text btn--sm rc-walk-nav"
+                    data-walk-nav="transfer"
+                    onClick={() => onWalkNav?.(transferSegs[i])}
+                  >
+                    步行导航
+                  </button>
+                }
+              />
+            )}
+          </Fragment>
         ))}
       </div>
 
@@ -251,6 +359,18 @@ export default function NavDetailBody({
               {" → "}
               {destLabel}
             </>
+          }
+          aside={
+            walkInSeg ? (
+              <button
+                type="button"
+                className="btn btn--text btn--sm rc-walk-nav"
+                data-walk-nav="in"
+                onClick={() => onWalkNav?.(walkInSeg)}
+              >
+                步行导航
+              </button>
+            ) : null
           }
         />
       </div>

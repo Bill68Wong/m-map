@@ -5,20 +5,15 @@
  *
  * ────────────────────────── ★ v1.0.4 缓存架构 ──────────────────────────
  * 静态数据全部来自**派生表**（站序由 db:sync-routes 同步；段/步行/换乘由每日 Cron 重算）
- * → 低频变更 → 放进 **Vercel Data Cache**（`unstable_cache`）：**跨实例、跨冷启动持久**。
+ * → 低频变更 → 走**进程内 60s 缓存**（`globalThis.__recStaticCache`）即可。
  *
- * 缓存的是**原始行**（纯 JSON）；索引（Map）仍在内存里构建
- *   —— Map 不能 JSON 序列化，整体缓存会静默丢成 `{}`。
- *
- * 为什么必须跨实例（这是本轮性能问题的正解）：
- *   线上函数执行在 iad1（美东）、主库在 ap-southeast-1（新加坡）→ **每次冷启动**重建
- *   数据库连接要 5~6 个往返（TCP + TLS + SCRAM 认证 + startup）≈ 2.3s。
- *   实测反证链：v1.0.2 把连接池上限 5→12（无效）、v1.0.3 把 route_stations 传输量
- *   压掉 9 成（仍无效，staticMs 2283ms 几乎不动）→ **传输量与连接数都不是瓶颈，
- *   固定建连成本才是**。走 Data Cache 后，冷启动直接读边缘缓存 → 完全不碰数据库。
+ * ★ v1.0.5（2026-10-30）：**移除 `unstable_cache`**。
+ *   Next Data Cache 单条目上限 **2MB**，而本层静态行序列化后 ≈3.2MB
+ *   → 每次写入都失败并抛 `unhandledRejection`（日志噪音 + 生产隐患），且从未真正命中。
+ *   ⇒ 只保留进程内 TTL 缓存（同实例复用，`STATIC_TTL_MS` 60s）。
+ *   取行为**一次并行查询窗口**（`fetchStaticRowsUncached`），已把 14 张表折进同一 RTT。
  */
 import type { Pool } from "pg";
-import { unstable_cache } from "next/cache";
 import { getPool } from "@/lib/db";
 import {
   buildRouteIndexFromRows,
@@ -193,27 +188,14 @@ async function fetchStaticRowsUncached(pool: Pool): Promise<StaticRows> {
 }
 
 /**
- * ★ v1.0.4：静态行 = **跨实例数据缓存**（60s 重新验证，与原有进程内 TTL 同口径）。
- * ⚠️ 不走 `pool` 参数：`unstable_cache` 会把入参序列化进 cache key，
- *    而 Pool 实例不可序列化 → 必须用模块级 `getPool()`。
- *    若 Data Cache 未命中，则回落到一次真实查询（行为与 v1.0.3 相同）。
- */
-const getStaticRows = unstable_cache(
-  async () => fetchStaticRowsUncached(getPool()),
-  ["rec-static-rows-v1"],
-  { revalidate: 60, tags: ["rec-static"] },
-);
-
-/**
  * 静态数据进程内缓存（同实例复用，避免每次请求重建索引）。
- * 与 Data Cache 是两层：外层（跨实例）管「取行」，内层（本实例）管「建索引」。
  */
 const STATIC_TTL_MS = 60_000;
 const g = globalThis as unknown as { __recStaticCache?: { ts: number; data: RecStatic } };
 
-/** 装入全部静态数据（默认走 60s 进程内缓存；取行走 Vercel Data Cache） */
+/** 装入全部静态数据（默认走 60s 进程内缓存） */
 export async function loadStatics(pool: Pool, force = false): Promise<RecStatic> {
-  // ★ v1.0.4：取行已交给 Data Cache（跨实例），pool 参数仅为兼容既有签名保留
+  // pool 参数仅为兼容既有签名保留（内部统一走模块级 getPool()）
   void pool;
   const c = g.__recStaticCache;
   if (!force && c && Date.now() - c.ts < STATIC_TTL_MS) return c.data;
@@ -223,15 +205,8 @@ export async function loadStatics(pool: Pool, force = false): Promise<RecStatic>
 }
 
 async function loadStaticsUncached(): Promise<RecStatic> {
-  // ★ v1.3.0：非 Next 运行时（`tsx` 脚本 / 探针）里 `unstable_cache` 不可用
-  //   （会抛 `Invariant: incrementalCache missing`）→ 回落到**直接查库**。
-  //   ⚠️ 只在 Next 运行时之外触发 ⇒ 线上行为**零变化**（正常路径仍走 Data Cache）。
-  let rows: StaticRows;
-  try {
-    rows = await getStaticRows();
-  } catch {
-    rows = await fetchStaticRowsUncached(getPool());
-  }
+  // ★ v1.0.5：直接查库（一次并行 RTT 窗口）。不再经过 Next Data Cache（2MB 上限）。
+  const rows: StaticRows = await fetchStaticRowsUncached(getPool());
 
   const placeIds: Record<string, number> = {};
   for (const r of rows.places) placeIds[r.slug] = r.id;

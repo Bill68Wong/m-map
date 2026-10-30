@@ -39,6 +39,7 @@ import { useRecommend, type PrefMode } from "./useRecommend";
 import { useSnapSheet } from "./useSnapSheet";
 import type { DetailBody } from "./useDetailBody";
 import type { RideTrackView } from "./useRideTracking";
+import type { WalkNavRequest } from "./walk-nav";
 import { DETENTS, detentIndex, type Detent } from "./sheet-detents";
 import type { FavoriteEndpoint } from "@/lib/favorites/types";
 import type { RecommendCard } from "@/lib/recommend/types";
@@ -58,6 +59,11 @@ export interface RouteSheetDetail {
   destCoord?: { lng: number; lat: number } | null;
   /** ★ 点「切过去」→ 打开新方案导航 */
   onSwitchCard?: (card: RecommendCard, degraded: boolean) => void;
+  /** ★ 2026-10-29：出发地坐标/名称（首段步行导航用；GCJ-02） */
+  originCoord?: { lng: number; lat: number } | null;
+  originLabel?: string;
+  /** ★ 2026-10-29：点「步行导航」→ 宿主查询 + 地图画线 */
+  onWalkNav?: (req: Omit<WalkNavRequest, "id">) => void;
 }
 
 export interface RouteSheetProps {
@@ -375,6 +381,9 @@ export default function RouteSheet({
               destCoord={detail.destCoord ?? null}
               onSwitchCard={detail.onSwitchCard}
               immersive={immersive}
+              originCoord={detail.originCoord ?? null}
+              originLabel={detail.originLabel ?? "我的位置"}
+              onWalkNav={detail.onWalkNav}
             />
           )}
         </div>

@@ -5989,6 +5989,149 @@ html[data-sheet-dragging="on"] .nav-locate-fab {
   box-shadow: none;
 }
 
+/* ── ★ 2026-10-29：步行导航结果面板（`.nav-card-overlay` 之上再收敛高度）── */
+.walk-nav {
+  max-height: 38dvh;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.walk-nav__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.walk-nav__title {
+  font-size: var(--text-md);
+  font-weight: var(--fw-announce);
+  color: var(--on-surface);
+}
+.walk-nav__od {
+  margin: 0;
+  color: var(--meta);
+}
+.walk-nav__stat {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  min-height: 32px;
+}
+.walk-nav__min {
+  color: var(--on-surface-var);
+  font-size: var(--text-sm);
+}
+.walk-nav__min b {
+  font-size: var(--text-2xl);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--on-surface);
+}
+.walk-nav__dist {
+  font-size: var(--text-sm);
+  color: var(--on-surface-var);
+}
+.walk-nav__hint {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--meta);
+}
+.walk-nav__hint--warn {
+  color: var(--warn);
+}
+.walk-nav__steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.walk-nav__step {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+.walk-nav__step-no {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: var(--text-2xs);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.walk-nav__step-text {
+  flex: 1;
+  font-size: var(--text-sm);
+  line-height: var(--leading-body);
+  color: var(--on-surface);
+}
+.walk-nav__step-dist {
+  flex: none;
+  font-size: var(--text-2xs);
+  color: var(--meta);
+  font-variant-numeric: tabular-nums;
+}
+.walk-nav__foot {
+  margin: 0;
+  font-size: var(--text-2xs);
+  color: var(--meta);
+}
+
+/* ── ★ 2026-10-29（第二期）：跟随态（当前步 / 偏航 / 到达 / 操作行）── */
+.walk-nav__now {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--border);
+}
+.walk-nav__now .walk-nav__step-text {
+  font-weight: var(--fw-announce);
+}
+.walk-nav__offroute {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border-radius: var(--radius-btn);
+  background: var(--accent-soft);
+  color: var(--warn);
+  font-size: var(--text-sm);
+}
+.walk-nav__arrived {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+  color: var(--ok, var(--accent));
+  font-size: var(--text-md);
+  font-weight: var(--fw-announce);
+}
+.walk-nav__actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding-top: var(--space-1);
+}
+
+
+/* 详情行内的「步行导航」入口：小号、不抢主文案 */
+.rc-walk-nav {
+  flex: none;
+  white-space: nowrap;
+  color: var(--accent);
+}
+
 /* ── 面板打开期间隐藏顶部搜索框（200ms 淡出；Safari 16.4+ / Chrome 支持 :has 前的兼容做法）── */
 .nav-searchbar {
   transition: opacity var(--sheet-dur-scrim) var(--ease-standard);

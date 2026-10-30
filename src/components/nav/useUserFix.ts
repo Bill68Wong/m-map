@@ -62,6 +62,10 @@ export function useUserFix(opts: {
   const maxAgeRef = useRef(maximumAge);
   maxAgeRef.current = maximumAge;
   const startedRef = useRef(false);
+  /** ★ 2026-10-30：是否曾成功拿到过一帧（成功即把 `denied` 复位） */
+  const hasFixRef = useRef(false);
+  /** ★ 2026-10-30：非「拒权」类失败的连续次数（超时/信号弱，2 次才降级为不可用） */
+  const softFailRef = useRef(0);
 
   const stopWatch = useCallback(() => {
     if (watchRef.current != null) {
@@ -92,13 +96,30 @@ export function useUserFix(opts: {
             ts: Date.now(),
           };
           pendingRef.current = f;
+          hasFixRef.current = true;
+          softFailRef.current = 0;
+          setDenied(false);
           if (f.ts - lastAcceptRef.current >= intervalRef.current) {
             lastAcceptRef.current = f.ts;
             setFix(f);
             pendingRef.current = null;
           }
         },
-        () => setDenied(true),
+        (err) => {
+          /**
+           * ★ 2026-10-30：**区分错误类别**（旧实现任何 error 都 `denied=true` 且成功后也不复位
+           *   ⇒ 室内首帧超时就会被永久判定「定位不可用」，即使随后 GPS 已正常）。
+           *   · PERMISSION_DENIED(1) ⇒ 硬拒权，直接不可用；
+           *   · 其余（TIMEOUT=3 / POSITION_UNAVAILABLE=2）⇒ 信号弱/暂不可用，
+           *     只有**从未成功过**且连续失败 ≥2 次才判不可用，且成功后自动复位。
+           */
+          if (err?.code === 1) {
+            setDenied(true);
+            return;
+          }
+          softFailRef.current += 1;
+          if (!hasFixRef.current && softFailRef.current >= 2) setDenied(true);
+        },
         { enableHighAccuracy: true, timeout: 10_000, maximumAge: maxAgeRef.current },
       );
       setDenied(false);

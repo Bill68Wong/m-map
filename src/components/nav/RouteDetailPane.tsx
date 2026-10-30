@@ -20,6 +20,7 @@ import type { FavoriteEndpoint } from "@/lib/favorites/types";
 import type { RecommendCard } from "@/lib/recommend/types";
 import type { DetailBody } from "./useDetailBody";
 import type { RideTrackView } from "./useRideTracking";
+import type { WalkNavRequest } from "./walk-nav";
 
 export interface RouteDetailPaneProps {
   card: RecommendCard;
@@ -43,6 +44,13 @@ export interface RouteDetailPaneProps {
   onSwitchCard?: (card: RecommendCard, degraded: boolean) => void;
   /** ★ 2026-09-25：全屏化（导航中隐藏底导、收敛间距） */
   immersive?: boolean;
+  /**
+   * ★ 2026-10-29：步行导航透传（收藏薄壳不传 ⇒ 入口不渲染）。
+   *   `originCoord` 缺省只隐藏「起点 → 上车站」那一条；换乘/末段仍可用。
+   */
+  originCoord?: { lng: number; lat: number } | null;
+  originLabel?: string;
+  onWalkNav?: (req: Omit<WalkNavRequest, "id">) => void;
 }
 
 export default function RouteDetailPane({
@@ -59,6 +67,9 @@ export default function RouteDetailPane({
   destCoord = null,
   onSwitchCard,
   immersive = false,
+  originCoord = null,
+  originLabel = "我的位置",
+  onWalkNav,
 }: RouteDetailPaneProps) {
   /** 收藏数据（纯函数在客户端现算：指纹 / 快照 / 流程图结构） */
   const favData = useMemo(() => {
@@ -107,6 +118,10 @@ export default function RouteDetailPane({
           destCoord={destCoord}
           onSwitchCard={onSwitchCard}
           immersive={immersive}
+          legs={body.legs}
+          originCoord={originCoord}
+          originLabel={originLabel}
+          onWalkNav={onWalkNav}
         />
       )}
     </div>

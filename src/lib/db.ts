@@ -36,6 +36,16 @@ export function getPool(): Pool {
     //   （v1.0.1 曾把桶并发提到 12，但静态层这条串行波次一直没治，故 v1.0.2 补上。）
     max: 12,
     ssl: connStr.includes("supabase") ? { rejectUnauthorized: false } : undefined,
+    /**
+     * ★ 2026-10-30（性能）：**保持连接温热** —— 本地直连新加坡主库，空闲连接被池/网络断开后，
+     *   下一条查询要重新握手（实测首包 ≈1.5s，正是「点出发要等好几秒」里最难解释的那段）。
+     *   · `keepAlive`：TCP 保活，避免 NAT/池回收空闲连接；
+     *   · `idleTimeoutMillis`：显式 30s（= pg 默认值，写出来表明「不主动缩短」的意图）；
+     *   · `connectionTimeoutMillis`：建连失败快速报错，而不是让请求挂到默认无穷等。
+     */
+    keepAlive: true,
+    idleTimeoutMillis: 30_000,
+    connectionTimeoutMillis: 15_000,
   });
   globalForDb.pgPool = pool;
   return pool;

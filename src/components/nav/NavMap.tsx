@@ -30,6 +30,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { isInsideRings, loadMacauDistrict, maskOuterRing, type MacauDistrict } from "@/lib/amap/district";
+import { wgs84ToGcj02 } from "@/lib/amap/coord";
 import { type ColoredLeg, type LL } from "@/lib/nav/route-overview";
 import { loadAMap } from "./amap-loader";
 /* ★ v3.3.0（AC-92 · ADR-102）：起终点钉内联 SVG 单一真源 */
@@ -47,6 +48,8 @@ import { drawOverview } from "./nav-map-overview";
 import { lrtTransferVariantOf } from "./lrt-transfer";
 import TrackLayer from "./TrackLayer";
 import UserDotLayer from "./UserDotLayer";
+import type { WalkNavRequest, WalkNavResult } from "./walk-nav";
+import { WALK_FOLLOW_ZOOM } from "./walk-nav";
 import VehicleLayer from "./VehicleLayer";
 import type { VehicleLite } from "./VehicleMarker";
 import type { UserFix } from "./useUserFix";
@@ -209,6 +212,23 @@ export interface NavMapProps {
   userDotSmoothMs?: number;
   /** 附加类名（承载全屏布局） */
   className?: string;
+  /**
+   * ★ 2026-10-29：**步行导航请求**（GCJ-02）。
+   *   非空 ⇒ 用高德 `AMap.Walking` 查真实步行路径并画线、取景；`null` ⇒ 清理折线。
+   *   查询结果经 `onWalkNavResult` 回传（面板由宿主渲染）。
+   */
+  walkNav?: WalkNavRequest | null;
+  /** 步行查询结果回传（成功/失败都给，保证面板不空白） */
+  onWalkNavResult?: (r: WalkNavResult) => void;
+  /**
+   * ★ 2026-10-29（第二期）：**跟随模式**。`true` ⇒ 相机钉子钉在当前 GPS 点上（`walkPos`），
+   *   每来一帧定位就居中（缩放固定 `WALK_FOLLOW_ZOOM`）；`false` ⇒ 恢复步行路径总览取景。
+   */
+  walkFollow?: boolean;
+  /** 跟随模式下的当前 GPS 点（GCJ-02）；null = 等定位 */
+  walkPos?: { lng: number; lat: number } | null;
+  /** 跟随中被用户拖动地图打断（宿主置 `walkFollow=false`） */
+  onWalkFollowBreak?: () => void;
 }
 
 export default function NavMap({
@@ -232,6 +252,11 @@ export default function NavMap({
   traveled = null,
   lineStops = null,
   userDotSmoothMs = 0,
+  walkNav = null,
+  onWalkNavResult,
+  walkFollow = false,
+  walkPos = null,
+  onWalkFollowBreak,
 }: NavMapProps) {
   const canvasRef = useRef<HTMLDivElement | null>(null);
   /** `.nav-map` 根元素（写观测钩子：data-map-follow / data-map-zoom / …） */
@@ -266,6 +291,24 @@ export default function NavMap({
   const routeStopsRef = useRef<Set<string>>(new Set());
   /** ★ 2026-09-23：路线总览的 polyline（灰底 z68 + 彩段 z72）；退出 detail 时逐个 remove */
   const overviewPolylinesRef = useRef<unknown[]>([]);
+  /** ★ 2026-10-29：步行导航折线（退出/切换步行段时逐个 remove） */
+  const walkPolylinesRef = useRef<unknown[]>([]);
+  /**
+   * ★ 2026-10-29（第二期）：步行路径的「总览取景」记忆（center/zoom）——
+   *   跟随结束（`walkFollow: true → false`）时据此恢复；`null` = 当前无路径。
+   */
+  const walkViewRef = useRef<{ zoom: number; center: [number, number] } | null>(null);
+  /** 被「用户拖动」打断跟随 ⇒ 退出时**不抢回总览镜头**（拖动期间跳相机会打断手势） */
+  const walkSkipRestoreRef = useRef(false);
+  /** 跟随状态镜像（供 dragstart / 查询回调读最新值，避免闭包过期） */
+  const walkFollowRef = useRef(walkFollow);
+  walkFollowRef.current = walkFollow;
+  /** 跟随被打断回调（ref 化，避免事件绑定重跑） */
+  const onWalkFollowBreakRef = useRef<NavMapProps["onWalkFollowBreak"]>(undefined);
+  onWalkFollowBreakRef.current = onWalkFollowBreak;
+  /** 步行结果回调放进 ref：避免 prop 变化导致查询 effect 重跑 */
+  const onWalkNavResultRef = useRef<NavMapProps["onWalkNavResult"]>(undefined);
+  onWalkNavResultRef.current = onWalkNavResult;
   /** 路线模式切换后触发站点图层重建（marker 的样式在创建时决定，必须重建才生效） */
   const [stationRebuildTick, setStationRebuildTick] = useState(0);
   /** 点击回调放进 ref：避免 prop 变化导致图层重新绑定事件 */
@@ -366,8 +409,46 @@ export default function NavMap({
   }, [applyCamera]);
 
   /**
+   * ★ 2026-10-30（定位兜底）：**采纳一个已确认的定位点**（AMap 与浏览器定位共用）。
+   *   · 画/更新 mepin（有 GPS 实时蓝点时不再画，避免双点）；
+   *   · 边界就绪 → 取景判定；未就绪 → 暂存；
+   *   · 回传宿主。
+   */
+  const acceptLocate = useCallback(
+    (pos: { lng: number; lat: number }, focus: boolean) => {
+      locatedRef.current = true;
+      lastLocatePosRef.current = pos;
+      canvasRef.current?.removeAttribute("data-locate-outside");
+      canvasRef.current?.setAttribute("data-locate-ok", "on");
+      setNote("");
+      // ★ 本批：GPS 实时蓝点（UserDotLayer）存在时，**不再创建 mepin**（单一点，AC-40/41）。
+      if (!userFix && mapRef.current) {
+        const A = amapRef.current;
+        if (userMarkerRef.current) userMarkerRef.current.setPosition([pos.lng, pos.lat]);
+        else if (A) {
+          userMarkerRef.current = new A.Marker({
+            position: [pos.lng, pos.lat],
+            content: '<div class="nav-map__mepin" aria-label="我的位置"></div>',
+            offset: new A.Pixel(-9, -9),
+            zIndex: 110,
+          });
+          mapRef.current.add(userMarkerRef.current);
+        }
+      }
+      if (boundsAppliedRef.current) applyLocateView(pos, focus);
+      else pendingLocateRef.current = { pos, focus }; // 边界未就绪 → 暂存，就绪后再决定
+      onLocate?.(pos);
+    },
+    [applyLocateView, onLocate, userFix],
+  );
+
+  /**
    * 跑一次定位（首屏 + 右上定位按钮共用）。
    * 范围内 → 居中到定位点；范围外 → 不移动地图（保持澳门视野）；蓝点如实落位。
+   *
+   * ★ 2026-10-30：**两级定位** —— 先走高德 `AMap.Geolocation`（GCJ-02 直出）；
+   *   失败（境外 IP / 服务不可用 / 权限被拒）再回落浏览器 `navigator.geolocation`
+   *   （WGS84 → GCJ-02）。实测「无法定位」多因高德定位服务不可达，而浏览器定位可用。
    */
   const runLocate = useCallback(
     (opts?: { focus?: boolean }) => {
@@ -378,37 +459,36 @@ export default function NavMap({
       const geo = new AMap.Geolocation({ enableHighAccuracy: true, timeout: 10_000, convert: true });
       setLocating(true);
       geo.getCurrentPosition((status: string, result: any) => {
-        setLocating(false);
         if (status === "complete" && result?.position) {
+          setLocating(false);
           // ★ position 已是 GCJ-02（convert:true）→ 不再转换
-          const pos = { lng: result.position.lng, lat: result.position.lat };
-          locatedRef.current = true;
-          lastLocatePosRef.current = pos;
-          canvasRef.current?.removeAttribute("data-locate-outside");
-          // ★ 本批：GPS 实时蓝点（UserDotLayer）存在时，**不再创建 mepin**（单一点，AC-40/41）。
-          if (!userFix && mapRef.current) {
-            if (userMarkerRef.current) userMarkerRef.current.setPosition([pos.lng, pos.lat]);
-            else {
-              userMarkerRef.current = new AMap.Marker({
-                position: [pos.lng, pos.lat],
-                content: '<div class="nav-map__mepin" aria-label="我的位置"></div>',
-                offset: new AMap.Pixel(-9, -9),
-                zIndex: 110,
-              });
-              mapRef.current.add(userMarkerRef.current);
-            }
-          }
-          if (boundsAppliedRef.current) applyLocateView(pos, focus);
-          else pendingLocateRef.current = { pos, focus }; // 边界未就绪 → 暂存，就绪后再决定
-          onLocate?.(pos);
-        } else {
-          // ★ 定位失败 → 停在澳门视野（不重设视角）+ 提示（§D.1）
-          setNote("无法定位 · 请手动选择出发点");
-          onLocate?.(null);
+          acceptLocate({ lng: result.position.lng, lat: result.position.lat }, focus);
+          return;
         }
+        // 兜底：浏览器定位（WGS84 → GCJ-02）
+        if (typeof navigator === "undefined" || !navigator.geolocation) {
+          setLocating(false);
+          setNote("无法定位 · 请检查定位权限，或手动选择出发点");
+          onLocate?.(null);
+          return;
+        }
+        navigator.geolocation.getCurrentPosition(
+          (p) => {
+            setLocating(false);
+            const g = wgs84ToGcj02({ lat: p.coords.latitude, lng: p.coords.longitude });
+            acceptLocate({ lng: g.lng, lat: g.lat }, focus);
+          },
+          () => {
+            setLocating(false);
+            // ★ 定位失败 → 停在澳门视野（不重设视角）+ 提示（§D.1）
+            setNote("无法定位 · 请检查定位权限，或手动选择出发点");
+            onLocate?.(null);
+          },
+          { enableHighAccuracy: true, timeout: 8_000, maximumAge: 0 },
+        );
       });
     },
-    [applyLocateView, onLocate, userFix],
+    [acceptLocate, onLocate],
   );
 
   const init = useCallback(async () => {
@@ -812,7 +892,14 @@ export default function NavMap({
     if (phase !== "ready") return;
     const map = mapRef.current;
     if (!map) return;
-    const onDragStart = () => setFollowState("free");
+    const onDragStart = () => {
+      setFollowState("free");
+      // ★ 第二期：步行跟随中用户拖动地图 = 明确「不想被钉住」⇒ 通知宿主退出跟随
+      if (walkFollowRef.current) {
+        walkSkipRestoreRef.current = true; // 拖动中不跳相机
+        onWalkFollowBreakRef.current?.();
+      }
+    };
     const onZoomStart = () => {
       if (!programmaticRef.current) setFollowState("free");
     };
@@ -1295,6 +1382,180 @@ export default function NavMap({
     canvasRef.current?.setAttribute("data-overview-legs", String(drawn));
     return () => clearOverview();
   }, [overview, phase]);
+
+  /**
+   * ★ 2026-10-29：**步行导航**（高德 JS API `AMap.Walking`，经 `/_AMapService` 代理）。
+   *
+   * · 只在 `phase=ready` 且有请求时查询；`null` / 切段 → 先清旧折线；
+   * · 结果（距离/时长/转向步骤）经 `onWalkNavResult` 回传，面板由 `NavShell` 渲染；
+   * · 失败也回传显式错误 ⇒ 面板显示「重试」，不留空白；
+   * · `cancelled` 防 StrictMode 双跑 / 切段后旧结果覆盖新段；
+   * · 取景按路径跨度选 14~17 级（不走 `setFitView` —— 本项目 `setLimitBounds` 下会跑偏）。
+   */
+  useEffect(() => {
+    const map = mapRef.current;
+    const AMap = amapRef.current;
+
+    const clearWalk = () => {
+      for (const p of walkPolylinesRef.current) {
+        try {
+          map?.remove(p as never);
+        } catch {
+          /* ignore */
+        }
+      }
+      walkPolylinesRef.current = [];
+    };
+
+    if (phase !== "ready" || !map || !AMap || !walkNav) {
+      clearWalk();
+      walkViewRef.current = null;
+      return;
+    }
+    clearWalk();
+
+    let cancelled = false;
+    const fail = (error: string) => {
+      if (!cancelled) onWalkNavResultRef.current?.({ ok: false, error });
+    };
+
+    const run = () => {
+      if (cancelled) return;
+      let walking: any;
+      try {
+        walking = new AMap.Walking({ map: null, hideRouteList: true, isOutline: false, autoFitView: false });
+      } catch {
+        fail("步行插件初始化失败");
+        return;
+      }
+      walking.search(
+        [walkNav.from.lng, walkNav.from.lat],
+        [walkNav.to.lng, walkNav.to.lat],
+        (status: string, result: any) => {
+          if (cancelled) return;
+          if (status !== "complete" || !result?.routes?.length) {
+            fail(status === "error" ? "步行路线查询失败，请稍后重试" : "未找到可行步行路线");
+            return;
+          }
+          const route = result.routes[0];
+          const steps = (route.steps ?? []).map((s: any) => ({
+            instruction: String(s.instruction ?? "继续步行"),
+            distanceM: Number(s.distance ?? 0) || 0,
+          }));
+
+          // 第二期：同时保留「对象数组（供宿主算进度）」与「元组数组（供 Polyline）」
+          const pathPts: { lng: number; lat: number }[] = [];
+          const path: [number, number][] = [];
+          for (const s of route.steps ?? []) {
+            for (const p of s.path ?? []) {
+              const lng = typeof p?.getLng === "function" ? p.getLng() : p?.lng ?? p?.[0];
+              const lat = typeof p?.getLat === "function" ? p.getLat() : p?.lat ?? p?.[1];
+              if (Number.isFinite(lng) && Number.isFinite(lat)) {
+                pathPts.push({ lng, lat });
+                path.push([lng, lat]);
+              }
+            }
+          }
+          if (path.length < 2) {
+            fail("未获取到步行路径");
+            return;
+          }
+
+          let view: { zoom: number; center: [number, number] } | null = null;
+          try {
+            const accent =
+              getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#1b4d8f";
+            const line = new AMap.Polyline({
+              path,
+              strokeColor: accent,
+              strokeWeight: 6,
+              borderWeight: 1,
+              lineJoin: "round",
+              lineCap: "round",
+              showDir: true,
+              zIndex: 76,
+            });
+            map.add(line);
+            walkPolylinesRef.current.push(line);
+
+            let minLng = Infinity;
+            let minLat = Infinity;
+            let maxLng = -Infinity;
+            let maxLat = -Infinity;
+            for (const [lng, lat] of path) {
+              if (lng < minLng) minLng = lng;
+              if (lat < minLat) minLat = lat;
+              if (lng > maxLng) maxLng = lng;
+              if (lat > maxLat) maxLat = lat;
+            }
+            const clng = (minLng + maxLng) / 2;
+            const clat = (minLat + maxLat) / 2;
+            const spanM = Math.max(
+              (maxLng - minLng) * 111320 * Math.cos((clat * Math.PI) / 180),
+              (maxLat - minLat) * 111320,
+            );
+            const zoom = spanM <= 450 ? 17 : spanM <= 900 ? 16 : spanM <= 1800 ? 15 : 14;
+            view = { zoom, center: [clng, clat] };
+            // 跟随中不抢镜头（相机由下面的跟随 effect 钉在 GPS 点上）
+            if (!walkFollowRef.current) applyCamera(() => map.setZoomAndCenter(zoom, [clng, clat]));
+          } catch {
+            /* 画线失败不影响结果面板 */
+          }
+          walkViewRef.current = view;
+
+          onWalkNavResultRef.current?.({
+            ok: true,
+            distanceM: Number(route.distance ?? 0) || 0,
+            durationMin: (Number(route.time ?? 0) || 0) / 60,
+            steps,
+            path: pathPts,
+          });
+        },
+      );
+    };
+
+    if (typeof AMap.plugin === "function") AMap.plugin("AMap.Walking", run);
+    else fail("地图未加载步行插件");
+
+    return () => {
+      cancelled = true;
+      clearWalk();
+    };
+  }, [walkNav, phase, applyCamera]);
+
+  /**
+   * ★ 2026-10-29（第二期）：**跟随相机** —— `walkFollow && walkPos` 时每帧把当前 GPS 点居中，
+   *   缩放固定 `WALK_FOLLOW_ZOOM`（街道级）。程序化调用经 `applyCamera` 打标，
+   *   不会触发让位锁误判；用户拖动由 `dragstart` 通知宿主退出跟随。
+   */
+  useEffect(() => {
+    const map = mapRef.current;
+    if (phase !== "ready" || !walkFollow || !walkPos || !map) return;
+    try {
+      applyCamera(() => map.setZoomAndCenter(WALK_FOLLOW_ZOOM, [walkPos.lng, walkPos.lat]));
+    } catch {
+      /* 取景失败不影响导航 */
+    }
+  }, [walkFollow, walkPos, phase, applyCamera]);
+
+  /** 退出跟随（`walkFollow: true → false`）⇒ 恢复该步行路径的总览取景（记住的 center/zoom） */
+  const prevWalkFollowRef = useRef(false);
+  useEffect(() => {
+    if (prevWalkFollowRef.current && !walkFollow) {
+      const skip = walkSkipRestoreRef.current;
+      walkSkipRestoreRef.current = false;
+      const v = walkViewRef.current;
+      const map = mapRef.current;
+      if (!skip && v && map) {
+        try {
+          applyCamera(() => map.setZoomAndCenter(v.zoom, v.center));
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+    prevWalkFollowRef.current = walkFollow;
+  }, [walkFollow, applyCamera]);
 
   /**
    * ★ 2026-09-23：**在途车辆**改由原生标记层承担（`VehicleLayer`，见其文件头说明）。

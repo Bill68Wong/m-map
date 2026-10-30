@@ -503,6 +503,39 @@ export async function fetchTransitPlans(
   destGcj: LatLng,
   opts: TransitFetchOptions = {},
 ): Promise<TransitFetchResult> {
+  /**
+   * ★ 2026-10-30（性能 / 配额）：**同键在途去重**。
+   *
+   * 场景：前端在「起终点就绪」时先**预热**一次规划，用户随后点「出发」又发一次；
+   *   若同一 OD+策略的两个请求并发，两次都会穿透缓存 → 打两次高德、都等 ~1.5s。
+   *   这里让第二个请求**直接复用第一个的 Promise**（结果只读，消费方不修改），
+   *   ⇒ 用户点「出发」时立刻拿到预热中的结果，同时省一次高德调用。
+   *
+   * ⚠️ `noCache=true`（显式刷新）**不参与**去重：必须真正穿透到底。
+   */
+  const inFlightKey = `${odKeyOf(originGcj, destGcj, opts.nowMs ?? Date.now())}|s${opts.strategy ?? TRANSIT_STRATEGY}`;
+  const g = globalThis as unknown as { __transitInflight?: Map<string, Promise<TransitFetchResult>> };
+  if (!g.__transitInflight) g.__transitInflight = new Map();
+  if (!opts.noCache) {
+    const existed = g.__transitInflight.get(inFlightKey);
+    if (existed) return existed;
+  }
+  const p = fetchTransitPlansInner(originGcj, destGcj, opts);
+  if (!opts.noCache) {
+    g.__transitInflight.set(inFlightKey, p);
+    void p.then(
+      () => g.__transitInflight?.delete(inFlightKey),
+      () => g.__transitInflight?.delete(inFlightKey),
+    );
+  }
+  return p;
+}
+
+async function fetchTransitPlansInner(
+  originGcj: LatLng,
+  destGcj: LatLng,
+  opts: TransitFetchOptions,
+): Promise<TransitFetchResult> {
   const nowMs = opts.nowMs ?? Date.now();
   const strategy = opts.strategy ?? TRANSIT_STRATEGY;
   const baseOdKey = odKeyOf(originGcj, destGcj, nowMs);
