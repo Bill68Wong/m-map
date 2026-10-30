@@ -76,11 +76,37 @@ type LrtTtRow = {
   minutes: { hour: number; minutes: number[] }[];
 };
 
+/**
+ * ★ v3.6.1：seg 行的**数组编码**（落 Data Cache 用）。
+ *
+ * 为什么：`segment_stats` 14,951 行按对象编码序列化 ≈3.07MB，超 Next 单条 2MB 上限
+ * ⇒ 生产 `console.warn` 后**静默跳过写入**（不报错）⇒「跨实例缓存」自上线起从未生效。
+ * 改数组编码（去掉每行重复的键名 + 减少引号）后实测 **0.967MB**，单 key 即可入缓存。
+ *
+ * ⚠️ encode/decode 都由 `SEG_COLS` **同一份常量驱动**（map 取列 / zip 回对象），
+ *    杜绝「列顺序手写错位」——错位会被全量等价性证明立刻抓出
+ *    （`.verify/_o-array-equiv.ts`，14,951 行 deep-equal，差异必须 0）。
+ */
+type SegRowEncoded = (string | number | null)[];
+
+/** 列序 = 编码数组下标 = decode 键序。**改列必须三处同步**（SELECT 列表 / 此常量 / 类型）。 */
+const SEG_COLS = [
+  "route_code", "from_station", "to_station", "weekday", "time_bucket",
+  "arrive_kind", "avg_minutes", "p50_minutes", "samples",
+] as const;
+
+const encodeSegRows = (rows: SegmentStatRow[]): SegRowEncoded[] =>
+  rows.map((r) => SEG_COLS.map((c) => (r as unknown as Record<string, unknown>)[c] as string | number | null));
+
+const decodeSegRows = (enc: SegRowEncoded[]): SegmentStatRow[] =>
+  enc.map((e) => Object.fromEntries(SEG_COLS.map((c, i) => [c, e[i]])) as unknown as SegmentStatRow);
+
 /** ★ v1.0.4：静态数据原始行（纯 JSON · 可跨实例缓存 · **不含任何 Map**） */
 interface StaticRows {
   routeStops: RouteStopRow[];
   stations: StationRow[];
-  seg: SegmentStatRow[];
+  /** ★ v3.6.1：**数组编码**形态（消费前必须 `decodeSegRows`，见 loadStaticsUncached） */
+  seg: SegRowEncoded[];
   walk: WalkTimeRow[];
   /** ★ v1.2.0：高德步行距离（独立缓存表） */
   walkDist: StationWalkDistanceRow[];
@@ -176,7 +202,7 @@ async function fetchStaticRowsUncached(pool: Pool): Promise<StaticRows> {
   return {
     routeStops,
     stations,
-    seg: segRes.rows as unknown as SegmentStatRow[],
+    seg: encodeSegRows(segRes.rows as unknown as SegmentStatRow[]),
     walk: walkRes.rows as unknown as WalkTimeRow[],
     walkDist: walkDistRes.rows as unknown as StationWalkDistanceRow[],
     transfer: transferRes.rows as unknown as TransferWalkRow[],
@@ -200,7 +226,9 @@ async function fetchStaticRowsUncached(pool: Pool): Promise<StaticRows> {
  */
 const getStaticRows = unstable_cache(
   async () => fetchStaticRowsUncached(getPool()),
-  ["rec-static-rows-v1"],
+  // ★ v3.6.1：v1 → v2 —— seg 从对象编码换数组编码。换 key 而不做 f.encoding 分支的理由：
+  //   旧条目 revalidate=60s，一分钟内自然过期，分支代码是永久负担；换 key 零风险。
+  ["rec-static-rows-v2"],
   { revalidate: 60, tags: ["rec-static"] },
 );
 
@@ -209,7 +237,96 @@ const getStaticRows = unstable_cache(
  * 与 Data Cache 是两层：外层（跨实例）管「取行」，内层（本实例）管「建索引」。
  */
 const STATIC_TTL_MS = 60_000;
-const g = globalThis as unknown as { __recStaticCache?: { ts: number; data: RecStatic } };
+const g = globalThis as unknown as {
+  __recStaticCache?: { ts: number; data: RecStatic };
+  __staticCacheObs?: StaticCacheObs;
+};
+
+/* ══════════════════════════════════════════════════════════════════════
+ * ★ v3.6.1：静态数据 Data Cache **观测**（为什么必须有）
+ *
+ * 背景（2026-10-30 实测）：`StaticRows` 序列化后 ≈ 3.07MB，超过 Next 的
+ * **单条 2MB 上限**（`incremental-cache/index.js:429-441`）：
+ *   · 生产：`console.warn` 后 `return` ⇒ **不抛错、不 500，但缓存从不写入**
+ *     ⇒ 「跨实例缓存」从上线起就静默失效，每次 cache miss 都直连数据库；
+ *   · dev：`throw` ⇒ 悬空 rejection（`pendingRevalidates`）⇒ 冷启动首请求 500、
+ *     之后被进程内 60s 缓存遮住 ⇒ 看起来「好了」，其实没有。
+ *
+ * 「不报错」恰恰是「一直没缓存」的证据 ⇒ 必须有**外部可探测**的状态，只打日志没人看。
+ * 状态语义：
+ *   `ok`               = payload ≤ 2MB，Data Cache 应正常写入
+ *   `skipped-oversize` = payload > 2MB，生产会静默跳过（现状）
+ *   `error`            = Data Cache 层抛错（dev 超限 / incrementalCache 缺失），已回落直查
+ *   `not-run`          = 本次进程还没装载过静态数据
+ * ══════════════════════════════════════════════════════════════════════ */
+
+/** Next 单条缓存上限（2MB）——与 `incremental-cache` 的硬编码一致 */
+const DATA_CACHE_ITEM_LIMIT = 2 * 1024 * 1024;
+/** 观测状态（外部经 /api/health GET 读取；不落库、不进客户端包） */
+export type StaticCacheStatus = "ok" | "skipped-oversize" | "error" | "not-run";
+export interface StaticCacheObs {
+  status: StaticCacheStatus;
+  /** 按 Next 真实口径估算的 itemSize（body 先 stringify 再被外层 stringify，引号二次转义） */
+  sizeBytes: number;
+  limitBytes: number;
+  /** true = getStaticRows 抛错、已回落直查（dev 超限 / incrementalCache 缺失） */
+  fallbackUsed: boolean;
+  /** 最近一次装载的 epoch ms */
+  at: number;
+}
+
+/** 复刻 Next 的序列化链：`itemSize = JSON.stringify({kind,data:{…body:JSON.stringify(result)…}}).length` */
+function predictedItemSize(rows: StaticRows): number {
+  const body = JSON.stringify(rows);
+  return JSON.stringify({
+    kind: "FETCH",
+    data: { headers: {}, body, status: 200, url: "" },
+    revalidate: 60,
+  }).length;
+}
+
+/**
+ * Data Cache **真实读写探针**：小 payload（不受 2MB 限制）。
+ * 两次调用若拿到同一个 token ⇒ 写入+读回成立 ⇒ Data Cache 本身可用；
+ * 拿到新 token ⇒ 该次被重新生成（未命中或不可用）。
+ * 这把「缓存是否真的在工作」与「payload 是否超限」**解耦成两个可分别观测的问题**。
+ */
+const cacheProbe = unstable_cache(
+  async () => ({ t: Date.now(), n: Math.random() }),
+  ["rec-cache-probe-v1"],
+  { revalidate: 60, tags: ["rec-static-probe"] },
+);
+
+/** 供 /api/health 读取：状态 + 探针读写结论。GET 即探，无副作用、不落库。 */
+export async function getStaticCacheObs(): Promise<
+  StaticCacheObs & { probe: { roundTrip: "ok" | "miss" | "error"; first: number; second: number } }
+> {
+  const base: StaticCacheObs =
+    g.__staticCacheObs ?? {
+      status: "not-run",
+      sizeBytes: 0,
+      limitBytes: DATA_CACHE_ITEM_LIMIT,
+      fallbackUsed: false,
+      at: 0,
+    };
+  let probe: { roundTrip: "ok" | "miss" | "error"; first: number; second: number };
+  try {
+    // ⚠️ 两次调用若**恰好跨越 revalidate 窗口**（60s），第二次会重新生成 ⇒ miss 是预期行为，
+    //    不是故障。为让读数稳定：miss 时重试一对（连续两次几乎必在同一窗口内）。
+    let a = await cacheProbe();
+    let b = await cacheProbe();
+    if (a.t !== b.t) {
+      a = await cacheProbe();
+      b = await cacheProbe();
+    }
+    const roundTrip = a.t === b.t && a.n === b.n ? "ok" : "miss";
+    probe = { roundTrip, first: a.t, second: b.t };
+  } catch {
+    // 非 Next 运行时（tsx 脚本）会抛 `incrementalCache missing` —— 探针不可用不算故障
+    probe = { roundTrip: "error", first: 0, second: 0 };
+  }
+  return { ...base, probe };
+}
 
 /** 装入全部静态数据（默认走 60s 进程内缓存；取行走 Vercel Data Cache） */
 export async function loadStatics(pool: Pool, force = false): Promise<RecStatic> {
@@ -226,12 +343,27 @@ async function loadStaticsUncached(): Promise<RecStatic> {
   // ★ v1.3.0：非 Next 运行时（`tsx` 脚本 / 探针）里 `unstable_cache` 不可用
   //   （会抛 `Invariant: incrementalCache missing`）→ 回落到**直接查库**。
   //   ⚠️ 只在 Next 运行时之外触发 ⇒ 线上行为**零变化**（正常路径仍走 Data Cache）。
+  // ★ v3.6.1：无论走哪条路，都把「缓存会否写入」记进观测（/api/health 可 GET）。
+  //   注意：dev 超限时 Next 抛的是**悬空 rejection**（`pendingRevalidates`），本 try/catch
+  //   能接住的是同步抛出的那一支；生产超限不抛、只 console.warn ⇒ 靠下面的体积估算判定。
   let rows: StaticRows;
+  let fallbackUsed = false;
   try {
     rows = await getStaticRows();
   } catch {
+    fallbackUsed = true;
     rows = await fetchStaticRowsUncached(getPool());
   }
+  // ⚠️ 体积估算在**cache-miss 路径**才执行（约每 60s 一次/实例），不在每请求路径。
+  //    复刻 Next 的 2MB 判定口径（含 body 二次 stringify 的引号转义膨胀，实测系数 ≈1.19）。
+  const sizeBytes = predictedItemSize(rows);
+  g.__staticCacheObs = {
+    status: sizeBytes > DATA_CACHE_ITEM_LIMIT ? "skipped-oversize" : fallbackUsed ? "error" : "ok",
+    sizeBytes,
+    limitBytes: DATA_CACHE_ITEM_LIMIT,
+    fallbackUsed,
+    at: Date.now(),
+  };
 
   const placeIds: Record<string, number> = {};
   for (const r of rows.places) placeIds[r.slug] = r.id;
@@ -268,7 +400,8 @@ async function loadStaticsUncached(): Promise<RecStatic> {
 
   return {
     routeIdx,
-    segIdx: buildSegmentIndex(rows.seg),
+    // ★ v3.6.1：seg 在缓存里是数组编码 → 消费前解码回对象（仅 cache-miss 路径，~15k 次 map 可忽略）
+    segIdx: buildSegmentIndex(decodeSegRows(rows.seg)),
     walkIdx: buildWalkIndex(rows.walk, rows.walkDist),
     transferIdx: buildTransferIndex(rows.transfer),
     // 站序直接复用刚构建的 routeIdx.dirStops（不再单独查 route_stations）

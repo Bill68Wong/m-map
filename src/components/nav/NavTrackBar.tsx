@@ -143,7 +143,12 @@ export default function NavTrackBar(props: NavTrackBarProps) {
     } else {
       left = (
         <>
-          乘车中 · <b>{plate ?? routeLabel}</b>
+          乘车中 ·{" "}
+      {/**
+       * ★ v3.6.1：有牌号 ⇒ 车牌标签（sm 档）；**无牌号时回落的是线路名，绝不能套车牌马甲**。
+       *   外层 `<b>` 一并去掉：`.plate` 自带 700，再套 `<b>` 会合成双重加粗。
+       */}
+      {plate ? <span className="plate plate--sm">{plate}</span> : <b>{routeLabel}</b>}
           {!plate && lrt && <span className="nav-actions__sub"> · {routeLabel}</span>}
         </>
       );

@@ -1,6 +1,6 @@
 {
   "name": "must-dengxiao",
-  "version": "3.6.0",
+  "version": "3.6.1",
   "private": true,
   "description": "M Map · 澳门巴士 / 轻轨全澳导航：全屏地图、路线收藏与实时报站（数据来源：澳门交通事务局 DSAT）",
   "scripts": {
@@ -23,6 +23,7 @@
     "test:altbuses": "tsx scripts/test-altbuses.ts",
     "test:siblings": "tsx scripts/test-siblings.ts",
     "test:boarding-detect": "tsx scripts/test-boarding-detect.ts",
+    "test:transfer-risk": "tsx scripts/test-transfer-risk.ts",
     "check:api-guards": "tsx scripts/check-api-guards.ts",
     "test:walk-turn": "tsx scripts/test-walk-turn.ts",
     "test:walk-follow": "tsx scripts/test-walk-follow.ts",
@@ -69,6 +70,9 @@
     "db:migrate-v2600": "tsx scripts/db-guard.ts run db/migrate-v2600.ts",
     "db:migrate-v2900": "tsx scripts/db-guard.ts run db/migrate-v2900.ts",
     "db:migrate-v3400": "tsx scripts/db-guard.ts run db/migrate-v3400.ts",
+    "db:migrate-v3600": "tsx scripts/db-guard.ts run db/migrate-v3600.ts",
+    "db:migrate-vehicle-plates": "tsx scripts/db-guard.ts run db/migrate-vehicle-plates.ts",
+    "db:backfill-vehicle-plates": "tsx scripts/db-guard.ts run scripts/backfill-vehicle-plates.ts",
     "db:station-mileage": "tsx scripts/db-guard.ts run scripts/build-station-mileage.ts",
     "db:hop-stats": "tsx scripts/db-guard.ts run scripts/build-hop-stats.ts",
     "db:migrate-v2150": "tsx scripts/db-guard.ts run db/migrate-v2150.ts",

@@ -56,6 +56,46 @@
   --font-display: "Barlow", "Noto Sans SC", -apple-system, "PingFang SC", sans-serif;
   --font-body: "Barlow", "Noto Sans SC", -apple-system, "PingFang SC", sans-serif;
   --font-mono: "JetBrains Mono", "Barlow", monospace;
+  /* ---------- ★ v3.6.1：澳门巴士车牌标签（Plate Badge） ----------
+     法规：第 5/2002 号法律《机动车辆税规章》—— 免税车辆车牌**底色黑、字黄**。
+     规格：docs/迭代-导航优化-20260926/17-设计-车牌标签规格.md
+     ⚠️ **不复用 `--font-mono`**：该栈引用的 JetBrains Mono / Barlow 全仓未加载字体文件，
+        实际回落到 generic monospace（iOS Safari = Courier 衬线打字机），
+        与法规「正体无衬线」相悖 ⇒ 车牌专用一套**系统等宽无衬线**栈，零下载。 */
+  --plate-bg: #0c0f14; /* 漆面黑；与 --plate-ink 对比 13.41:1（AAA 需 7:1） */
+  --plate-ink: #ffd400; /* 交通信号黄；黑底 13.41:1 */
+  --plate-edge: transparent; /* 浅色主题无需框线：黑底 vs 白卡 19.19:1 */
+  --plate-radius: 4px;
+  --plate-tracking: 0.08em; /* 右 padding 需减去此值（见 .plate 注释） */
+  --plate-weight: 700;
+  --plate-font: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Roboto Mono", "Droid Sans Mono",
+    "DejaVu Sans Mono", "Liberation Mono", monospace;
+  --plate-font-sm: var(--text-sm); /* 13px */
+  --plate-font-md: var(--text-md); /* 15px */
+  --plate-font-lg: var(--text-xl); /* 20px */
+  --plate-pad-y-sm: 2px;
+  --plate-pad-x-sm: 6px;
+  --plate-pad-y-md: 3px;
+  --plate-pad-x-md: 8px;
+  --plate-pad-y-lg: 4px;
+  --plate-pad-x-lg: 12px;
+  /* ---------- ★ v3.6.1：车队编号角标（`.vcode`，如 HE380） ----------
+     视觉权重必须**低于**车牌：透明底 + muted 字 + 500 字重 + 11px（车牌是黑底黄字 + 700 + 15px）。
+     ⚠️ 字号锁 11px 的实测依据：320px 屏 + 轻轨「石排湾线」+ 末班时，
+        13px 需 244.5px > 可用 242px ⇒ 折成两行（卡片 +23px）；11px 需 237px，单行通过。
+     ⚠️ 文字色**直接写 `color: var(--muted)`**，不要另立别名 token（如 `--vcode-ink`）：
+        只是因为**没必要多一层间接**，不是因为会失效 —— 本项目主题在
+        `@media (prefers-color-scheme: dark) { :root { … } }`，声明点与覆写点同为 `:root`，
+        别名**会正常跟随**（实测 `--info: var(--accent)` 等 8 个别名全部生效）。
+        ⚠️ 真正的坑在将来：若引入**后代元素换肤**（`<div class="theme-dark">`），
+        所有依赖主题的别名会集体拿到祖先的旧值。那时须改为直接引用，或把换肤也挂在 `:root`。 */
+  --vcode-edge: var(--border-2); /* 浅色；深色块里**显式覆写**成 .32（别名+主题覆写=安全） */
+  --vcode-radius: 4px;
+  --vcode-font: var(--text-2xs); /* 11px */
+  --vcode-pad-x: 5px;
+  --vcode-pad-y: 1px;
+  --vcode-tracking: 0.02em;
+  --vcode-weight: 500;
   --fw-read: 400;
   --fw-emphasize: 600;
   --fw-announce: 700;
@@ -329,6 +369,11 @@
     --track-you-ring: color-mix(in srgb, var(--accent) 45%, transparent);
     --grab-color: var(--border-2);
     --grab-color-active: var(--fg-2);
+    /* ★ v3.6.1 车牌标签：牌底 #0c0f14 × 深色卡面 #1c1e24 仅 1.15:1（糊成一片）
+       ⇒ 必须补框线；合成 ≈ #6C6E74，vs 深色卡面 3.27:1 */
+    --plate-edge: rgba(226, 226, 233, 0.45);
+    /* ★ v3.6.1 车队编号角标：`--border-2`(.2) 在深色卡面只有 1.74:1，太弱 ⇒ 提到 .32 */
+    --vcode-edge: rgba(226, 226, 233, 0.32);
   }
 }
 
@@ -5145,12 +5190,109 @@ html[data-sheet-dragging="on"] .nav-locate-fab {
   text-shadow: 0 1px 1px rgba(0, 0, 0, 0.16);
 }
 
+/**
+ * v3.6.1：`.nav-vehicle-card__plate` 降级为**只负责位置**（标题行内的 flex 项）。
+ * 字体/底色/内距/圆角/字距全部交给 `.plate`（见下方）——
+ * ⚠️ 原来的 `overflow/text-overflow: ellipsis` **必须删掉**：
+ *    车牌被截成 `AA7…` 比不显示更糟；宽度稳定性由「等宽字体 + 牌号恒 6 字符」保证
+ *    （实测 `min-width` 从未触发：71.5px 盒宽 > 65.5px 下限）。 */
 .nav-vehicle-card__plate {
-  font-family: var(--font-mono);
-  font-size: 15px;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  flex: none;
+}
+
+/* ---------- ★ v3.6.1：车牌标签（澳门黑底黄字，规格 17-设计-车牌标签规格.md） ----------
+   三档 sm/md/lg 用私有变量 `--_fs/--_px/--_py` 切换，避免为每档重复 10 行声明。
+   ⚠️ 右 padding 减 `--plate-tracking` 这一步**别省**：`letter-spacing` 会在**末字之后**
+      也追加一份空白，不减的话右边会莫名宽 1~1.6px（实测补偿后左右 8.00/8.00px 等距）。
+   ⚠️ `.plate:empty { display:none }` 是硬防线：牌号为空时若不整枚隐藏，
+      会留下一个 6ch 宽的黑方块，比不显示更像 bug（正常路径已由服务端过滤空 plate）。 */
+.plate {
+  --_fs: var(--plate-font-md);
+  --_px: var(--plate-pad-x-md);
+  --_py: var(--plate-pad-y-md);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  box-sizing: border-box;
+  /* 仅兜底：当前牌号恒 6 字符 + 等宽字体 ⇒ 盒宽 71.5px > 本下限 65.5px，不会触发。
+     留着是给未来 7 位牌号兜底（内容自然撑开、不截断），**不要因为"没触发"就删**。 */
+  min-width: calc(6ch + 2 * var(--_px));
+  padding: var(--_py) calc(var(--_px) - var(--plate-tracking)) var(--_py) var(--_px);
+  border-radius: var(--plate-radius);
+  background: var(--plate-bg);
+  color: var(--plate-ink);
+  font-family: var(--plate-font);
+  font-size: var(--_fs);
+  font-weight: var(--plate-weight);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--plate-tracking);
+  line-height: 1.1;
   white-space: nowrap;
+  box-shadow: inset 0 0 0 1px var(--plate-edge); /* inset：不占布局，不推移相邻元素 */
+}
+.plate:empty {
+  display: none;
+}
+.plate--sm {
+  --_fs: var(--plate-font-sm);
+  --_px: var(--plate-pad-x-sm);
+  --_py: var(--plate-pad-y-sm);
+}
+.plate--md {
+  --_fs: var(--plate-font-md);
+  --_px: var(--plate-pad-x-md);
+  --_py: var(--plate-pad-y-md);
+}
+.plate--lg {
+  --_fs: var(--plate-font-lg);
+  --_px: var(--plate-pad-x-lg);
+  --_py: var(--plate-pad-y-lg);
+}
+
+/* ---------- ★ v3.6.1：车队编号角标（`.vcode`，如 HE380） ----------
+   与车牌同行居右。四重降权：**透明底**（车牌是实心黑）+ `--muted` 字 + 500 字重 + 11px。
+   ⚠️ **内容自适应宽，不设 min-width**：编号 4~5 字符（2026-10-30 实测 532 台：
+      4 字约 12%、5 字约 88%，随采集增长会漂）。
+      曾**采纳后撤回** `min-width`（原先按 5ch 定宽，用于消除「4 字比 5 字窄约 6px」带来的「末班」位移）：
+      ① 换车时整卡内容全部替换（`NavShell` 挂载 `VehicleCard` 无 `key`），无静止参照物；
+         （注：最初理由写的是「抖动不可感知」，后被实测推翻 —— 同车刷新时角标瞬时缺失，
+          参照物完整、位移约 51px **恰恰可感知**。故理由改为量级对比，结论不变。）
+      ② 该 `min-width` 也**治不了**「同车刷新时角标瞬时缺失」那约 0.4% 的场景
+         （`display:none` 时角标不存在，设多大都无效），而那才是唯一可感知的位移（约 51px）；
+      ③ 与既有 chip（`末班` / 来源标签）「内容自适应」惯例一致。
+      ⇒ 若别处见到按「5ch 定宽」写法设的 `min-width`，那是**已作废方案**，勿加回。
+   ⚠️ 纯数字编号（`2107`/`6009` 等 11 台）是澳巴真实旧编号，**不是脏数据** ⇒
+      等宽字体下数字与字母 advance 相同，居中后左右对称，不加任何特殊样式/补零/前缀。 */
+.vcode {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  box-sizing: border-box;
+  padding: var(--vcode-pad-y) var(--vcode-pad-x);
+  border: 1px solid var(--vcode-edge);
+  border-radius: var(--vcode-radius);
+  background: transparent; /* ★ 无底色：与车牌实心黑形成主次 */
+  color: var(--muted); /* ★ 直接引用（并非因为别名会冻结——见上方 token 注释的实测说明） */
+  font-family: var(--plate-font); /* 与车牌同族等宽，视觉统一（别用 --font-mono ⇒ iOS Courier） */
+  font-size: var(--vcode-font);
+  font-weight: var(--vcode-weight);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--vcode-tracking);
+  line-height: 1.25;
+  white-space: nowrap;
+  opacity: 0.85;
+}
+.vcode:empty {
+  display: none;
+}
+
+/* ★ v3.6.1 折行安全阀：320px 屏 + 轻轨「石排湾线」+ 末班同时出现时
+   宁可折行（卡片 +23px），也**不能**把关闭按钮挤出视口。375px 下不触发 ⇒ 零视觉变化。 */
+.nav-vehicle-card__title {
+  flex-wrap: wrap;
+  row-gap: 4px;
 }
 
 .nav-vehicle-card__last {
@@ -5164,8 +5306,11 @@ html[data-sheet-dragging="on"] .nav-locate-fab {
 }
 
 /* 区间两行堆叠：每段独占一行 ⇒ 长站名可完整显示，不再省略 */
-.nav-vehicle-card__row--stack {
-  align-items: flex-start;
+/* ★ 用双类提高优先级：`.nav-vehicle-card__row`（本文件更后面）的 `align-items:center`
+   与单类选择器同级，靠源码顺序会**压掉**本规则 —— 这正是改前「区间」标签被垂直居中
+   （而不是与首站顶端对齐）的原因。写成 `.row.row--stack` 后必然胜出，与顺序无关。 */
+.nav-vehicle-card__row.nav-vehicle-card__row--stack {
+  align-items: start;
 }
 
 .nav-vehicle-card__interval2 {
@@ -5465,6 +5610,27 @@ html[data-sheet-dragging="on"] .nav-locate-fab {
 }
 
 /* ── 车辆信息卡（复用 `.nav-station-card` 的落位/层级；此处只补行与状态样式）── */
+/**
+ * ★ 两列对齐（车主反馈 2026-10-31 第二轮）：
+ *   上一版把 `__k` 改成 `width:auto; min-width:60px`，结果是**每行各自自适应**
+ *   —— 「状态」纯文字 ≈60px、「当前站」带 icon ≈72px+ ⇒ **右侧值的左边缘参差不齐**，
+ *   车主原话「不要只改时间那个字段，这样前面字段值和时间的值对不齐」。
+ *
+ *   现改为**每行各自一套相同列定义**（`84px 1fr`）⇒ 所有行的第 1 列宽度恒等
+ *   ⇒ 值的左边缘必然对齐（不依赖各行内容宽度）。
+ *
+ *   ⚠️ 为什么不用「父容器 grid + `__row { display: contents }`」：
+ *      `display:contents` 会让 `__row` **不生成盒子**，于是
+ *      `.nav-vehicle-card__row--stack { align-items: … }` 失去作用对象
+ *      （区间行的标签需与首站顶端对齐，而不是与整个两行值垂直居中）。
+ *      每行自成网格不改变盒子模型 ⇒ 风险更低。
+ *
+ *   ★ 实测还发现一个**既有 bug**：`.nav-vehicle-card__row--stack`（本文件更靠前）
+ *     原本写 `align-items: flex-start`，但它与 `.nav-vehicle-card__row` 的
+ *     `align-items: center` **同为单类选择器**，后者靠源码顺序胜出 ⇒
+ *     「区间」标签实际一直是被垂直居中的（实测标签 top 744.8 vs 首站 top 729.3，差 15.5px）。
+ *     已改为双类 `.row.row--stack` 提高优先级，现为 729.3 = 729.3（对齐首站顶端）。
+ */
 .nav-vehicle-card__rows {
   display: flex;
   flex-direction: column;
@@ -5472,17 +5638,23 @@ html[data-sheet-dragging="on"] .nav-locate-fab {
   margin-top: 10px;
 }
 .nav-vehicle-card__row {
-  display: flex;
+  /* ★ 每行都同一列宽 ⇒ 值必然对齐（第 1 列 = 标签列，第 2 列 = 值列） */
+  display: grid;
+  grid-template-columns: 84px 1fr;
+  column-gap: 10px;
   align-items: center;
-  gap: 8px;
 }
 .nav-vehicle-card__k {
-  flex: none;
-  width: 60px;
+  /* 列宽由所在行的 `grid-template-columns` 统一决定，这里**不再设 width** */
+  display: flex;
+  align-items: center;
+  gap: 4px; /* icon 与文字之间 */
+  min-width: 0;
+  white-space: nowrap;
   color: var(--muted);
 }
 .nav-vehicle-card__v {
-  flex: 1;
+  /* 第 2 列：`1fr` + `min-width:0` ⇒ 超长才有省略号（grid 项默认 stretch 即有定宽） */
   min-width: 0;
   color: var(--on-surface);
   overflow: hidden;
@@ -5524,6 +5696,9 @@ html[data-sheet-dragging="on"] .nav-locate-fab {
 }
 /* 状态徽标（双通道：文字 + 底色，不只靠颜色） */
 .nav-vehicle-card__state {
+  /* ★ grid 化连带：本行第 2 列是 `1fr`，grid 项默认 `justify-self: stretch`
+     ⇒ 徽标会被拉成整列宽（底色横贯）。显式 `start` 让它按内容收紧（与 flex 下 `flex:none` 等价）。 */
+  justify-self: start;
   flex: none;
   padding: 2px 8px;
   border-radius: var(--radius-chip);
@@ -6335,6 +6510,20 @@ body[data-sheet="open"] .nav-searchbar {
   flex-wrap: nowrap;
   white-space: nowrap;
 }
+/* ★ T5：本段「车上约 N 分」—— 展开态（导航强制展开 / 手动展开）也要能看到，
+   否则一进导航（`open = true`）这句话就从折叠键里消失。 */
+.navstrip__ride {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 0 0 2px 30px; /* 与站行文字左边界对齐（.navstrip__row 的 padding-left） */
+  font-size: var(--text-xs);
+  color: var(--muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.navstrip__ride b { color: var(--fg); font-weight: var(--fw-emphasize); }
+.navstrip__ride-sub { color: var(--muted); }
 .navstrip__hop { font-size: var(--text-xs); color: var(--meta); white-space: nowrap; }
 .navstrip__sub { font-size: var(--text-xs); color: var(--muted); white-space: nowrap; }
 /* ★ 2026-09-27（用户需求 3）：换乘处的「换乘后线路报时」（缩进对齐换乘行） */
@@ -7583,6 +7772,14 @@ body[data-nav-phase]:not([data-nav-phase="off"]) .nav-brandbar__acts { display: 
   --map-z-walk-ahead: 70;
   --map-z-walk-now: 73;
 
+  /* ★ T1：**走廊 ghost**（非当前段的完整步行走廊，全程常驻地图）
+     —— 比「正在跟随」那三态更细更淡：它是"预告/已过"，不该抢当前步的注意力。
+     层级 68 = 灰虚之下（不压乘车彩段 72，与乘车段共线时线路色仍在上）。 */
+  --map-walk-w-ghost: 4;
+  --map-walk-op-ghost: 0.4;
+  --map-walk-op-ghost-done: 0.5;
+  --map-z-walk-ghost: 68;
+
   /* 相机跟随的视野呼吸边距 —— 注意：**必须是可 parseFloat 的纯 px**。
      AMap 相机只吃数字，前端按 parseFloat(readToken("--map-fit-gap")) 直取。
      禁 calc() / clamp() / rem（写成算式会逼前端在 JS 里再造常量）。 */
@@ -7859,6 +8056,35 @@ body[data-nav-phase]:not([data-nav-phase="off"]) .nav-brandbar__acts { display: 
 }
 .walkturn[data-state="manual"] .walkturn__mark,
 .walkturn[data-state="manual"] .walkturn__txt { color: var(--fg-2); }
+
+/* ── ★ T1：步行段的**真出口**（`结束导航`）──────────────────────────────
+   页面级 `fixed`，与 `.walkturn` 同层（必须挂在 `.nav-map-wrap` 之外）；
+   落位 = 横幅正下方右侧 —— 横幅高 64（`--walkturn-h`），再留一格空气。
+   为什么不放面板吸底条：步行段面板不渲染 `.nav-actions`（见 NavShell 的 `detail.track`），
+   且面板拖到 peek 时吸底条会被摘要层压住 ⇒ 出口不能依赖面板状态。 */
+.nav-walk-exit {
+  position: fixed;
+  top: calc(var(--space-3) * 2 + var(--safe-top) + var(--walkturn-h));
+  right: var(--space-4);
+  z-index: var(--walkturn-z);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 36px;
+  padding: 0 var(--space-3);
+  background: var(--surface);
+  color: var(--fg);
+  border: var(--frame-w) solid var(--border-strong);
+  border-radius: var(--radius-full);
+  box-shadow: var(--shadow-hard-sm);
+  font-size: var(--text-xs);
+  font-weight: var(--fw-emphasize);
+  cursor: pointer;
+}
+.nav-walk-exit:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+@media (prefers-reduced-motion: reduce) {
+  .nav-walk-exit { transition: none; }
+}
 
 /* 步行态：隐藏底部 Tab（只改这一条，品牌栏由既有 :not([data-nav-phase="off"]) 覆盖） */
 body[data-nav-phase="walk"] .bottom-nav { display: none; }

@@ -84,13 +84,17 @@ export interface NavDetailBodyProps {
   immersive?: boolean;
   /**
    * ★ v3.6.0 S5：进入步行跟随（用户显式点击「开始步行」）。
+   * ★ T1：**两段都可**（`out` = 走到上车站 / `in` = 下车站走到目的地）——
+   *   旧签名写死 `"out"`，导致末段步行入口是死代码（`NavShell` 的 `walkOds.in` 备好却没人调）。
    * 传 `undefined` ⇒ 本组件**不渲染**展开键（收藏页 `RouteDetailSheet` 无地图上下文，走这条）。
    */
-  onWalkStart?: ((seg: "out", steps: WalkStep[]) => void) | null;
+  onWalkStart?: ((seg: "out" | "in", steps: WalkStep[]) => void) | null;
   /** 展开步骤时回调（调用方据此 `ensure()` 取数；命中缓存则零请求） */
-  onWalkExpand?: () => void;
+  onWalkExpand?: (seg: "out" | "in") => void;
   /** 首段步行预览数据（由宿主 `useWalkRoute` 提供） */
   walkPreview?: WalkPreview;
+  /** ★ T1：末段步行预览数据（下车站 → 目的地；缺省 = 不渲染末段入口） */
+  walkInPreview?: WalkPreview;
 }
 
 export default function NavDetailBody({
@@ -110,9 +114,14 @@ export default function NavDetailBody({
   onWalkStart,
   onWalkExpand,
   walkPreview = EMPTY_WALK_PREVIEW,
+  walkInPreview = EMPTY_WALK_PREVIEW,
 }: NavDetailBodyProps) {
-  /** ★ v3.6.0 S5：步行步骤展开态（不记忆，父组件持有亦不落盘） */
-  const [walkOpen, setWalkOpen] = useState(false);
+  /**
+   * ★ T1：步行步骤展开态（不记忆，父组件持有亦不落盘）。
+   *   改为「哪一段展开中」而不是布尔 —— 首段/末段各一个入口，同时只允许展开一段
+   *   （两段都展开会把面板滚成两屏，且用户当前只关心接下来要走的那段）。
+   */
+  const [walkOpen, setWalkOpen] = useState<"out" | "in" | null>(null);
   const colorOf = (c: string) => colors[c] ?? null;
   const first = card.rides[0];
   /** ★ v3.3.0（AC-107）：赶车提示（合并式）—— 后端 `catchHint` 优先、回落 `tierText` */
@@ -156,6 +165,103 @@ export default function NavDetailBody({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [etaTick, etaBaseMin, progKey]);
   const stopsAway = track && track.prog ? Math.max(0, trackStops.length - 1 - track.prog.passedIdx) : 0;
+  /** ★ T4：末段步行的「到达站」是否与目的地同名（同名 ⇒ 不重复渲染；口径见行内注释） */
+  const walkInTo = (card.walkIn.toLabel ?? "").trim();
+  const showWalkInTo = walkInTo.length > 0 && walkInTo !== (destLabel ?? "").trim();
+
+  /**
+   * 展开/收起某段步行步骤。
+   *
+   * 含 S5 的**实测布局修复**（原先只服务首段，现两段共用同一套，避免两处漂移）：
+   *   (a) 把**这一行**贴到滚动容器可视区顶部；
+   *   (b) 按「行以下还剩多少可见空间」反算预览块高度上限。
+   *
+   * ⚠️ 两个必须避开的坑（都踩过）：
+   *   ① 页面里有**两个** `.route-sheet__scroll`（recommend / detail 各一）⇒
+   *      必须 `closest()` 从被点击的按钮向上找，**禁止 document.querySelector**；
+   *   ② 滚动位移**不能用 `offsetTop` 相减** —— 嵌套定位下 offsetParent 不一致
+   *      （实测只滚了 61px，应为 ~190px）。一律用 `getBoundingClientRect()`。
+   *   ③ 可视底不是 `window.innerHeight` —— 详情 pane 有吸底操作条
+   *      `.route-sheet__actions-slot`（实测 high 85px，z=20）；只按视口算会让预览块
+   *      伸进去被盖住，命中测试落到「开始导航」按钮上（用户点「开始步行」误触「开始导航」）。
+   */
+  const toggleWalk = (seg: "out" | "in") => (ev: React.MouseEvent<HTMLButtonElement>) => {
+    const next = walkOpen === seg ? null : seg;
+    setWalkOpen(next);
+    if (!next) return;
+    onWalkExpand?.(next);
+    const btn = ev.currentTarget;
+    const row = btn.closest(".rc-row--walk") as HTMLElement | null;
+    const box = row?.closest(".route-sheet__scroll") as HTMLElement | null;
+    if (!row || !box) return;
+    requestAnimationFrame(() => {
+      const rowTop = row.getBoundingClientRect().top - box.getBoundingClientRect().top;
+      box.scrollTo({ top: Math.max(0, box.scrollTop + rowTop - 8) });
+
+      const rowRect = row.getBoundingClientRect();
+      const boxRect = box.getBoundingClientRect();
+      const slot = box.closest(".route-sheet")?.querySelector(".route-sheet__actions-slot") as HTMLElement | null;
+      const slotTop = slot ? slot.getBoundingClientRect().top : Infinity;
+      const visibleBottom = Math.min(boxRect.bottom, window.innerHeight, slotTop);
+      const avail = visibleBottom - rowRect.bottom - 8 - 12;
+      box.style.setProperty("--walkpreview-h", `${Math.max(140, Math.min(440, Math.round(avail)))}px`);
+    });
+  };
+
+  /**
+   * 步行预览块（首/末段共用）。
+   * · 距离一律用 **`totalDistM`（= 服务端 `stepsTotalM`，几何真实总长）**，不是估算总长
+   *   —— 中间步被丢弃时两者可差 30%~60%，用后者会与实际折线对不上；
+   * · 失败态只给「直线距离 + 固定步速估算」，**绝不显示假的分步**（架构 §3.3 纪律 4）。
+   */
+  const walkPreviewBlock = (seg: "out" | "in", pv: WalkPreview, idPrefix: string) => {
+    /** 该段的估算元信息（失败/骨架态用；数据来自 detail-body 已有字段 ⇒ 不等网络） */
+    const meta = seg === "out" ? card.walkOut : card.walkIn;
+    const metaText = [
+      meta.distanceM ? `${Math.round(meta.distanceM)} 米` : "",
+      meta.minutes ? `约 ${meta.minutes} 分钟` : "",
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    return (
+      <div className="rc-walkpreview">
+        {pv.phase === "ready" ? (
+          <>
+            <WalkStepList
+              steps={pv.steps}
+              currentIdx={-1}
+              idPrefix={idPrefix}
+              longWalk={pv.totalDistM > 2500}
+            />
+            <div className="rc-walkpreview__foot">
+              <button
+                type="button"
+                className="btn btn--outline btn--sm rc-walkpreview__go"
+                onClick={() => onWalkStart?.(seg, pv.serverSteps)}
+              >
+                开始步行
+              </button>
+              {pv.totalDistM > 0 && (
+                <span className="rc-walkpreview__go-meta">
+                  全程 {distText(pv.totalDistM)} · 约 {Math.max(1, Math.round(pv.totalMin))} 分钟
+                </span>
+              )}
+            </div>
+          </>
+        ) : pv.phase === "failed" ? (
+          /* 降级：只给直线距离 + 固定步速估算，绝不显示假的分步（架构 §3.3 纪律 4） */
+          <p className="rc-walkpreview__fallback t-label t-muted">
+            步行路径暂时取不到{metaText ? ` · ${metaText}` : ""}
+          </p>
+        ) : (
+          <p className="rc-walkpreview__sk t-label t-muted">
+            {metaText || "步行距离估算中"}
+            {" · 步骤载入中…"}
+          </p>
+        )}
+      </div>
+    );
+  };
 
   return (
     <>
@@ -198,121 +304,16 @@ export default function NavDetailBody({
            * ★ v3.6.0 S5（设计 §2.1）：行右侧 44×44「步骤」展开键。
            * 展开后的 `.rc-walklist` **必须紧随该行**（Row 的兄弟节点）——
            * 塞进 `aside` 会落进 `.rc-row` 的 flex 行里被挤扁（S5 验收抓到过）。
+           * 布局实测逻辑在 `toggleWalk()`（两段共用）。
            */
           aside={
             onWalkStart ? (
-              <WalkSegToggle
-                idPrefix="detail"
-                open={walkOpen}
-                onToggle={(ev) => {
-                  const next = !walkOpen;
-                  setWalkOpen(next);
-                  if (!next) return;
-                  onWalkExpand?.();
-                  /**
-                   * ★ v3.6.0 S5 布局修复 ②：展开后
-                   *   (a) 把**这一行**贴到滚动容器的可视区顶部；
-                   *   (b) 按「行以下还剩多少可见空间」反算预览块的高度上限。
-                   *
-                   * ── 为什么必须实测，而不是写死 vh ─────────────────────────────────
-                   *   实测（420×900，half 档）：`.route-sheet__scroll` 自身 clientH=832，
-                   *   但它**只有上半截在视口内**（容器 518→1350，视口到 900）⇒ 可见仅 382px。
-                   *   而预览块从 y=580 开始，`max-height:42vh`(=378) ⇒ 底部 958，**按钮在 922**，
-                   *   视口外 22px ⇒ Playwright 判「元素中心不在视口内」，人也点不到。
-                   *   写死任何 vh 都逃不掉这个矛盾（块起点随上方行数变化）。
-                   *
-                   * ── 两个必须避开的坑（都踩过）────────────────────────────────────
-                   *   ① 页面里有**两个** `.route-sheet__scroll`（recommend / detail 各一）⇒
-                   *      必须 `closest()` 从被点击的按钮向上找，**禁止 document.querySelector**。
-                   *   ② 滚动位移**不能用 `offsetTop` 相减** —— 嵌套定位下 offsetParent 不一致，
-                   *      实测只滚了 61px（应为 ~190px）。一律用 `getBoundingClientRect()`。
-                   */
-                  const btn = ev.currentTarget as HTMLElement | null;
-                  const row = btn?.closest(".rc-row--walk") as HTMLElement | null;
-                  const box = row?.closest(".route-sheet__scroll") as HTMLElement | null;
-                  if (!row || !box) return;
-                  requestAnimationFrame(() => {
-                    // (a) 行贴顶：先滚，后测量（用瞬时滚动 ⇒ 同一帧内 scrollTop 已生效，测得准）
-                    const rowTop = row.getBoundingClientRect().top - box.getBoundingClientRect().top;
-                    box.scrollTo({ top: Math.max(0, box.scrollTop + rowTop - 8) });
-
-                    /**
-                     * (b) 反算高度上限：行以下到**真实可视底**。
-                     *
-                     * ⚠️⚠️ 可视底不是 `window.innerHeight` —— 详情 pane 有**吸底操作条**
-                     *   `.route-sheet__actions-slot`（实测 absolute，815→900，高 85px，z=20）。
-                     *   只按 innerHeight 算 ⇒ 预览块伸进去被它盖住：
-                     *   命中测试 `elementFromPoint` 在按钮中心返回的是 `btn--primary`（「开始导航」），
-                     *   即**用户点「开始步行」会误触到「开始导航」** —— 这是真实 UX 缺陷，
-                     *   不只是自动化测试的无障碍判据问题。
-                     *   ⇒ 用 `min(容器底, 视口底, 吸底槽顶)`。
-                     */
-                    const rowRect = row.getBoundingClientRect();
-                    const boxRect = box.getBoundingClientRect();
-                    const slot = box
-                      .closest(".route-sheet")
-                      ?.querySelector(".route-sheet__actions-slot") as HTMLElement | null;
-                    const slotTop = slot ? slot.getBoundingClientRect().top : Infinity;
-                    const visibleBottom = Math.min(boxRect.bottom, window.innerHeight, slotTop);
-                    const avail = visibleBottom - rowRect.bottom - 8 - 12;
-                    // 写进 CSS 变量（不直接写 style.maxHeight：让 CSS 保留兜底默认值）
-                    box.style.setProperty(
-                      "--walkpreview-h",
-                      `${Math.max(140, Math.min(440, Math.round(avail)))}px`,
-                    );
-                  });
-                }}
-              />
+              <WalkSegToggle idPrefix="detail-out" open={walkOpen === "out"} onToggle={toggleWalk("out")} />
             ) : null
           }
         />
         {/* ★ v3.6.0 S5：展开的步骤列表（紧随「步行」行；预览态 currentIdx=-1 ⇒ 全部未走） */}
-        {onWalkStart && walkOpen && (
-          <div className="rc-walkpreview">
-            {walkPreview.phase === "ready" ? (
-              <>
-                <WalkStepList
-                  steps={walkPreview.steps}
-                  currentIdx={-1}
-                  idPrefix="detail"
-                  longWalk={walkPreview.totalDistM > 2500}
-                />
-                <div className="rc-walkpreview__foot">
-                  <button
-                    type="button"
-                    className="btn btn--outline btn--sm rc-walkpreview__go"
-                    onClick={() => onWalkStart("out", walkPreview.serverSteps)}
-                  >
-                    开始步行
-                  </button>
-                  {/*
-                    ★ v3.6.0 S5 布局修复 ③：按钮旁给「全程距离 · 时长」。
-                    7 步的列表里用户看不出"还要走多久"，这一行能省一次滚动。
-                    ⚠️ 距离用 **stepsTotalM**（几何真实总长），**不是 totalDistM**
-                      —— 中间步被丢弃时两者可差 30%~60%，用后者会与实际折线对不上。
-                  */}
-                  {walkPreview.totalDistM > 0 && (
-                    <span className="rc-walkpreview__go-meta">
-                      全程 {distText(walkPreview.totalDistM)} · 约 {Math.max(1, Math.round(walkPreview.totalMin))} 分钟
-                    </span>
-                  )}
-                </div>
-              </>
-            ) : walkPreview.phase === "failed" ? (
-              /* 降级：只给直线距离 + 固定步速估算，绝不显示假的分步（架构 §3.3 纪律 4） */
-              <p className="rc-walkpreview__fallback t-label t-muted">
-                步行路径暂时取不到 · 约 {card.walkOut.distanceM ? Math.round(card.walkOut.distanceM) : "—"} 米
-                {card.walkOut.minutes ? ` · 约 ${card.walkOut.minutes} 分钟` : ""}
-              </p>
-            ) : (
-              /* 骨架：距离/时长来自 detail-body 已有字段 ⇒ 不等网络 */
-              <p className="rc-walkpreview__sk t-label t-muted">
-                约 {card.walkOut.minutes} 分钟
-                {card.walkOut.distanceM ? ` · ${Math.round(card.walkOut.distanceM)} 米` : ""} · 步骤载入中…
-              </p>
-            )}
-          </div>
-        )}
+        {onWalkStart && walkOpen === "out" && walkPreviewBlock("out", walkPreview, "detail-out")}
         {first && (
           <Row
             dot="wait"
@@ -387,7 +388,12 @@ export default function NavDetailBody({
         ))}
       </div>
 
-      {/* 下车步行 → 目的地 */}
+      {/*
+        ★ T4：末段步行行**去重** —— `card.walkIn.toLabel` 在服务端 `model.ts` 里
+        本来就等于 `destLabel`（`:334/371/387`），旧渲染 `步行 X 分 → 终点 → 终点` 每张详情都重一遍。
+        这里判等则不渲染第二段：`步行 4 分 → 新馬路`。
+        ⚠️ **不许改 `model.ts`** —— 卡片页 `CardDetailClient` 复用该字段当"到达站"文案。
+      */}
       <div className="rc-line">
         <Row
           dot="walk"
@@ -397,12 +403,31 @@ export default function NavDetailBody({
               步行{" "}
               <b className={card.walkIn.estimated ? "rc-val--est" : undefined}>{card.walkIn.minutes}</b> 分
               {" → "}
-              <b>{card.walkIn.toLabel}</b>
-              {" → "}
+              {showWalkInTo && (
+                <>
+                  <b>{card.walkIn.toLabel}</b>
+                  {" → "}
+                </>
+              )}
               {destLabel}
             </>
           }
+          /**
+           * ★ T1：末段步行入口（原来这里是**死代码** —— 全仓 `walk.onStart` 的类型写死 `"out"`，
+           *   下车站这一行没有 aside，`walkOds.in` 备好却没人调）。
+           * 结构与首段同构：44×44「步骤」展开键 + 紧随其后的预览块。
+           */
+          aside={
+            onWalkStart ? (
+              <WalkSegToggle
+                idPrefix="detail-in"
+                open={walkOpen === "in"}
+                onToggle={toggleWalk("in")}
+              />
+            ) : null
+          }
         />
+        {onWalkStart && walkOpen === "in" && walkPreviewBlock("in", walkInPreview, "detail-in")}
       </div>
 
       {/* 上车站其他线路（线路为父、方案为子） */}

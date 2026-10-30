@@ -19,7 +19,21 @@
  *     周一与周二~四无显著差异（比值 0.96-1.00）→ 合并为「工作日」。
  */
 
-/** 澳门时间分量（GMT+8）。★ 全站唯一实现，勿另起一套。 */
+/** 澳门时间分量（GMT+8）。★ 全站唯一实现，勿另起一套。
+ *
+ * ⚠️ **`weekday` 是 `Date.getUTCDay()` 口径：0=周日 · 1=周一 · … · 5=周五 · 6=周六**
+ *    （**不是** ISO-8601 的 1=周一…7=周日，也不是「5=周六、6=周日」）。
+ *    因此 `weekendLike = weekday === 0 || weekday === 6` 才是「周日或周六」。
+ *    这个映射是**跨模块的隐含契约**（本文件的周末判定 + segment_samples.weekday 列 +
+ *    segment-stats 的分层键全都依赖它），写错不会报错，只会让周末/工作日样本悄悄换池。
+ *
+ *    实证（2026-10-30，183,086 条 track 样本按 observed_at 现算）：
+ *      · `new Date('2026-10-31').getUTCDay() === 6`（周六）
+ *      · `new Date('2026-11-01').getUTCDay() === 0`（周日）
+ *      · 桶分布 `am_weekend=1319`，**全部来自 weekday=0**（周六在该时段无采样）；
+ *        weekday=1/2 的晨间全部落 `am_work` ⇒ 0/6 判定正确。
+ *    校验脚本：`.verify/_h-weekday.ts`（改映射前后都应先跑它）。
+ */
 export const macauParts = (t: Date) => {
   const m = new Date(t.getTime() + 8 * 3600e3);
   return { weekday: m.getUTCDay(), hour: m.getUTCHours() };
@@ -42,6 +56,7 @@ export function bucketOf(h: number): string {
  *    数据源 = `lrt_holidays` 表，见 `./holidays`）。
  */
 export function bucketOfRoute(weekday: number, hour: number, isHoliday = false): string {
+  // ⚠️ 0=周日、6=周六（getUTCDay 口径，见 macauParts 注释）。改成 5/6 会把周日当工作日。
   const weekendLike = weekday === 0 || weekday === 6 || isHoliday;
   if (hour >= 7 && hour < 9) return weekendLike ? "am_weekend" : "am_work";
   if (hour >= 9 && hour < 16) return "day";
@@ -71,3 +86,39 @@ export function nowBucketOf(ms: number, isHoliday = false): string {
   const mp = macauParts(new Date(ms));
   return queryBucketOf(mp.weekday, mp.hour, isHoliday);
 }
+
+/* ══════════════════════════════════════════════════════════════════════
+ * 峰 / 非峰二元归类（★ v3.6.0，长停站判据用）
+ *
+ * 为什么放这里而不是 `long-stop.ts`：
+ *   · 它是**分桶口径的一部分**（「哪些桶算高峰」），与五桶定义必须同源同改；
+ *   · 放在这里全家只有一份，`long-stop.ts` 直接 import，
+ *     不会出现「buckets.ts 改了 pm 区间、长停判据还按旧区间算」的静默漂移。
+ *
+ * 口径：高峰 = `am_work`（工作日 07:00-09:00）∪ `pm`（16:00-20:00，**含周末**）；
+ *       非高峰 = `day` ∪ `night` ∪ `am_weekend`。
+ *       旧的 `am_peak` / `pm_peak` 仅兼容保留，**不得**用于新聚合。
+ * ⚠️ 禁止手写小时区间判断高峰 —— 一律走本文件。
+ * ══════════════════════════════════════════════════════════════════════ */
+
+/** 分桶类别（高峰 / 非高峰） */
+export type BucketKind = "peak" | "nonpeak";
+const PEAK_BUCKETS = new Set(["am_work", "pm"]);
+
+/** 观测时刻 → 分桶类别（唯一的时段判定入口） */
+export function kindOfBucket(weekday: number, hour: number, isHoliday = false): BucketKind {
+  return PEAK_BUCKETS.has(bucketOfRoute(weekday, hour, isHoliday)) ? "peak" : "nonpeak";
+}
+
+/**
+ * 各分桶类别覆盖的「整点小时」集合 —— **由枚举反查 `bucketOfRoute` 得出**，不写死 7/9/16/20。
+ * 只取小时粒度（班距表本身就是小时级 `HH:MM` 区间，再细无意义）。
+ *
+ * ★ 意义：分桶口径一旦调整（比如 pm 改成 16-21），本集合自动跟随，
+ *   长停判据里「该时段班距」的计算面不会静默漂移。
+ */
+export const KIND_HOURS: Record<BucketKind, Set<number>> = (() => {
+  const out: Record<BucketKind, Set<number>> = { peak: new Set(), nonpeak: new Set() };
+  for (let wd = 0; wd <= 6; wd++) for (let h = 0; h < 24; h++) out[kindOfBucket(wd, h)].add(h);
+  return out;
+})();

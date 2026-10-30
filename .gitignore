@@ -54,5 +54,18 @@ next-env.d.ts
 /data/tracking/*
 !/data/tracking/README.md
 
+# 路演/简报媒体（约 63MB，不入库；对应文档与截图已归档到 docs/）
+/*.mp4
+/*.pptx
+
+# ★ 采集与同步脚本移出公开仓库（决策 D1 · 2026-10-30）
+#   `scripts/track-collect.mjs` 含 DSAT 鉴权签名实现与内部接口地址；
+#   `db/sync-all-routes.ts` 含 DSAT 未公开接口名。
+#   ⇒ 两者均为**本地运维/采集工具**，Vercel 部署用不到（`scripts/`、`db/` 不参与 Next 打包），
+#     移出后线上零影响；文件保留在本地工作区（见 README 的「本地专属脚本」一节）。
+#   ⚠️ 换机器时需自行拷贝这两份文件；`npm run track:collect` / `npm run db:sync-all` 依赖它们。
+/scripts/track-collect.mjs
+/db/sync-all-routes.ts
+
 .vercel
 .env*

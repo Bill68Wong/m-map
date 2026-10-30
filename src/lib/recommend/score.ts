@@ -47,7 +47,15 @@ export const PREF_ALPHA = 10;
 export const PREF_BETA = 1.8;
 /** ★ 可审计常量（AC-62）：换乘安全余量（分）—— 与需求 7（model.ts 顺延闸门）**共用**。 */
 export const TRANSFER_SAFETY_MIN = 3;
-/** 紧接换乘风险系数（仅 `0 ≤ slack < safetyMin` 时给 `riskFactor × 缺口` 的轻微惩罚）。 */
+/**
+ * 紧接换乘风险系数（仅 `0 ≤ slack < safetyMin` 时给 `riskFactor × 缺口` 的轻微惩罚）。
+ *
+ * ★ v3.6.1（需求 7）调参红线：**`riskFactor ≤ PREF_ALPHA / 2 = 5`**。
+ *   单次换乘 risk 硬上界 = `riskFactor × safetyMin = 0.5 × 3 = 1.5` 分，
+ *   而 `PREF_ALPHA = 10` 分/换乘 ⇒ risk 恒 < α 项的 **15%**，不可能淹没 cost。
+ *   一旦 `riskFactor > 5`，「换乘可行性」就会盖过「换乘次数」这个更硬的判据（排序语义被改写）。
+ *   当前 0.5 ⇒ 有 10 倍余量；改这个常量必须同步改本注释与 `types.ts#slackMin` 的说明。
+ */
 export const PREF_RISK_FACTOR = 0.5;
 
 export interface Prefs {
@@ -103,8 +111,17 @@ export function transfersCountOf(card: RecommendCard): number {
  * 广义成本（**纯函数，可复算 —— AC-62**）。
  *
  * `cost = totalMin + α×换乘次数 + (β−1)×步行分钟 + 紧接换乘风险项`
- *   风险项 = Σ `riskFactor × max(0, safetyMin − slackMin)`（仅 `slackMin != null` 时计入；
- *   巴士第 2 段无时刻表 ⇒ `slackMin === null` ⇒ 不加风险项）。
+ *   风险项 = Σ `riskFactor × max(0, safetyMin − slackMin)`（仅 `slackMin != null` 时计入）。
+ *
+ * ⚠️ v3.6.1（需求 7 修复）：`slackMin` 不再有「巴士第 2 段恒 null ⇒ 不加风险项」这个缺口 ——
+ *   巴士段现在给**保守余量**（`transfer-slack.ts`，恒 ∈ `[0, lo]`）。
+ *   本函数口径未改，但**语义不再是单一的**：
+ *   · 轻轨 = 确定性间隔；巴士 = 班距推出的保守余量；
+ *   ⇒ 风险项**仅在模式内可比**（巴士 vs 巴士 / 轻轨 vs 轻轨），
+ *     不要把「巴士方案 cost 比轻轨方案高 1.5」读成「巴士更不可靠」。
+ *   · `null` 仍表示「无余量可算」（巴士走中位数降级）⇒ 不计风险项，保持原行为。
+ *   · 单次换乘的风险项上限 = `riskFactor × safetyMin = 0.5 × 3 = 1.5` 分
+ *     ⇒ 改动只可能影响分钟级接近的方案排序，不会翻掉 `totalMin` 差 2 分以上的比较。
  */
 export function costOf(card: RecommendCard, p: Prefs = PREF_DEFAULTS.balanced): number {
   const transfers = transfersCountOf(card);

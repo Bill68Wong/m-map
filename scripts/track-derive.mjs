@@ -75,6 +75,17 @@ const CFG = {
 const MIN_MINUTES = 0.1;
 const MAX_MINUTES = 20;
 
+// ── 长时间停站（dwell）参数（v1.2.0，2026-10 长停站调研后新增）────────────
+// 背景：离开口径 t(离B) − t(离A) = run(A→B) + **dwell_B**，即差里含的是**终点站**的停站。
+//   ⇒ 终点站是总站/司机休息点时，dwell_B 可达数分钟，单靠 `MAX_MINUTES=20` 拦不住
+//     （实测 26 路 C654 聯生圓形地總站 dwell 最大 7.75 分，对应段 C656→C654 42% 样本 ≥3 分）。
+//   本脚本**不再猜**：从状态机直接量出每段的 dwell_B（= 到达首帧 → 离开首帧），
+//   随样本一起落盘（`dwellMin` / `longStop`），由聚合层决定排除或单列。
+//   同时把「status='0' 期间仍挂在同一站」的长挂载（司机休息期 API 不换站的已知行为）
+//   单独统计，用于区分「总站休息」与「路段本身很长」——这是同键护栏判不出的那一类。
+const LONG_STOP_MIN = Number(arg("long-stop", "3"));   // dwell_B ≥ 此值 → 标记 longStop
+const LONG_ATTACH_MIN = Number(arg("long-attach", "3")); // status='0' 单站连挂 ≥ 此值 → 计入长挂载候选
+
 // ── 同键一致性护栏参数（2026-09-13 第二轮实测后新增，可用 --outlier-* 覆盖）──
 const OUT_MULT = Number(arg("outlier-mult", "3"));       // 超过 p50 的倍数 → 可疑
 const OUT_FLOOR_MIN = Number(arg("outlier-floor", "2")); // 且至少超 p50 这么多分钟（防小 p50 误判）
@@ -177,8 +188,11 @@ function extractEvents(series) {
   return { arrive, depart, gaps, comp };
 }
 
-/** 由事件序列产出段样本：严格相邻 + 正常时长 */
-function segments(evs) {
+/** 由事件序列产出段样本：严格相邻 + 正常时长
+ *  ⚠️ 只有**离开口径**的 b 事件带 `holdMs`（= 到站首帧 → 离站首帧 = 该站 dwell）。
+ *     到达口径的 holdMs 语义不同（仅 s1 区间，不含到离站之间的间隔），故不参与 dwell 标记。
+ */
+function segments(evs, { withDwell = false } = {}) {
   const ok = [], dropAdj = [], dropDur = [];
   for (let i = 1; i < evs.length; i++) {
     const a = evs[i - 1], b = evs[i];
@@ -186,6 +200,11 @@ function segments(evs) {
     if (d !== 1) { dropAdj.push({ from: a.main, to: b.main, reason: d <= 0 ? `站序回退/同站(${d})` : `跨 ${d} 站`, t: a.t }); continue; }
     const minutes = (b.t - a.t) / 60000;
     const rec = { from: a.main, to: b.main, fromSta: a.sta, toSta: b.sta, fromIdx: a.idx, minutes, t: a.t };
+    if (withDwell) {
+      const dwellMin = Math.max(0, (b.holdMs ?? 0) / 60000);
+      rec.dwellMin = Math.round(dwellMin * 100) / 100;
+      rec.longStop = dwellMin >= LONG_STOP_MIN;
+    }
     if (minutes < MIN_MINUTES || minutes > MAX_MINUTES) { dropDur.push({ ...rec, reason: minutes < MIN_MINUTES ? `过短 ${minutes.toFixed(2)} 分` : `过长 ${minutes.toFixed(2)} 分` }); continue; }
     ok.push(rec);
   }
@@ -326,17 +345,31 @@ async function main() {
   // ── 逐车跑状态机 ──
   const depSamples = [], arrSamples = [];
   const allGaps = [], allDropAdj = [], allDropDur = [];
+  const longStops = [];      // status='1' 长停站（真停靠；总站休息/长时间上落客）
+  const longAttaches = [];   // status='0' 长挂载（车已离站但 API 仍挂该站 → 休息期/异常）
   let nArr = 0, nDep = 0;
   for (const [k, s] of usable) {
     const [route, dir] = k.split("|");
     s.sort((a, b) => a.t - b.t);
-    const { arrive, depart, gaps } = extractEvents(s);
+    const { arrive, depart, gaps, comp } = extractEvents(s);
     nArr += arrive.length; nDep += depart.length;
     for (const g of gaps) allGaps.push({ route, plate: k.split("|")[2], ...g });
+    // ── 长停站识别（两类，均按「同站同状态连续帧」的实测起止时刻计算）──
+    for (const c of comp) {
+      const holdMin = (c.lastT - c.firstT) / 60000;
+      const lim = c.status === "1" ? LONG_STOP_MIN : LONG_ATTACH_MIN;
+      if (holdMin < lim) continue;
+      const rec = {
+        route, dir, plate: k.split("|")[2], main: c.main, sta: c.sta, idx: c.idx,
+        status: c.status, holdMin: Math.round(holdMin * 100) / 100, frames: c.n,
+        t: c.firstT,
+      };
+      (c.status === "1" ? longStops : longAttaches).push(rec);
+    }
     const seqLen = seqByRoute.get(`${route}|${dir}`)?.length ?? 0;
     if (seqLen && s[0].idx >= seqLen) allGaps.push({ route, plate: k.split("|")[2], at: s[0].main, idx: s[0].idx, nextMain: "(站序越界)", t: s[0].t });
     for (const [evs, sink, tag] of [[depart, depSamples, "depart"], [arrive, arrSamples, "arrive"]]) {
-      const { ok, dropAdj, dropDur } = segments(evs);
+      const { ok, dropAdj, dropDur } = segments(evs, { withDwell: tag === "depart" });
       for (const r of ok) sink.push({ route, dir, plate: k.split("|")[2], ...r, kind: tag });
       for (const r of dropAdj) allDropAdj.push({ route, plate: k.split("|")[2], kind: tag, ...r });
       for (const r of dropDur) allDropDur.push({ route, plate: k.split("|")[2], kind: tag, ...r });
@@ -345,6 +378,9 @@ async function main() {
   L(`事件：到达 ${nArr} · 离开 ${nDep} · 状态缺口 ${allGaps.length} 处（→ 相邻段整段丢弃）`);
   L(`段样本：离开口径 ${depSamples.length} · 到达口径 ${arrSamples.length}`);
   L(`丢弃：站序不邻接 ${allDropAdj.length} · 时长越界 ${allDropDur.length}`);
+  const longStopSamples = depSamples.filter((s) => s.longStop).length;
+  L(`长停站：dwell_B ≥ ${LONG_STOP_MIN} 分的段 ${longStopSamples}/${depSamples.length}` +
+    `（含终到站休息；status='1' 长停 ${longStops.length} 处 · status='0' 长挂载 ${longAttaches.length} 处）`);
   L("");
 
   // ── 聚合：共享键 / 线路键 ──
@@ -482,6 +518,33 @@ async function main() {
   L(`  ⚠️ 同键样本 < ${OUT_MIN_N} 时护栏不启用（样本太少判不出一致性）→ 这类键的极端值见第三节 max 列，必要时人工核查`);
   L("");
 
+  // ── 七、长时间停站（dwell_B）────────────────────────────────────────
+  // 与第六节的区别：第六节治「同键里孤立偏大」；本节是**直接量出来的停站**，
+  // 不依赖同键样本数，因此单轮/单样本也能判（n=1 的键同样有效）。
+  L("## 七、长时间停站识别（dwell_B = 到站首帧 → 离站首帧；离开口径的差里含此值）");
+  const byStation = new Map(); // route|main|status -> {n, max, sum, frames}
+  for (const x of [...longStops.map((x) => ({ ...x, status: "1" })), ...longAttaches]) {
+    const k = `${x.route}|${x.main}|${x.status}`;
+    if (!byStation.has(k)) byStation.set(k, { n: 0, max: 0, sum: 0 });
+    const a = byStation.get(k);
+    a.n++; a.sum += x.holdMin; if (x.holdMin > a.max) a.max = x.holdMin;
+  }
+  const stationRows = [...byStation.entries()]
+    .map(([k, v]) => ({ k, ...v, avg: v.sum / v.n }))
+    .sort((a, b) => b.n - a.n);
+  if (!stationRows.length) L("  无命中");
+  else {
+    L(`  按（线路 × 站点 × status）聚合，共 ${stationRows.length} 组；前 20 组：`);
+    L(`  ${"线路|站点|st".padEnd(20)} ${"n".padStart(5)} ${"均值".padStart(6)} ${"最大".padStart(6)}`);
+    for (const r of stationRows.slice(0, 20))
+      L(`  ${r.k.padEnd(20)} ${String(r.n).padStart(5)} ${r.avg.toFixed(2).padStart(6)} ${r.max.toFixed(2).padStart(6)}`);
+    if (stationRows.length > 20) L(`  …另 ${stationRows.length - 20} 组`);
+    L(`  判读：status='1' 长停 = 车真实停在站台（总站休息 / 长时间上落客）；`);
+    L(`        status='0' 长挂载 = 车已离站但 API 仍挂该站（司机休息期不换站的已知行为，见文件头 ④）。`);
+    L(`        后者在段层面表现为「该站 → 下一站」时长被拉长，且同键护栏可能判不出（真实长路段同样长）。`);
+  }
+  L("");
+
   // ── 落盘 ──
   const derived = {
     label,
@@ -496,6 +559,19 @@ async function main() {
       cleanSamples: { depart: depClean.length, arrive: arrClean.length },
       outliers: { depart: depFlag.list.length, arrive: arrFlag.list.length },
       dropped: { notAdjacent: allDropAdj.length, durationOutOfRange: allDropDur.length },
+      // ★ v1.2.0：长停站（dwell_B ≥ LONG_STOP_MIN 的段）与两类原始长停事件
+      longStopSamples,
+      longStops: longStops.length,
+      longAttaches: longAttaches.length,
+    },
+    longStopGuard: {
+      thresholdMin: LONG_STOP_MIN,
+      attachThresholdMin: LONG_ATTACH_MIN,
+      note: "dwell_B 已随每个离开口径样本落盘（dwellMin / longStop）；聚合层按阈值排除或单列，不再只靠 20 分钟上限",
+      byStation: stationRows,
+      // 明细只留最长的 2000 条（全量在 rawDepartSamples 的 dwellMin 里可回溯）
+      stops: [...longStops].sort((a, b) => b.holdMin - a.holdMin).slice(0, 2000),
+      attaches: [...longAttaches].sort((a, b) => b.holdMin - a.holdMin).slice(0, 2000),
     },
     outlierGuard: {
       rule: { mult: OUT_MULT, floorMin: OUT_FLOOR_MIN, minN: OUT_MIN_N },

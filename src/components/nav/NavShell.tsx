@@ -37,6 +37,7 @@
  *   · ★ 取景**全部自算**（`fit-box`），**禁用** `setBounds`/`setFitView`（会撑到珠海）。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import Icon from "@/components/ui/Icon";
 import NavMap from "./NavMap";
 import NavBrandBar from "./NavBrandBar";
@@ -44,10 +45,11 @@ import AlightBanner from "./AlightBanner";
 import PinDiag from "./PinDiag";
 import NavSearchBarSlot from "./NavSearchBarSlot";
 /* ★ v3.6.0 S5：步行导航（预取 + 跟随状态机 + 顶部横幅） */
-import { useWalkRoute } from "@/components/walk/useWalkRoute";
+import { useWalkRoute, WALK_RELOAD_MAX } from "@/components/walk/useWalkRoute";
 import { useWalkFollow } from "@/components/walk/useWalkFollow";
 import WalkTurnBanner from "@/components/walk/WalkTurnBanner";
 import type { WalkStep } from "@/lib/walk/walk-shared";
+import { distM } from "@/lib/nav/route-overview";
 
 /** 稳定的空 steps 引用（避免每次渲染新建数组 ⇒ 触发 hook 内部 effect 重跑） */
 const EMPTY_WALK_STEPS: WalkStep[] = [];
@@ -62,9 +64,11 @@ import VehicleCard from "./VehicleCard";
 import { queryOf } from "./StepSheet";
 import { useRouteVehicles } from "./useRouteVehicles";
 import { useRouteOverview } from "./useRouteOverview";
-import { useRideTracking, type RidePhase } from "./useRideTracking";
+import { useRideTracking, type RidePhase, type RideTrackView } from "./useRideTracking";
 import { useUserFix } from "./useUserFix";
 import { useNavFrame } from "./useNavFrame";
+/* ★ 步行路径重算的防连点冷却（现成常量，勿新写数字） */
+import { COOLDOWN_WALK_SEC, useCooldown } from "./useCooldown";
 import { detentIndex, detentTopsPx, readSafeTopPx, type Detent } from "./sheet-detents";
 import { unionBox } from "@/lib/nav/route-overview";
 import { mainOf } from "@/lib/nav/track";
@@ -74,6 +78,11 @@ import type { RecommendCard } from "@/lib/recommend/types";
 import type { NavPoint } from "@/lib/nav/types";
 
 const MY_LOCATION = "我的位置";
+/**
+ * 「从 `/line` 返回时重开搜索层」的一次性标记（与 `SearchSheet.SS_RETURN` **同一个 key**）。
+ * 只有一个消费点：下面 `stage` 的 `useState` 初始化函数（读到即删）。
+ */
+const SS_SEARCH_RETURN = "mmap.search.return";
 /** 底层舞台：全屏地图 / 全屏搜索 / 半屏可出发 */
 type Stage = "map" | "search" | "panel";
 
@@ -97,6 +106,23 @@ export default function NavShell({
 }: NavShellProps) {
   /** 定位点（GCJ-02）；null = 尚未定位/定位失败 */
   const [userPos, setUserPos] = useState<{ lng: number; lat: number } | null>(null);
+  /**
+   * ★ T8（P0 修复 · 2026-10-31）：`useUserFix` 的产出镜像 —— 作为「当前位置」的**第二来源**。
+   *
+   * ── 为什么需要（现场 P0）─────────────────────────────────────────────
+   *   蓝点与「当前位置」本来是**两条互不相通的链路**：
+   *     · 蓝点 `userFix={userFixR.fix}` ⇒ **有值**（所以 `data-userdot=blue`）；
+   *     · `myLocation ← userPos ← onLocate ← NavMap.runLocate`（高德定位）
+   *       ⇒ 在高德定位未回调 / 失败时**恒 null** ⇒ `fromPoint` 为 null ⇒
+   *         `canGo` 恒 false ⇒ **「出发」永久置灰**，且 `RoutePanel` 显示「选择出发地」。
+   *   症状：用户看得见自己在哪，却点不了出发。
+   *
+   * ── 为什么是 state 而不是直接读 `userFixR.fix` ─────────────────────────
+   *   ⚠️ **`userFixR` 声明在 :284，而 `myLocation` 在 :189** —— 直接引用会命中
+   *      `const` 的 TDZ，运行时报 `ReferenceError`。此处用「状态 + 靠后 effect 同步」
+   *      跨过这个顺序约束，**不要**把它"简化"成就地读 `userFixR.fix`。
+   */
+  const [fixPos, setFixPos] = useState<{ lng: number; lat: number } | null>(null);
   const [from, setFrom] = useState<NavPoint | null>(initialFrom);
   const [to, setTo] = useState<NavPoint | null>(initialTo);
   const [station, setStation] = useState<StationCardStation | null>(null);
@@ -115,8 +141,8 @@ export default function NavShell({
   const [stage, setStage] = useState<Stage>(() => {
     if (typeof window !== "undefined") {
       try {
-        if (window.sessionStorage.getItem("mmap.search.return") === "1") {
-          window.sessionStorage.removeItem("mmap.search.return");
+        if (window.sessionStorage.getItem(SS_SEARCH_RETURN) === "1") {
+          window.sessionStorage.removeItem(SS_SEARCH_RETURN);
           return "search";
         }
       } catch {
@@ -178,10 +204,75 @@ export default function NavShell({
 
   const onLocate = useCallback((pos: { lng: number; lat: number } | null) => setUserPos(pos), []);
 
-  const myLocation: NavPoint | null = userPos
-    ? { kind: "gps", label: MY_LOCATION, lng: userPos.lng, lat: userPos.lat }
-    : null;
-  const fromPoint = from ?? myLocation;
+  /**
+   * ★ T8：**当前位置的唯一来源**。
+   *
+   * 优先级 = `fixPos`（持续订阅的浏览器 GPS）→ `userPos`（高德一次性定位）。
+   *
+   * ⚠️ **顺序不能反过来**（不要写成 `userPos ?? fixPos`）：
+   *   `userPos` 是 `onLocate` 的**一次性快照**、**不带时间戳**；`fixPos` 来自
+   *   `useUserFix` 的 watcher（`maximumAge: 0`，1.5–10s 持续刷新）。
+   *   若让 `userPos` 优先，则"点过一次定位"之后它就**永久压住**后续 GPS 更新 ⇒
+   *   起点钉 / `fromPoint` 会钉在一个可能是几分钟前的旧坐标上，且**永不纠正**。
+   *   反过来：GPS 被拒/超时 ⇒ `fixPos` 为 null ⇒ 自动回落 `userPos`（高德仍可用）。
+   *
+   * 两者都是**稳定引用**（各自 useState），`??` 只返回其中之一 ⇒ `myPos` 不产生新对象
+   * ⇒ 下游（`RoutePanel` / `originArg`）不会"每帧新对象"抖动。
+   */
+  const myPos = fixPos ?? userPos;
+  const myLocation: NavPoint | null = useMemo(
+    () => (myPos ? { kind: "gps", label: MY_LOCATION, lng: myPos.lng, lat: myPos.lat } : null),
+    [myPos],
+  );
+  /**
+   * 最新位置的 **ref 镜像** —— 供 `freezeOrigin()` 在「用户点下按钮那一刻」读到最新坐标。
+   *
+   * ⚠️ 为什么不用依赖数组：`freezeOrigin` 被 `startSession`（useCallback）等闭包捕获，
+   *   若靠依赖把 GPS 每帧坐标带进去，会**每次定位都重建 `startSession`**
+   *   ⇒ 详情面板整棵子树每秒重渲染。用 ref 既保证"点的瞬间是最新值"，又不产生依赖抖动
+   *   （与本文件 `walkActiveRef` / `navActiveRef` 同一套既有模式）。
+   */
+  const myPosRef = useRef(myPos);
+  myPosRef.current = myPos;
+  /**
+   * ★ P0：`body[data-userpos]` —— **QA 区分「真定位」与「兜底」的唯一手段**。
+   *   · `amap`     = 高德定位成功（`userPos` 有值，第一层生效）；
+   *   · `fallback` = 高德失败/超时，用浏览器 GPS（`fixPos`）顶上（第二层兜底）；
+   *   · `none`     = 两者都没有（此时蓝点也不显示，说"无法定位"才诚实）。
+   *   本轮之前这两层在界面上**完全无法区分** —— 所以"定位到底修好没有"没法验收。
+   */
+  useEffect(() => {
+    const state = userPos ? "amap" : fixPos ? "fallback" : "none";
+    document.body.setAttribute("data-userpos", state);
+  }, [userPos, fixPos]);
+  /**
+   * ══════════════════════════════════════════════════════════════════════
+   * ★ T2：**起点钉 = 本次行程的固定锚点**，不跟着定位走
+   * ══════════════════════════════════════════════════════════════════════
+   * 病根链路（已核实）：点定位 → `NavMap.runLocate` → `onLocate` → `setUserPos`
+   *   → `myLocation` → `fromPoint` → `originArg`【起点钉被挪】；同时 `resultQuery`
+   *   跟着变 ⇒ 回推荐 pane 会按新起点**重拉整表**（用户看到的是"我点了个定位，路线全变了"）。
+   *
+   * 现口径：
+   *   · 用户显式选的 `from` ⇒ 直接用（本来就恒定）；
+   *   · 只有「用我的位置出发」时，才在 **规划(出发)/开始导航那一刻** 把坐标快照进
+   *     `originAnchor` 并固定；此后定位按钮**只**做「视野居中 + 蓝点更新」；
+   *   · 关面板 / 重选起终点 ⇒ 锚点释放（下次规划重新快照）。
+   */
+  const [originAnchor, setOriginAnchor] = useState<NavPoint | null>(null);
+  const fromPoint = from ?? originAnchor ?? myLocation;
+
+  /** 冻结起点（幂等；有显式 `from` 时无需锚点） */
+  function freezeOrigin() {
+    /** ★ T8：读 ref 最新值（不是 `userPos` state）—— 否则 GPS 已成为当前位置时锚点永远不冻结 */
+    const p = myPosRef.current;
+    if (from || originAnchor || !p) return;
+    setOriginAnchor({ kind: "gps", label: MY_LOCATION, lng: p.lng, lat: p.lat });
+  }
+  /** 释放锚点（关面板 / 重选起终点 / 换 OD） */
+  function releaseOrigin() {
+    setOriginAnchor(null);
+  }
   const canGo = !!fromPoint && !!to;
   /** 推荐/详情共用查询串（与 `/nav` URL 同口径） */
   const resultQuery = fromPoint && to ? queryOf(fromPoint, to) : "";
@@ -250,6 +341,39 @@ export default function NavShell({
   const gpsIntervalMs = ridePhase === "riding" ? 1_500 : navActive ? 3_000 : 10_000;
   const userFixR = useUserFix({ enabled: true, intervalMs: gpsIntervalMs, maximumAge: 0 });
 
+  /**
+   * ★ T8（P0）：把 `useUserFix` 的坐标镜像进 `fixPos`，让它成为「当前位置」的备用来源。
+   *
+   * · 位置在 `userFixR` **之后** —— 这是唯一能满足声明顺序（`userFixR` :284 晚于
+   *   `myLocation` :189）又不需要挪动任何 hook 的写法；
+   * · **去重**：坐标未变则返回原引用 ⇒ 不触发重渲染（GPS 静止时零成本）；
+   * · **不覆盖 `userPos`**：高德定位（`onLocate`）仍保留为回落来源；
+   *   优先级见 `myPos` 处注释（`fixPos` 优先，因为它带 `maximumAge:0` 持续刷新，
+   *   而 `userPos` 是一次性快照、无时间戳）。
+   */
+  useEffect(() => {
+    const f = userFixR.fix;
+    if (!f) return;
+    setFixPos((cur) => (cur && cur.lng === f.lng && cur.lat === f.lat ? cur : { lng: f.lng, lat: f.lat }));
+  }, [userFixR.fix]);
+
+  /**
+   * ★ T1：**当前步行段**（null = 不在步行段）。
+   *   声明位置**必须早于** `useRideTracking` —— 乘车引擎要拿 `walkActive` 做互斥门控
+   *   （步行中禁止自动上车），否则两个引擎会同时跑（旧版注释声称互斥，实际没有入参）。
+   */
+  const [walkSeg, setWalkSeg] = useState<"out" | "in" | null>(null);
+  /** 步行段活跃（与乘车互斥；下传 `useRideTracking` 做真实门控） */
+  const walkActive = walkSeg !== null;
+  /**
+   * ★ 步行重算的观测标记（`auto|manual` + 序号）。
+   *   声明位置**早于** `endWalk()` / 换段 effect —— 它们都要把标记归零，
+   *   否则下一次进入步行段会把上一段的 `manual:N` 原样带出来（观测量失真）。
+   */
+  const [recalcKind, setRecalcKind] = useState<"auto" | "manual" | "">("");
+  const [recalcSeq, setRecalcSeq] = useState(0);
+  /** 本段是否已经用过「自动重算」（额度语义：自动 1 + 手动 1，自动不得吃掉手动的份额） */
+  const autoRecalcRef = useRef(false);
   /** ★ 2026-09-24：乘车追踪（自动上车 + 安全网 + 轻轨 GPS 推进） */
   const ride = useRideTracking({
     card: pane === "detail" ? detailCard?.card ?? null : null,
@@ -257,6 +381,8 @@ export default function NavShell({
     anchors: ov.body?.legs ?? null,
     strips: ov.body?.strips ?? null,
     active: navActive,
+    /** ★ T1：步行活跃 ⇒ 引擎内 `tryAuto` 早退（真互斥，不是靠调用方不渲染） */
+    walkActive,
     userFix: userFixR.fix,
     onRequestGps: userFixR.start,
   });
@@ -267,45 +393,126 @@ export default function NavShell({
   }, [ride.phase]);
 
   /* ══════════════════════════════════════════════════════════════════════
-     ★ v3.6.0 S5 · 步行导航（详情可预览 / 进入后跟随）
+     ★ T1 · 一条导航流（步行出发段 → 乘车 → 步行到达段）
      ─────────────────────────────────────────────────────────────────────
-     · **互斥铁律**：`walkFollowing !== null` 与 `riding` 互斥（架构 §3.3）；
-     · **进入跟随的唯一入口 = 用户显式点击**（不自动进入）：点击处由 `WalkSegToggle`
-       的 `onExpand`（预览）与「开始步行」（跟随）触发，见 `RouteSheet` 的 walk 行；
-     · **AC-08a**：预取只有首/末两段（`useWalkRoute` 内已写死 ≤2 次），
-       推进过程中不再补请求。
+     改版前是**两套互不相通的状态机**：`walkSeg`（步行）与 `RidePhase`（乘车），
+     且步行**只有入口没有出口**（全仓没有一处 `setWalkSeg(null)`），末段入口还是死代码。
+     现在用一个**当前段游标**把它们串起来（不新造 orchestrator 类）：
+
+       `currentLeg` =  walkSeg==="out" ⇒ 步行出发段
+                   |  walkSeg==="in"  ⇒ 步行到达段
+                   |  ride.phase∈{boarding,riding} ⇒ 乘车段
+                   |  其余 ⇒ 无
+
+     推进规则（全自动，用户不再需要点「开始步行」）：
+       ① 「开始导航」/「开始步行(首段)」⇒ 冻结起点 + 乘车引擎进 boarding + 进入步行出发段；
+       ② 走到上车站（`walkFollow.phase==="arrived"`）⇒ 交出步行段 ⇒ 乘车引擎放开自动上车；
+       ③ 最后一程下车（`ride.phase==="done"`）⇒ 自动进入步行到达段；
+       ④ 到达目的地 ⇒ 横幅转「已到达」，由「结束导航」收尾。
+     **互斥落地**：`walkActive` 下传 `useRideTracking`（引擎内 `tryAuto` 早退），
+       不再只靠注释说"步行中禁止自动上车"。
+     **AC-08a 预算（新口径）**：预取 2 次（首/末各 1）+ 重算 2 次（自动 1 / 手动 1）
+       ⇒ 单次导航 `/api/walk-route` 上限 **4** 次（旧注释写 ≤2 已过时）。
      ══════════════════════════════════════════════════════════════════════ */
-  /** 正在跟随的步行段（null = 未跟随） */
-  const [walkSeg, setWalkSeg] = useState<"out" | "in" | null>(null);
+  /**
+   * ★ AC-08a：首段步行的**起点快照**（只在没有显式起点时用，且**只冻结一次**）。
+   *   旧实现直接读 `userFixR.fix` ⇒ GPS 每帧变 ⇒ 缓存 key 每帧变 ⇒ **每帧一次**
+   *   `/api/walk-route`（"预取 2 次"的上限当场破掉）。改成一次性快照后 key 恒定。
+   */
+  const [walkStart, setWalkStart] = useState<{ lng: number; lat: number } | null>(null);
+  useEffect(() => {
+    if (walkStart || fromPoint || !userFixR.fix) return;
+    setWalkStart({ lng: userFixR.fix.lng, lat: userFixR.fix.lat });
+  }, [walkStart, fromPoint, userFixR.fix]);
 
   /**
    * 两段步行的 OD：
-   *   · `out`（走到上车站）：起点 = 用户起点（`fromPoint`，无则用当前定位）→ 首段 `board`；
+   *   · `out`（走到上车站）：起点 = 用户起点（`fromPoint`，无则用一次性快照）→ 首段 `board`；
    *   · `in`（下车站走到目的地）：末段 `alight` → 终点 `to`。
    * 只有在 **detail pane 且几何就绪** 时才成立（否则没有站点锚点可去）。
    */
+  /**
+   * ★ P0（2026-10-31）：**零距离步行不发请求**。
+   *
+   * ── 现象 ──────────────────────────────────────────────────────────────
+   *   末段步行出现 `fromLng=...2669719 / toLng=...266972`（差在小数点后第 12 位，
+   *   实际约 **0 米**）⇒ 打上游拿回错误 ⇒ `/api/nav/walk` **500**。
+   *   触发场景：下车点与目的地几乎重合（GPS 抖动 / 站点就在目的地门口）。
+   *
+   * ── 为什么前端也要拦（后端已修，不是重复劳动）────────────────────────
+   *   后端已改为「< 1m 返回 200 + 空路线」，但**前端拦掉能省一次往返**：
+   *   这条路径每次进详情都会预取，白白消耗一次配额，且 500 时还会闪一下 failed。
+   *   阈值与后端**同值 1 米**（刻意不放大：2 米仍会真打上游并返回 1 个 step，
+   *   「真走两步」的需求不能被吞）。
+   *
+   * ── 置 null 之后发生什么（已逐条核对）───────────────────────────────
+   *   · `useWalkRoute`：`key === ""` ⇒ 不发请求，该段停在 `idle`（合法的「无需步行」）；
+   *   · `hasWalkIn = false` ⇒ 末段推进 effect `if (!hasWalkIn) return` ⇒ **不会进 walk-in 段**；
+   *   · 若用户此刻**正处在** walk-in（OD 在导航中变得重合）⇒
+   *     `walkSeg === "in" && !hasWalkIn` ⇒ `endWalk()` —— 本来就没得走，这是对的；
+   *   · 详情页步行行：`NavDetailBody` 的 T4 去重（`walkIn.toLabel === destLabel`）
+   *     本就覆盖这个场景，无需改它。
+   */
+  const WALK_ZERO_M = 1;
+
   const walkOds = useMemo(() => {
     const legs = ov.body?.legs ?? [];
     if (!legs.length || !to) return { out: null, in: null };
-    const startPt = fromPoint ?? (userFixR.fix ? { lng: userFixR.fix.lng, lat: userFixR.fix.lat } : null);
+    const startPt = fromPoint ?? walkStart;
     const firstBoard = legs[0]?.board;
     const lastAlight = legs[legs.length - 1]?.alight;
+    /** 起终点重合（< 1m）⇒ 视为「无需步行」，不发请求（见上方注释） */
+    const tooClose = (a: { lng: number; lat: number }, b: { lng: number; lat: number }) =>
+      distM([a.lng, a.lat], [b.lng, b.lat]) < WALK_ZERO_M;
     return {
-      out: startPt && firstBoard ? { from: { lng: startPt.lng, lat: startPt.lat }, to: { lng: firstBoard.lng, lat: firstBoard.lat } } : null,
-      in: lastAlight && to ? { from: { lng: lastAlight.lng, lat: lastAlight.lat }, to: { lng: to.lng, lat: to.lat } } : null,
+      out:
+        startPt && firstBoard && !tooClose(startPt, firstBoard)
+          ? { from: { lng: startPt.lng, lat: startPt.lat }, to: { lng: firstBoard.lng, lat: firstBoard.lat } }
+          : null,
+      in:
+        lastAlight && to && !tooClose(lastAlight, to)
+          ? { from: { lng: lastAlight.lng, lat: lastAlight.lat }, to: { lng: to.lng, lat: to.lat } }
+          : null,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ov.body?.legs, to?.lng, to?.lat, fromPoint?.lng, fromPoint?.lat, userFixR.fix?.lng, userFixR.fix?.lat]);
+  }, [ov.body?.legs, to?.lng, to?.lat, fromPoint?.lng, fromPoint?.lat, walkStart?.lng, walkStart?.lat]);
 
-  /** 预取首/末两段（AC-08a：仅此两次） */
+  /** 预取首/末两段（AC-08a：预取只有这 2 次；重算另有 2 次预算，见文件头） */
   const walkRoute = useWalkRoute(walkOds);
+  const hasWalkOut = !!walkOds.out;
+  const hasWalkIn = !!walkOds.in;
   const activeWalk = walkSeg === "out" ? walkRoute.out : walkSeg === "in" ? walkRoute.in : null;
+
+  /**
+   * ★ P0（2026-10-31）：**`fix` 必须是稳定引用**，否则 `useWalkFollow` 死循环。
+   *
+   * ── 病根（一句话）────────────────────────────────────────────────────
+   *   `useWalkFollow` 里那个"每帧推进"的 effect 依赖 `fix`，而它内部**无条件**
+   *   `setProgress(next)`（`progressOnPath` 每次返回新对象）⇒
+   *     `fix` 新引用 → effect 跑 → setState 新对象 → 重渲染 → `fix` 又是新引用 → …
+   *   这就是 React「Maximum update depth exceeded」的字面含义：
+   *   **某个依赖每次渲染都变**。
+   *
+   * ── 为什么写在这里而不是在 `useWalkFollow` 里塞 ref ─────────────────────
+   *   塞 ref 只是把"上游每渲染新建对象"这件事藏起来，别处还会犯。
+   *   在这里 `useMemo` + **原始值依赖**，是在**源头**消灭新引用（`??` 不产生新对象，
+   *   但 `{ lng, lat, accuracy }` 字面量会）。
+   */
+  const walkFix = useMemo(
+    () =>
+      userFixR.fix
+        ? { lng: userFixR.fix.lng, lat: userFixR.fix.lat, accuracy: userFixR.fix.accuracy }
+        : null,
+    // 依赖放**原始值**：`userFixR.fix` 这个对象本身也可能每帧新建
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [userFixR.fix?.lng, userFixR.fix?.lat, userFixR.fix?.accuracy],
+  );
 
   /** 跟随状态机（GPS 帧驱动；`following=false` 时为预览/空态，不判定位） */
   const walkFollow = useWalkFollow({
     steps: activeWalk?.steps ?? EMPTY_WALK_STEPS,
     stepsTotalM: activeWalk?.stepsTotalM ?? 0,
-    fix: userFixR.fix ? { lng: userFixR.fix.lng, lat: userFixR.fix.lat, accuracy: userFixR.fix.accuracy } : null,
+    fix: walkFix,
     following: walkSeg !== null && (activeWalk?.phase === "ready"),
   });
 
@@ -321,25 +528,232 @@ export default function NavShell({
     // 换段 ⇒ 轨迹重新累积（同一段内不重置）
     donePathRef.current = [];
     setWalkVersion((v) => v + 1);
+    // 重算标记同理：额度按「段」计，换段即归零
+    setRecalcKind("");
+    setRecalcSeq(0);
+    autoRecalcRef.current = false;
   }, [walkStepsKey]);
+  /**
+   * ★ T3：`donePath` 只在**步行段真正在跟随**时追加。
+   *   旧版只要 `walkSeg` 非空就每帧追加（无 phase 门）⇒ 路线还没就绪、或已到达之后，
+   *   GPS 仍在往轨迹里塞点，灰线越拖越长且与当前步几何无关。
+   */
   useEffect(() => {
     if (!walkSeg || !userFixR.fix) return;
+    if (activeWalk?.phase !== "ready") return;
+    if (walkFollow.phase === "preview") return;
     const p: [number, number] = [userFixR.fix.lng, userFixR.fix.lat];
     const last = donePathRef.current[donePathRef.current.length - 1];
     // 去抖：与上一点重合（<1 米）就不追加，避免轨迹里塞满重复顶点
     if (last && Math.abs(last[0] - p[0]) < 1e-5 && Math.abs(last[1] - p[1]) < 1e-5) return;
     donePathRef.current = [...donePathRef.current, p];
     setWalkVersion((v) => v + 1);
-  }, [userFixR.fix, walkSeg]);
+  }, [userFixR.fix, walkSeg, activeWalk?.phase, walkFollow.phase]);
 
-  /** 步行跟随中禁止 ride 自动上车（互斥）：两者同时激活时以 walk 为准 */
-  const walkActive = walkSeg !== null;
+  /**
+   * ★ T1：**收步行段**（真出口用）。
+   *   必须一次清干净三件：`walkSeg`（横幅/折线/取景）、`donePathRef`（累积轨迹）、
+   *   `body[data-walk-*]`（e2e 观测钩子 —— 残留会让断言把"已结束"读成"还在走"）。
+   *   `useWalkFollow` 在 `following=false` 时也会自清，这里是**双保险**。
+   */
+  const endWalk = useCallback(() => {
+    setWalkSeg(null);
+    donePathRef.current = [];
+    setWalkVersion((v) => v + 1);
+    if (typeof document !== "undefined") {
+      document.body.removeAttribute("data-walk-step");
+      document.body.removeAttribute("data-walk-off");
+      document.body.removeAttribute("data-walk-acc");
+      document.body.removeAttribute("data-walk-recalc"); // 重算次数是"本段"的，换段/退出必须归零
+    }
+    setRecalcKind("");
+    setRecalcSeq(0);
+    autoRecalcRef.current = false;
+  }, []);
+
+  /**
+   * ★ T1：**开始/推进一条导航会话**（唯一入口语义）。
+   *   · `seg="out"` ⇒ 冻结起点 + 乘车引擎进 boarding + 立刻进入步行出发段（顶栏直接出行走指令，
+   *     用户不必再点一次「开始步行」）；
+   *   · 乘车引擎在 `walkActive` 期间**不会自动上车**（`useRideTracking.tryAuto` 早退）。
+   */
+  /** 引擎入口/出口的稳定引用（`ride` 每次渲染都是新对象，直接进依赖会让下面的回调恒变） */
+  const rideStart = ride.onStart;
+  const rideStop = ride.onStop;
+  const ridePhaseNow = ride.phase;
+  const startSession = useCallback(
+    (seg: "out" | "in" = "out") => {
+      /**
+       * ★ 反向 gate：**已经在车上就不允许再进步行段**。
+       *   否则详情页的「开始步行」能在 riding 中被点开 ⇒ `walkSeg` 与 `riding` 并存，
+       *   横幅让用户"下车走"，而车还在开（这正是"车上又开始步行"的老问题）。
+       */
+      if (ridePhaseNow === "riding") return;
+      freezeOrigin(); // ★ T2：起点锚点在此刻固定
+      if (seg === "out" && ridePhaseNow === "off") rideStart();
+      walkRoute.ensure(seg);
+      setWalkSeg(seg);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [ridePhaseNow, rideStart, walkRoute.ensure, userPos, from, originAnchor],
+  );
+
+  /** ★ T1：真出口 —— 结束导航（同时收步行段与乘车引擎） */
+  const endSession = useCallback(() => {
+    endWalk();
+    rideStop();
+  }, [endWalk, rideStop]);
+
+  /* ══════════════════════════════════════════════════════════════════════
+     ★ 步行路径「重算」通道（偏航自动 1 次 + 手动 1 次 = 预取 2 + 重算 2 = 上限 4）
+     ─────────────────────────────────────────────────────────────────────
+     · **额度**：唯一来源 = `useWalkRoute.reloadLeft(seg)`（内部与 `reload` 计数器同源）。
+       本地不另起一套计数 —— 两套必然漂移（观测 `data-walk-recalc` 也读这个值）。
+     · **防连点**：现成常量 `COOLDOWN_WALK_SEC = 3`（`useCooldown.ts:28` 注释早就写着
+       "步行路径重算（偏航/手动）…S5 接入用"，一直没接）。**不要**另写 8 秒之类的数字
+       —— 会和偏航阈值混成一个数，以后没人分得清。
+     · **自动触发**：偏航确认（连续帧）后自动重算一次；用完转「可重新选择路线」文案，
+       连按钮都不渲染（点了发不出请求＝假按钮）。
+     ══════════════════════════════════════════════════════════════════════ */
+  const walkRecalcCd = useCooldown(COOLDOWN_WALK_SEC);
+  const walkRecalcStart = walkRecalcCd.start;
+  const walkRecalcCooling = walkRecalcCd.cooling;
+
+  /** 本段剩余重算次数（0 = 额度用尽 ⇒ 走降级文案） */
+  const walkReloadLeft = walkSeg ? walkRoute.reloadLeft(walkSeg) : 0;
+  const walkReloadOut = walkActive && walkReloadLeft <= 0;
+
+  /** 重算唯一入口（自动/手动共用冷却与额度） */
+  const recalcWalk = useCallback(
+    (kind: "auto" | "manual"): boolean => {
+      if (!walkSeg) return false;
+      if (walkRecalcCooling) return false;
+      if (walkRoute.reloadLeft(walkSeg) <= 0) return false;
+      walkRoute.reload(walkSeg);
+      walkRecalcStart();
+      setRecalcKind(kind);
+      setRecalcSeq((n) => n + 1);
+      return true;
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [walkSeg, walkRecalcCooling, walkRecalcStart, walkRoute.reload, walkRoute.reloadLeft],
+  );
+
+  /**
+   * 偏航确认 ⇒ **自动重算最多 1 次/段**（额度语义：自动 1 + 手动 1）。
+   * ⚠️ 依赖只放**原始值**：`walkFollow` 是每帧新对象，放进依赖会让本 effect 每帧重跑，
+   *   冷却一过就再烧一次额度（用户站着不动也能把两次全耗在"自动"上）。
+   *   `autoRecalcRef` 是「本段自动次数」的唯一闸，换段/退出时归零。
+   */
+  const walkOffRoute = walkFollow.offRoute;
+  const recoverWalk = walkFollow.recover;
+  useEffect(() => {
+    if (!walkActive || !walkOffRoute) return;
+    if (walkRecalcCooling) return; // 冷却中 ⇒ 等冷却结束再试（**不烧**自动额度）
+    if (autoRecalcRef.current) return;
+    autoRecalcRef.current = true;
+    if (recalcWalk("auto")) recoverWalk(); // 已重算 ⇒ 撤掉偏航态，横幅回转弯指令
+  }, [walkActive, walkOffRoute, walkRecalcCooling, recalcWalk, recoverWalk]);
+
+  /** 观测钩子：`body[data-walk-recalc="auto|manual:N"`（N = 已用次数，**与额度同源**） */
+  const reloadLeftFn = walkRoute.reloadLeft;
+  useEffect(() => {
+    if (!walkActive || !recalcKind) return;
+    const used = walkSeg ? WALK_RELOAD_MAX - reloadLeftFn(walkSeg) : 0;
+    document.body.setAttribute("data-walk-recalc", `${recalcKind}:${used}`);
+  }, [walkActive, recalcKind, recalcSeq, walkSeg, reloadLeftFn]);
+
+  /** ① 走到上车站 ⇒ 交出步行段（互斥解除 ⇒ 自动上车立刻恢复） */
+  useEffect(() => {
+    if (walkSeg !== "out") return;
+    if (walkFollow.phase !== "arrived") return;
+    endWalk();
+  }, [walkSeg, walkFollow.phase, endWalk]);
+
+  /** ② 最后一程下车 ⇒ 自动进入「步行到达段」（末段入口不再是死代码） */
+  const ensureWalkRoute = walkRoute.ensure;
+  useEffect(() => {
+    if (walkSeg) return;
+    if (ride.phase !== "done") return;
+    if (!hasWalkIn) return;
+    if (walkRoute.in.phase === "failed") return;
+    /* 从没请求过（预取被中止等）⇒ 补一次；这是**该 key 的首次请求**，不占重算预算 */
+    if (walkRoute.in.phase === "idle") ensureWalkRoute("in");
+    setWalkSeg("in");
+  }, [walkSeg, ride.phase, hasWalkIn, walkRoute.in.phase, ensureWalkRoute]);
+
+  /**
+   * ③ 步行路线取不到（或 OD 不存在）⇒ **必须放弃该步行段**：
+   *   否则 `walkActive` 恒 true，`tryAuto` 永久早退 ⇒ 用户既看不到横幅也不能自动上车（死锁）。
+   */
+  useEffect(() => {
+    if (walkSeg === "out" && (!hasWalkOut || walkRoute.out.phase === "failed")) endWalk();
+    else if (walkSeg === "in" && (!hasWalkIn || walkRoute.in.phase === "failed")) endWalk();
+  }, [walkSeg, hasWalkOut, hasWalkIn, walkRoute.out.phase, walkRoute.in.phase, endWalk]);
+
+  /**
+   * 会话是否在跑（= 有过一次「开始导航」且还没结束）。
+   * 用于：地图上的步行走廊 ghost（整条路线常驻）、以及判断「当前段」。
+   */
+  const sessionLive = ride.phase !== "off" || walkSeg !== null;
+  /** 当前段（观测钩子 `body[data-nav-legkind]` 用；文案/横幅由各段自己渲染） */
+  const legKind: "walk-out" | "walk-in" | "ride" | "off" =
+    walkSeg === "out"
+      ? "walk-out"
+      : walkSeg === "in"
+        ? "walk-in"
+        : ride.phase === "boarding" || ride.phase === "riding"
+          ? "ride"
+          : "off";
+  useEffect(() => {
+    if (legKind === "off") document.body.removeAttribute("data-nav-legkind");
+    else document.body.setAttribute("data-nav-legkind", legKind);
+    return () => document.body.removeAttribute("data-nav-legkind");
+  }, [legKind]);
+
+  /** 每段步行的完整几何（地图 ghost + 取景用；`steps` 引用稳定 ⇒ 只在换段/重算时重算） */
+  const walkOutPath = useMemo(() => walkRoute.out.steps.flatMap((s) => s.polyline), [walkRoute.out.steps]);
+  const walkInPath = useMemo(() => walkRoute.in.steps.flatMap((s) => s.polyline), [walkRoute.in.steps]);
+
+  /**
+   * ★ T1（需求 3）：**地图上始终画着完整分段路线**。
+   *   · 正在跟随的那段走 `walk` 三线（done/now/ahead，有进度）；
+   *   · 另一段走 ghost（没走 = 绿细虚线 / 已过 = 灰细虚线）——
+   *     旧版末段步行**从未渲染过**（`walkSeg==="in"` 之前没人设，且三线只画当前段）。
+   *   会话结束（`sessionLive=false`）或离开 detail ⇒ 传 `null` ⇒ 0ms 全清。
+   */
+  const walkGhosts = useMemo(() => {
+    if (!rsOpen || pane !== "detail" || !sessionLive) return null;
+    const out: { key: string; path: [number, number][]; tone: "ahead" | "done" }[] = [];
+    if (walkOutPath.length >= 2 && walkSeg !== "out") {
+      out.push({ key: "out", path: walkOutPath, tone: ride.phase !== "off" ? "done" : "ahead" });
+    }
+    if (walkInPath.length >= 2 && walkSeg !== "in") {
+      out.push({ key: "in", path: walkInPath, tone: "ahead" });
+    }
+    return out.length ? out : null;
+  }, [rsOpen, pane, sessionLive, walkOutPath, walkInPath, walkSeg, ride.phase]);
 
   /** ★ 2026-09-25：取景指令化（AC-17） */
   const { view, frame, reframeOnSettle } = useNavFrame();
   /** 当前档位镜像（取景指令读取用；避免 snap 进入 effect 依赖） */
   const snapRef = useRef<Detent>(snap);
   snapRef.current = snap;
+
+  /**
+   * ★ T1：取景外包框 = 乘车段几何 ∪ **两段步行几何** ∪ 起终点。
+   *   为什么要把步行并进来：改版前 `ov.box` 只包含乘车彩段 + 起终点，
+   *   而末段步行的终点可能落在框外（下车站在框角落时），用户看不到"还要走多远"。
+   *   仍一律**自算 fit-box**（禁 `setBounds`/`setFitView`）。
+   */
+  const frameBox = useMemo(() => {
+    const base = pane === "detail" ? ov.box ?? (ovExtra.length >= 2 ? unionBox([], ovExtra) : null) : null;
+    if (!base) return null;
+    if (!sessionLive) return base;
+    const extraPaths = [walkOutPath, walkInPath].filter((p) => p.length >= 2);
+    if (!extraPaths.length) return base;
+    return unionBox([...ov.legs.map((l) => l.colored), ...extraPaths], ovExtra) ?? base;
+  }, [pane, ov.box, ov.legs, ovExtra, sessionLive, walkOutPath, walkInPath]);
 
   /**
    * 取景意图：仅在 **显式状态变化**（打开面板 / 切 pane / 换 OD / 换舞台）时下令。
@@ -351,7 +765,7 @@ export default function NavShell({
     if (rsOpen) {
       const box =
         pane === "detail"
-          ? ov.box ?? (ovExtra.length >= 2 ? unionBox([], ovExtra) : null)
+          ? frameBox
           : ovExtra.length >= 2
             ? unionBox([], ovExtra)
             : null;
@@ -378,7 +792,7 @@ export default function NavShell({
     if (stage === "panel") frame({ mode: from ? "fit-two" : to ? "dest-center-top" : "none" });
     else frame({ mode: "none" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rsOpen, pane, ov.box, ovExtra, stage, from, to, walkActive, safeTop]);
+  }, [rsOpen, pane, frameBox, ovExtra, stage, from, to, walkActive, safeTop]);
 
   /**
    * ★ v3.2.0（Spec §2/§3 · AC-84）：`body[data-nav-phase]` **五值**（页面级导航阶段钩子）——
@@ -391,7 +805,16 @@ export default function NavShell({
     ? "off"
     : pane === "recommend"
       ? "recommend"
-      : walkActive
+      : /**
+         * ★ `walk` 必须让位给 `riding`（`walkActive && ride.phase !== "riding"`）：
+         *   写入侧已做互斥（`walkActive` 下 `tryAuto` 早退 + 步行段 `track` 传 `null`），
+         *   但**自动上车是异步触发**，仍存在「riding 已开始、walkSeg 尚未清」的帧窗口 ——
+         *   那一帧若判 `walk`，整页会按步行态渲染（底导隐藏、横幅压住），表现就是
+         *   「车都开了还让我走去车站」。这道显示层门是写入侧互斥**替代不了**的。
+         * ⚠️ `walk` 这个**取值本身必须保留**（`globals.css` 的
+         *   `body[data-nav-phase="walk"] .bottom-nav` 与 e2e 都依赖它）。
+         */
+        walkActive && ride.phase !== "riding"
         ? "walk"
         : ride.phase === "riding"
           ? "riding"
@@ -436,15 +859,47 @@ export default function NavShell({
   function backFromSearch() {
     setStage(to ? "panel" : "map");
   }
+  /**
+   * ★ T7（本轮 P0 修复）：**这里不许释放起点锚点**。
+   *
+   * 旧实现无条件 `releaseOrigin()`，于是「只改目的地」（`which === "dest"`）也会把
+   * 起点锚点清掉 ⇒ 下一帧 GPS 更新后 `fromPoint = from ?? originAnchor ?? myLocation`
+   * 直接落到 `myLocation` ⇒ **起点钉跟着定位跑**（T2 修掉的那个 bug 从后门复活）。
+   *
+   * 现口径：
+   *   · `which === "from"` ⇒ `from` 被设成**具体点**（非 GPS），`from` 优先级最高，
+   *     锚点天然被遮蔽，**不需要**释放（留着也不会被读到）；
+   *   · `which === "dest"` ⇒ 起点根本没变，更不该释放。
+   *   · 「退回可出发态」的释放**只有 `contextClose` 的 else 分支**这一个定义点。
+   */
   function pickPoint(p: NavPoint, which: "dest" | "from") {
     if (which === "dest") setTo(p);
     else setFrom(p);
     setStage("panel");
   }
 
+  const router = useRouter();
+  /**
+   * ★ v3.6.1：「查看全部站点」→ `/line/[code]` 深链页（品牌栏线路标签旁的小键）。
+   *
+   * · 只在「从搜索进入线路视图」时打 `SS_RETURN` 一次性标记：返回首页时 `stage` 的初始化
+   *   函数会重开搜索层，搜索词与结果一起回来（该标记读到即删，刷新/新开 tab 不受影响）；
+   * · 从「公共交通路线」弹窗选的线路**不打标**（返回时不该莫名弹出搜索层）；
+   * · 用 SPA 跳转（`router.push`，与 `SearchSheet` 深链兜底同一写法），不 hard reload。
+   */
+  function openAllStops(code: string) {
+    try {
+      if (stage === "search") window.sessionStorage.setItem(SS_SEARCH_RETURN, "1");
+    } catch {
+      /* 隐私模式 ⇒ 只是不自动重开搜索层，不影响跳转 */
+    }
+    router.push(`/line/${encodeURIComponent(code)}`);
+  }
+
   /** ★ 出发 → 打开推荐面板（full 档；不整页跳转） */
   function go() {
     if (!fromPoint || !to) return;
+    freezeOrigin(); // ★ T2：规划那一刻冻结起点（此后点定位不再改起点钉 / resultQuery）
     setDetailCard(null);
     setPane("recommend");
     setSnap("full");
@@ -453,6 +908,12 @@ export default function NavShell({
 
   /** ★ 点卡片：**当帧**切 detail pane + 降档动画（不等待接口，先骨架） */
   function openDetail(card: RecommendCard, degraded: boolean) {
+    freezeOrigin(); // ★ T2：进导航同样冻结（从推荐列表点卡片也算"开始这次行程"）
+    /**
+     * ★ T1：换方案 ⇒ 旧的步行段几何作废，必须先收（含「换乘站台切过去」这条路径）。
+     *   不收的话 `walkActive` 会带进新卡的乘车引擎 ⇒ 自动上车被判互斥永久挡住。
+     */
+    endWalk();
     setDetailCard({ card, degraded });
     setPane("detail");
     setSnap("half");
@@ -461,9 +922,18 @@ export default function NavShell({
   /** ★ contextual 关闭：推荐→关面板（回可出发态）；详情→回推荐列表 */
   function contextClose() {
     if (pane === "detail") {
+      /**
+       * ★ T1/T5：**离开详情 = 结束本次导航会话**，步行必须一起收干净。
+       *   旧版只切 pane：`walkSeg` 谁也不清（全仓没有一处 `setWalkSeg(null)`）⇒
+       *   横幅、折线、`data-walk-*` 全留在界面上，底栏还照给「开始导航」
+       *   （因为 `walkActive && phase==="ready"` 根本不看面板开合）。
+       *   乘车侧本来就是这样：`navActive` 变 false ⇒ `useRideTracking` 自 reset。
+       */
+      endWalk();
       setPane("recommend");
       setSnap("full");
     } else {
+      releaseOrigin(); // ★ T2：回到可出发态 ⇒ 释放起点锚点
       setRsOpen(false);
       setStage(to ? "panel" : "map");
     }
@@ -513,6 +983,36 @@ export default function NavShell({
   /** detail pane 打开时，总览取代「路线查看线」与其车辆 */
   const detailActive = rsOpen && pane === "detail";
 
+  /**
+   * ★ T1：**会话级追踪视图** —— 唯一改动是把 `onStart/onStop` 换成整条导航流的入口/出口：
+   *   · `onStart`（吸底「开始导航」）⇒ `startSession("out")`：冻结起点 + 乘车进 boarding
+   *     + 直接进入步行出发段（顶栏立刻出行走指令，用户不必再点「开始步行」）；
+   *   · `onStop`（「结束导航」）⇒ `endSession()`：步行段 + 乘车引擎 + 观测钩子一起收。
+   * 其余字段原样透传（面板/纵条/卡片都按原契约读）。
+   */
+  const trackView: RideTrackView = useMemo(
+    () => ({ ...ride, onStart: () => startSession("out"), onStop: endSession }),
+    [ride, startSession, endSession],
+  );
+
+  /**
+   * ★ T6：**导航态车辆卡的元信息**。
+   *   根因：导航态 `rv`（`useRouteVehicles`）**从未 fetch** ⇒ `rv.fetchedAt` 恒 null、
+   *   `rv.picked` 恒 null ⇒ 点车辆后卡片没有线路标签、数据时间显示「—」。
+   *   这里改用**当前 ride 段**的线路码 / 线色 / 最近一次车辆帧时刻。
+   *   ⚠️ 不动 `/api/route-vehicles` 契约（`useRideTracking` 侧只把站名与末班补对）。
+   */
+  const navVehMeta = useMemo(() => {
+    if (!detailActive) return null;
+    const leg = detailCard?.card.rides[ride.legIndex] ?? null;
+    if (!leg) return null;
+    return {
+      label: leg.kind === "lrt" ? `轻轨 ${leg.route.replace(/^LRT-/, "")}` : `${leg.route} 路`,
+      color: colors[leg.route],
+      fetchedAt: ride.lastUpdateTs > 0 ? new Date(ride.lastUpdateTs).toISOString() : null,
+    };
+  }, [detailActive, detailCard, ride.legIndex, ride.lastUpdateTs, colors]);
+
   return (
     <section className="nav-shell nav-shell--full">
       <div className="nav-map-wrap">
@@ -554,6 +1054,14 @@ export default function NavShell({
               : null
           }
           walkVersion={walkVersion}
+          /**
+           * ★ P0：上层是否已有可用定位 —— 供 `NavMap` 决定**要不要说"无法定位"**。
+           *   高德定位失败但浏览器 GPS 有值时，蓝点/出发都正常，说"无法定位"就是假话。
+           */
+          hasExternalPos={!!myPos}
+          /* ★ T1（需求 3）：**非当前段的步行走廊常驻**（细虚线；已走完转灰）——
+             末段步行在此之前从未在地图出现过。会话结束/离开 detail ⇒ `null` ⇒ 0ms 全清。 */
+          walkGhosts={walkGhosts}
           /* ★ v3.2.0（需求 4 / AC-74）：**蓝点任何时候显示** —— 导航态用 GPS 投影点（`youDot`）回落原始
              GPS；**浏览/选点/选路线态也回落原始 GPS**（原先非 detail 态传 `null` ⇒ 浏览时不显示蓝点，
              违反 AC-74）。拒权/未获定位 ⇒ `userFixR.fix = null` ⇒ 蓝点不显示、页面照常（AC-75）。 */
@@ -567,7 +1075,11 @@ export default function NavShell({
 
         {/* 品牌栏（三栏网格）：左=空 · 中=换向键+线路标签 · 右=竖排按钮组（导航态右列隐藏，AC-84） */}
         <NavBrandBar
-          picked={rv.picked ? { label: rv.picked.label, color: rv.picked.color, kind: rv.picked.kind } : null}
+          picked={
+            rv.picked
+              ? { label: rv.picked.label, color: rv.picked.color, kind: rv.picked.kind, code: rv.picked.code }
+              : null
+          }
           canReverse={rv.canReverse}
           cooldownSec={rv.cooldownSec}
           onReverse={rv.reverse}
@@ -578,6 +1090,8 @@ export default function NavShell({
           onLocate={() => setLocateTick((t) => t + 1)}
           /* ★ v3.2.0（需求 10 / AC-84）：导航语境（data-nav-phase ≠ off）⇒ 隐藏「查看路线」与「M Map logo」 */
           navMode={navPhase !== "off"}
+          /* ★ v3.6.1：「查看全部站点」⇒ `/line/[code]` 深链页（保留为可达入口，不是孤儿页） */
+          onOpenAllStops={openAllStops}
         />
 
         {/* 顶置搜索条 + 提示条槽（★ v3.6.0 AC-54：收藏带入横幅及其专用 props 已删除） */}
@@ -640,9 +1154,10 @@ export default function NavShell({
             <VehicleCard
               vehicle={rv.selected.vehicle}
               count={rv.selected.count}
-              fetchedAt={rv.fetchedAt}
-              lineLabel={rv.picked?.label}
-              lineColor={rv.picked?.color}
+              /* ★ T6：导航态取 ride 侧的线路/帧时刻（导航态 `rv` 从未 fetch ⇒ 旧值恒 null） */
+              fetchedAt={navVehMeta ? navVehMeta.fetchedAt : rv.fetchedAt}
+              lineLabel={navVehMeta ? navVehMeta.label : rv.picked?.label}
+              lineColor={navVehMeta ? navVehMeta.color : rv.picked?.color}
               onClose={rv.closeVehicle}
             />
           )}
@@ -677,12 +1192,37 @@ export default function NavShell({
           })()}
           offM={walkFollow.offM}
           destLabel={to?.label}
-          onRecover={() => {
-            walkFollow.recover();
-            if (walkSeg) walkRoute.reload(walkSeg);
-          }}
+          /**
+           * ★ 额度用尽（本段重算 0 次）⇒ 换成定稿降级文案，并且**不渲染按钮**
+           *   （点了发不出请求 = 假按钮）。文案里不出现「失败/错误/超时/额度/配额/接口」等词。
+           */
+          offText={walkReloadOut ? "步行路段暂时无法更新，可重新选择路线" : undefined}
+          onRecover={
+            walkReloadOut
+              ? undefined
+              : () => {
+                  /* 手动重算走统一入口（同一把 3s 冷却 + 同一份额度）；无论发没发出去都撤偏航态 */
+                  recalcWalk("manual");
+                  walkFollow.recover();
+                }
+          }
           onRetry={() => userFixR.start?.()}
         />
+      )}
+
+      {/*
+        ★ T1：**步行段的真出口**（页面级 `fixed`，必须挂在 `.nav-map-wrap` 之外）。
+        为什么不复用面板吸底条：
+          · 步行段 `RouteSheet` 的 `track` 传 `null` ⇒ 吸底条不渲染（否则会出现与当前段无关的
+            「开始导航 / 手动标记上车」）；
+          · 面板拖到 peek 时吸底条会被摘要层压住 —— 出口不能依赖面板状态。
+        点击 = `endSession()`：`walkSeg` / `donePath` / `data-walk-*` / 乘车引擎一起收。
+      */}
+      {walkActive && (
+        <button type="button" className="nav-walk-exit" data-walk-exit="on" onClick={endSession}>
+          <Icon name="close" size={16} />
+          结束导航
+        </button>
       )}
 
       {/* 公共交通路线全屏选择弹窗（必须在 wrap 之外） */}
@@ -710,17 +1250,16 @@ export default function NavShell({
         fav={fromPoint && to ? { from: endpointOf(fromPoint), to: endpointOf(to) } : null}
         immersive={ride.phase === "riding"}
         /**
-         * ★ v3.6.0 S5：步行入口 + 首段预览。
-         * `onStart` = **唯一**进入跟随的入口（用户显式点击「开始步行」）；
-         * `preview` 只取首段（末段跟随由 `walkSeg === "in"` 承载，入口同理）。
+         * ★ T1：步行入口 + **两段**预览（首段 / 末段）。
+         * · 正常流程里这两个按钮只是「手动补进」的兜底 —— 主流程已自动推进
+         *   （开始导航 ⇒ 直接进步行出发段；下车 ⇒ 自动进步行到达段）；
+         * · `onStart(seg)` 与「开始导航」走**同一条会话入口**（`startSession`）：
+         *   首段会顺带把乘车引擎推进到 boarding（互斥由引擎内部保证），
+         *   ⇒ 不会再出现"只走了步行、上车判定没在跑"的半截状态。
          */
         walk={{
-          onStart: (seg, steps) => {
-            void steps; // steps 已由 useWalkRoute 缓存，跟随状态机会拿到同一份
-            walkRoute.ensure(seg);
-            setWalkSeg(seg);
-          },
-          onExpand: () => walkRoute.ensure("out"),
+          onStart: (seg) => startSession(seg),
+          onExpand: (seg) => walkRoute.ensure(seg),
           /** ★ 正在跟随（walk 态）⇒ RouteSheet 据此禁 peek */
           active: walkActive,
           preview: {
@@ -729,6 +1268,13 @@ export default function NavShell({
             serverSteps: walkRoute.out.steps,
             totalDistM: walkRoute.out.stepsTotalM,
             totalMin: walkRoute.out.totalDurationS / 60,
+          },
+          previewIn: {
+            phase: walkRoute.in.phase,
+            steps: walkRoute.in.steps,
+            serverSteps: walkRoute.in.steps,
+            totalDistM: walkRoute.in.stepsTotalM,
+            totalMin: walkRoute.in.totalDurationS / 60,
           },
         }}
         detail={
@@ -742,8 +1288,16 @@ export default function NavShell({
                 /* ★ v3.6.0 S4：观测钩子改用唯一车辆来源（`ov.vehicles` 已删除） */
                 vehicles: ride.mapVehicles.length,
                 reload: ov.reload,
-                /* ★ 2026-09-24：导航追踪态 + 可切换方案上下文 */
-                track: ride,
+                /**
+                 * ★ 2026-09-24：导航追踪态 + 可切换方案上下文。
+                 * ★ T1：**步行段活跃时传 `null`** ——
+                 *   ① 吸底操作条的 `NavTrackBar` 只认 `RidePhase`，步行中它会给
+                 *      「开始导航 / 手动标记上车」这类与当前段无关的键（需求 6 点名的残留）；
+                 *   ② 步行段的唯一出口是页面级「结束导航」按钮（见下方 `nav-walk-exit`），
+                 *      不依赖面板，面板被拖到 peek 也不会丢。
+                 * 乘车/候车段照旧传 `trackView`（`onStart/onStop` 已包成会话级）。
+                 */
+                track: walkActive ? null : trackView,
                 destCoord: { lng: to.lng, lat: to.lat },
                 onSwitchCard: openDetail,
               }
@@ -768,6 +1322,17 @@ export default function NavShell({
             setStage("panel");
           }}
           onBack={backFromSearch}
+          /**
+           * ★ v3.6.1（fe-search 定稿契约）：
+           * · `onOpenLine` 参数是右栏的 `RouteLineItem` 本体（`{code,kind,label,color}`），
+           *   映射与兜底色都在 `SearchSheet.openLine` 内做完 ⇒ 这里直接传 `rv.pickLine` 引用；
+           * · `lineOpen` **必须一起传**：为真时 SearchSheet `return null` 但**保持挂载**
+           *   （`q`/`resp` 一个字节不丢），退出线路视图（`rv.exitLine`）后搜索词原样回来；
+           * · ⚠️ **不要 `setStage`** —— `stage==="search"` 是 SearchSheet 的挂载条件，
+           *   切走即卸载，AC-45「返回后搜索词还在」当场失效。
+           */
+          lineOpen={!!rv.picked}
+          onOpenLine={rv.pickLine}
         />
       )}
 
@@ -778,7 +1343,13 @@ export default function NavShell({
         <RoutePanel
           dest={to}
           from={from}
-          userPos={userPos}
+          /**
+           * ★ T8（P0）：传 **`myPos`** 而不是 `userPos`。
+           *   `RoutePanel` 用这个 prop 自建「我的位置」行（`RoutePanel.tsx:59-61`）——
+           *   传 `userPos` 时高德定位没回来就恒为 null ⇒ 行显示「选择出发地」，
+           *   即使 `canGo` 已被修好，用户看到的仍是"起点没定"。
+           */
+          userPos={myPos}
           canGo={canGo}
           going={false}
           query={resultQuery}

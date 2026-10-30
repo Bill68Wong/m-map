@@ -1,7 +1,7 @@
 /**
  * 进度模型部署参数（★ 自动生成，勿手改 —— scripts/train-progress-model.mjs）
  *
- * 生成：2026-09-27T11:27:58.224Z
+ * 生成：2026-10-30T10:38:18.589Z
  * 数据：50 场采集 · 过滤后 117784 段（原始 145883）
  * 曲线：h[段型][剩余路程比 1−p 的 20 桶] = 剩余时间比例中位数（PAVA 单调化）
  * 依据：docs/区间进度模型-调研报告-20260927.md（§4 模型设计 · §8 批判自审）
@@ -25,7 +25,7 @@ export const PROGRESS_W: Record<ProgressSegType, number> = {
 
 /** 训练统计（诊断用） */
 export const PROGRESS_META = {
-  generatedAt: "2026-09-27T11:27:58.226Z",
+  generatedAt: "2026-10-30T10:38:18.591Z",
   sessions: 50,
   segs: 117784,
   counts: {"short":{"segs":103580,"pts":525117},"mid":{"segs":10313,"pts":100797},"long_fast":{"segs":3150,"pts":44680},"long_slow":{"segs":741,"pts":11447}},

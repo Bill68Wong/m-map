@@ -45,7 +45,25 @@ import { TRANSFER_SAFETY_MIN } from "@/lib/recommend/score";
 import { usePressGuard } from "@/lib/use-press-guard";
 import type { RecommendCard as CardData, SchoolZone } from "@/lib/recommend/types";
 
-/** ★ 本批（AC-50）：换乘可行性（`H8 data-transfer-feasible`）——取**最差**一张换乘。 */
+/**
+ * ★ 本批（AC-50）：换乘可行性（`H8 data-transfer-feasible`）——取**最差**一张换乘。
+ *
+ * ── 值域语义（v3.6.1 需求 7 冻结；改这里先读 `types.ts#slackMin` 的契约注释）──
+ * | `transfers[i].slackMin` | 派生值 | 说明 |
+ * |------------------------|--------|------|
+ * | `null` / `undefined` | `yes` | 未参与计算 / **同场换乘（`SAME_FIELD_TRANSFER_MIN = 0`）** |
+ * | `0` | `tight` | 巴士：「真零余量」**或**「极端不确定」（P2 不区分） |
+ * | `(0, 3)` | `tight` | 轻轨真实间隔不足安全余量 / 巴士窄-中桶 |
+ * | `≥ 3` | `yes` | 从容 |
+ * | `< 0` | `no` | **代码上不可达**（轻轨 `gapMin`、巴士 `slackMin` 均 ≥ 0）⇒ 不得当告警依据 |
+ *
+ * ⚠️ **`if (t.slackMin == null)` 的宽松等号必须保留**：它一次覆盖 `null` 与 `undefined`
+ *    两种「不该有风险信号」的情形。收窄成 `=== null` 会把同场换乘（`undefined`）漏成
+ *    `tight`，把澳门最常见的同站台换乘全染红 —— 这正是 A4 反向断言要抓的回归点。
+ * ⚠️ `0` 有双重含义（真零余量 / 极端不确定）⇒ 若将来为 `tight` 加**文案**，
+ *    **不得声称确定性**（禁「只剩 X 分」「很赶」「来不及」），也不得新增 UI 词。
+ *    当前 `tight` **没有任何上屏文案**，只是本函数返回的 `data-` 属性取值。
+ */
 function transferFeasibleOf(card: CardData): "yes" | "tight" | "no" {
   let worst: "yes" | "tight" | "no" = "yes";
   for (const t of card.transfers) {

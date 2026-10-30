@@ -60,9 +60,10 @@ import { PLACE_SHORT } from "@/lib/home-plans-shared";
 import { hhmmOf } from "@/lib/lrt/eta";
 import type { AmapPlanSeed, WalkResolver } from "@/lib/nav/types";
 import { etaTextOf, pickCatchTier, tierHintOf, tierTextOf, waitRangeText, type TierSpeedOverride } from "./catch-up";
-import { conservativeWaitMin, headwayAt, headwayMedian, type HeadwayIndex } from "./headway";
+import { conservativeWaitMin, headwayAt, headwayMedian, SLACK_NO_DATA, type HeadwayIndex } from "./headway";
 import { cmpByPref, PREF_DEFAULTS, type Prefs } from "./score";
 import { mainCodeOf, rideOfHops, type SegmentIndex } from "./segment-lookup";
+import { busTransferSlackMin, slackTierSink } from "./transfer-slack";
 import {
   LRT_HOP_FALLBACK_SEC,
   LRT_HOP_SEC,
@@ -709,7 +710,14 @@ export function modelOption(seed: OptionSeed, ctx: ModelContext): ModeledOption 
       // 轻轨第 2 段拿到的是**真实班次时刻** → 文案用绝对时刻（就是你会坐的那一班）
       liveTextNext = `${hhmmOf(((depMs + 8 * 3_600_000) % 86_400_000) / 1000)} 开出`;
       if (transferCur) {
-        // slackMin = 到站→发车 的余量（恒 ≥ 安全余量，否则上面已顺延/剔除）
+        /**
+         * `slackMin` = 到站→发车 的**真实间隔**（确定性值，来自真实班次时刻表）。
+         * ⚠️ 不保证 ≥ `TRANSFER_SAFETY_MIN`：`need = cursor` 时可能刚好差 10 秒（`gap ∈ [0,3)`）
+         *    ⇒ `data-transfer-feasible` 记 `tight`，这是正确表达，不要用「+3 分钟安全余量」去修
+         *    （2026-09-27 已证伪：加 3 分钟会跳过明明能赶上的早班）。
+         * ⚠️ **仅在模式内可比**：巴士第 2 段是「保守余量」（无班表），与本值不同语义，
+         *    两者喂同一个 risk 公式时不构成「轻轨 vs 巴士 谁更靠谱」的结论。见 `./transfer-slack.ts`。
+         */
         transferCur.waitMin = Math.round(gapMin * 10) / 10;
         transferCur.slackMin = Math.round(gapMin * 10) / 10;
       }
@@ -719,9 +727,11 @@ export function modelOption(seed: OptionSeed, ctx: ModelContext): ModeledOption 
       //   未命中 → 该线全时段班距中位数（`headwayMedian`）→ 仍无 ⇒ `null`（**明示降级**）。
       //   ⚠️ **不再回落写死常量**（旧「第 2 段巴士等车恒 180s」已废除，AC-61）。
       let waitBusMin: number | null = null;
+      /** ★ 需求 7：命中的班距区间（用于算保守余量；走了中位数/无数据降级则为 null） */
+      let busHit: ReturnType<typeof headwayAt> = null;
       if (ctx.headway) {
-        const hit = headwayAt(ctx.headway, next.route, cursor);
-        if (hit) waitBusMin = conservativeWaitMin(hit);
+        busHit = headwayAt(ctx.headway, next.route, cursor);
+        if (busHit) waitBusMin = conservativeWaitMin(busHit);
         else waitBusMin = headwayMedian(ctx.headway, next.route) ?? headwayMedian(ctx.headway);
       }
       if (waitBusMin !== null) {
@@ -734,9 +744,67 @@ export function modelOption(seed: OptionSeed, ctx: ModelContext): ModeledOption 
         liveTextNext = "等车时间暂无数据";
       }
       if (transferCur) {
-        // 巴士无逐车时刻表 ⇒ 无 slack（换乘可行性按 `yes` 计，见观测钩子 H8）
         transferCur.waitMin = waitBusMin === null ? null : Math.round(waitBusMin * 10) / 10;
-        transferCur.slackMin = null;
+        /**
+         * ★ 需求 7（v3.6.1）：巴士第 2 段的换乘余量（**原为 `null` ⇒ 风险项恒 0**）。
+         *
+         * 旧行为的事故：`slackMin = null` + `score.ts` 的「null 不加风险项」
+         *   ⇒ 「40 秒换乘」与「8 分钟从容换乘」在 `cost` 上**完全相同**
+         *   ⇒ 极限换乘方案可以排到第一（用户投诉的「不合理换乘也能排第一」）。
+         *
+         * ── **三档取值**（与 `07` §h.3 对齐；散写会被后来人合并成一个兜底值）──
+         * ```
+         * ① headwayAt 命中时段行     ⇒ slackMin = max(0, 2·lo − hi)   ← 保守余量
+         * ② 未命中、中位数可用       ⇒ slackMin = 0                    ← 区间丢了 = 最不确定
+         * ③ 连中位数都没有           ⇒ slackMin = SLACK_NO_DATA        ← 待测量，默认 0 ≈ tight
+         * 同场换乘（sameField）       ⇒ **不写该字段**（undefined ⇒ H8 = yes）
+         * ```
+         * · 档 ② 取 `0` 而不是沿用中位数：中位数把 `lo/hi` 丢了，不确定性未知 ⇒
+         *   按「不确定按风险处理」的团队原则走 `tight` 侧。
+         * · 档 ③ 取 `SLACK_NO_DATA`（而非 `null`）：若取 `null` 会**比档 ② 更宽松**，
+         *   属「数据越少越不告警」的逻辑倒挂；其唯一托底是上面那句卡面文案
+         *   `liveTextNext = "等车时间暂无数据"`，文案一旦被删/改渲染，静默乐观就回来了。
+         * ⚠️ 档 ③ 的 `SLACK_NO_DATA` **取值待测量**（`scripts/compare-slack-impact.ts`），
+         *    不是定稿值，改它属调参（会改 cost 与排序）。
+         * · 同场换乘**必须保持 `undefined`**（不是 `0`）：`0` 会走 `slack < 3 ⇒ tight`，
+         *   把澳门最常见的同站台换乘全染红；而 A4 断言要靠 `undefined` 区分
+         *   「同站台」与「无数据」。
+         *   ⚠️ 不对称是**刻意**的：**轻轨**同场换乘仍写真实 `gapMin`（有班表 ⇒ 间隔可知，
+         *   即便同站台也要赶上那一班）；**巴士**同场换乘不写（没有班表 ⇒ 0 步行不提供
+         *   任何时序信息）。别为了"对称好看"把轻轨那侧也清空 —— 那是既有线上行为。
+         *
+         * ── 调参红线 ────────────────────────────────────────────────────
+         * 单次换乘 risk 硬上界 = `riskFactor(0.5) × safetyMin(3) = 1.5` 分，
+         * 而 `PREF_ALPHA = 10` 分/换乘 ⇒ risk 恒 < α 项的 **15%**，不可能淹没 cost；
+         * **`riskFactor ≤ α/2 = 5` 是安全边界**（当前 0.5，10 倍余量），超过 5 会让
+         * 「可行性」盖过「换乘次数」这个更硬的判据。
+         *
+         * ⚠️ 该值**不参与 `waitMin`/`totalMin`** —— 总用时口径一个字节都没变，
+         *   只有 `cost` / 排序 / 风险字段变化。**安全余量只进评分与文案，
+         *   绝不进可行性筛选**（`need = cursor` 那处 2026-09-27 已因误杀早班被修复）。
+         */
+        const r1 = (x: number) => Math.round(x * 10) / 10;
+        if (transferCur.sameField) {
+          // 同场换乘（巴士）：同站台、0 步行 ⇒ 不写 slackMin（保持 undefined ⇒ H8 = yes）
+          slackTierSink.on?.({ tier: "sameField", route: next.route, slackMin: null });
+        } else if (busHit) {
+          transferCur.slackMin = r1(busTransferSlackMin(busHit));
+          slackTierSink.on?.({
+            tier: "hit",
+            route: next.route,
+            slackMin: transferCur.slackMin,
+            lo: busHit.lo,
+            hi: busHit.hi,
+          });
+        } else if (waitBusMin !== null) {
+          // 档 ②：中位数可用 ⇒ 区间已丢，按最不确定处理
+          transferCur.slackMin = 0;
+          slackTierSink.on?.({ tier: "median", route: next.route, slackMin: 0 });
+        } else {
+          // 档 ③：连中位数都没有 ⇒ SLACK_NO_DATA（待测量，默认 0）
+          transferCur.slackMin = r1(SLACK_NO_DATA);
+          slackTierSink.on?.({ tier: "noData", route: next.route, slackMin: transferCur.slackMin });
+        }
       }
     }
   }

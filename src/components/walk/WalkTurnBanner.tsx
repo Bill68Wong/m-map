@@ -49,6 +49,13 @@ export interface WalkTurnBannerProps {
   distM?: number;
   /** `off` 态：偏离米数 */
   offM?: number;
+  /**
+   * ★ `off` 态的**替代文案**（不传 = 「已偏离路线 N 米」）。
+   *   用途：本段重算额度用尽时换成定稿口径
+   *   「步行路段暂时无法更新，可重新选择路线」——
+   *   必须用现有横幅文案位，不新造弹层；且**不得**出现「失败/错误/超时/额度/配额/接口」等词。
+   */
+  offText?: string;
   /** `arrive` 态：目的地名 */
   destLabel?: string;
   /** `off` 态：「回到路线」 */
@@ -65,6 +72,7 @@ export default function WalkTurnBanner({
   distM = 0,
   offM = 0,
   destLabel,
+  offText,
   onRecover,
   onRetry,
 }: WalkTurnBannerProps) {
@@ -82,7 +90,7 @@ export default function WalkTurnBanner({
     state === "arrive"
       ? `已到达${destLabel ? ` ${destLabel}` : ""}`
       : state === "off"
-        ? `已偏离路线 ${Math.round(offM)} 米`
+        ? (offText ?? `已偏离路线 ${Math.round(offM)} 米`)
         : state === "manual"
           ? "定位不可用，无法跟随"
           : (text ?? "");
@@ -109,7 +117,8 @@ export default function WalkTurnBanner({
         </span>
       )}
 
-      {state === "off" && (
+      {/* ★ `off` 态：**没有可执行动作就不渲染按钮**（额度用尽时点了也发不出请求 = 假按钮） */}
+      {state === "off" && onRecover && (
         <button type="button" className="walkturn__act" onClick={onRecover}>
           回到路线
         </button>

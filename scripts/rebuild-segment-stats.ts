@@ -28,6 +28,22 @@ const fromArg = process.argv.find((a) => a.startsWith("--from="))?.split("=").sl
 const sampleFrom = (fromArg as "events" | "samples" | "both" | undefined) ?? "events";
 if (!["events", "samples", "both"].includes(sampleFrom))
   throw new Error(`--from 只能是 events|samples|both（收到 ${fromArg}）`);
+// ★ v3.6.0：arrive_kind 分档依据（默认 origin = 起点站，行为不变；dest = 终点站，与离开口径自洽）
+const kindArg = process.argv.find((a) => a.startsWith("--kind="))?.split("=").slice(1).join("=");
+const arriveKindMode = (kindArg as "origin" | "dest" | undefined) ?? "origin";
+if (!["origin", "dest"].includes(arriveKindMode))
+  throw new Error(`--kind 只能是 origin|dest（收到 ${kindArg}）`);
+
+// ★ v3.6.0：**默认值与生产口径不一致**的显式告警。
+//   `?? "events"` 只是无参兜底；生产现值（14,951 行 / 94 条线路）是 `--from=both` 跑出来的。
+//   漏传参数会静默把整表换成 478 行 / 14 条线路（写入前先 `DELETE FROM segment_stats`）。
+//   这条告警出现在**执行那一刻**，比写在注释里更能拦住人。
+if (sampleFrom === "events" && !dry) {
+  console.warn("⚠️  sampleFrom=events：只读 timer_sessions / free_rides（实测 478 行 / 14 条线路），");
+  console.warn("    不读 segment_samples。若线上是 both 口径（14,951 行 / 94 条线路），");
+  console.warn("    这次运行会把整表 DELETE 后重写为 478 行 —— 确认这是你要的口径，否则加 --from=both。");
+}
+console.log(`▶ 口径：sampleFrom=${sampleFrom} · arrive_kind=${arriveKindMode} · dry=${dry}`);
 const dbUrl = target === "cloud" ? process.env.DATABASE_URL : (process.env.DATABASE_URL_LOCAL ?? process.env.DATABASE_URL);
 if (!dbUrl) throw new Error(`未找到 ${target === "cloud" ? "DATABASE_URL" : "DATABASE_URL_LOCAL"}`);
 const u = new URL(dbUrl);
@@ -41,11 +57,11 @@ const pool = new Pool({
 });
 
 async function main() {
-  const r = await rebuildSegmentStats(pool, { dry, sampleFrom });
+  const r = await rebuildSegmentStats(pool, { dry, sampleFrom, arriveKindMode });
   const { stats } = r;
 
   if (dry) console.log(`[--dry] 跳过写入（${target}）`);
-  console.log(`✅ segment_stats ${dry ? "（未写入）" : "已重算"}（${target}，样本来源=${r.sampleFrom}）`);
+  console.log(`✅ segment_stats ${dry ? "（未写入）" : "已重算"}（${target}，样本来源=${r.sampleFrom}，arrive_kind 依据=${arriveKindMode}）`);
   console.log(`   源：通勤计时 ${r.sessions} 会话 + 自由记站 ${r.rides} 行程 → 事件段样本 ${r.rawSamples.length}`);
   console.log(`   来源分布：timer ${r.bySource.timer} · free ${r.bySource.free} · track ${r.bySource.track}`);
   console.log(`   头段 ${stats.head} · 末段 ${stats.tail} · 方向重判 ${stats.redirect} 个行程`);
@@ -56,6 +72,19 @@ async function main() {
   console.log(
     `   跨线回退回收 ${stats.recovered} 段（本线站序解不出，但该邻接对属另一条线 → 按站码反查归属）`,
   );
+  console.log(
+    `   长停站排除 ${stats.longDwell} 条（终点站 dwell_B ≥ 3 分 → minutes 含司机休息/长时间上落客）`,
+  );
+  if (r.longStopPolicy) {
+    const p = r.longStopPolicy;
+    const pct = ((x: number) => `${((x / Math.max(p.candidates, 1)) * 100).toFixed(1)}%`)(stats.longDwell);
+    console.log(
+      `   长停判据明细：候选 ${p.candidates} 条 / ${p.candidatePairs} 站对 → 排除 ${stats.longDwell} 条（占候选 ${pct}）· ` +
+        `门拦下：insufficient ${p.insufficientPairs} 站对（${p.insufficientStations} 站）· ` +
+        `headway-sync ${p.headwaySyncPairs} 站对（${p.headwaySyncStations} 站，本门本次 ${p.headwaySyncPairs === 0 ? "0 命中、不影响结果" : "有命中"}）· ` +
+        `peak-crowded ${p.peakCrowdedPairs} 站对（${p.peakCrowdedStations} 站，本门本次 ${p.peakCrowdedPairs === 0 ? "0 命中、不影响结果" : "有命中"}）`,
+    );
+  }
   console.log(
     `   档位：stop（起点停靠，含停站）${r.byKind.stop} · pass（起点甩站，≈纯行驶）${r.byKind.pass}`,
   );

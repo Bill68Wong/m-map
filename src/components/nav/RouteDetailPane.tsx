@@ -42,9 +42,13 @@ export interface RouteDetailPaneProps {
   /** ★ 2026-09-24：点「切过去」→ 打开新方案导航 */
   onSwitchCard?: (card: RecommendCard, degraded: boolean) => void;
   /** ★ v3.6.0 S5：步行跟随入口（宿主提供； ⇒ 不渲染展开键） */
-  onWalkStart?: ((seg: "out", steps: import("@/lib/walk/walk-shared").WalkStep[]) => void) | null;
-  onWalkExpand?: () => void;
+  onWalkStart?:
+    | ((seg: "out" | "in", steps: import("@/lib/walk/walk-shared").WalkStep[]) => void)
+    | null;
+  onWalkExpand?: (seg: "out" | "in") => void;
   walkPreview?: import("./NavDetailBody").WalkPreview;
+  /** ★ T1：末段步行预览（下车站 → 目的地） */
+  walkInPreview?: import("./NavDetailBody").WalkPreview;
   /** ★ 2026-09-25：全屏化（导航中隐藏底导、收敛间距） */
   immersive?: boolean;
 }
@@ -65,6 +69,7 @@ export default function RouteDetailPane({
   onWalkStart,
   onWalkExpand,
   walkPreview,
+  walkInPreview,
   immersive = false,
 }: RouteDetailPaneProps) {
   /** 收藏数据（纯函数在客户端现算：指纹 / 快照 / 流程图结构） */
@@ -116,6 +121,7 @@ export default function RouteDetailPane({
           onWalkStart={onWalkStart}
           onWalkExpand={onWalkExpand}
           walkPreview={walkPreview}
+          walkInPreview={walkInPreview}
           immersive={immersive}
         />
       )}

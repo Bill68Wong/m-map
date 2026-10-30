@@ -95,8 +95,19 @@ export function buildStrips(card: RecommendCard, ctx: StripBuildCtx): SegmentStr
           }
         : null;
     const t = card.transfers[i];
-    // ★ B4（需求 7）：透传换乘等待/安全余量（`waitMin`/`slackMin`）⇒ 前端换乘行可显示
-    //   「换乘 X · 步行 N 分 · 等车约 M 分」，并由 `slackMin` 派生观测钩子 H8。
+    /**
+     * ★ B4（需求 7）：透传换乘等待/余量（`waitMin`/`slackMin`）⇒ 导航站条换乘行可显示
+     *   「换乘 X · 步行 N 分 · 等车约 M 分」，并由 `slackMin` 派生观测钩子 H8。
+     *
+     * ★ v3.6.1（需求 7 冻结口径，改前先读 `types.ts#slackMin`）：
+     *   · `waitMin` 进 `totalMin`；`slackMin` **只进 `cost`/风险信号**，两者不可互相替代；
+     *   · `t.slackMin ?? null` 会把**同场换乘的 `undefined` 归一成 `null`** —— 这是**expected**：
+     *     H8 用 `== null` 宽松判断，`null` 与 `undefined` **都落 `yes`**，所以归一不影响
+     *     A4 的「同场换乘必须仍判 yes」断言（`sameField` 自身也独立透传，信息没丢）。
+     *   · ⚠️ **禁止**把这行改成 `?? 0`（或任何默认值）：`0` 会走 `slack < 3 ⇒ tight`，
+     *     把澳门最常见的同站台换乘整片染成 `tight`。`0` 只允许由 `model.ts` 三档赋值显式给出
+     *     （档 ② 中位数兜底 / 档 ③ `SLACK_NO_DATA`），**不得在这里兜底**。
+     */
     const transferAfter: TransferView | null = t
       ? {
           at: t.at,

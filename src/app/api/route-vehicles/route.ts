@@ -19,12 +19,12 @@
  *
  * ── 降级（AC-08）──────────────────────────────────────────────────────
  *   · **报站失败**：仍返回车辆（坐标 + 车牌来自位置接口），`interval:null` / `status:"unknown"`；
+ *     ★ v3.6.1：`busCode` 随之**整体缺席**（该字段只存在于报站接口，见 `Vehicle.busCode` 注释）。
  *   · **位置失败**：无坐标可落点 ⇒ `vehicles: []`；
  *   · 超时 / 异常**一律收敛为空数组**，**绝不 500**（参照 `/api/station/eta` 的容错写法）。
  *
  * ── 轻轨（AC-02）──────────────────────────────────────────────────────
- *   DSAT 是巴士系统、**无轻轨车辆数据**（Spec §3 已实测穷尽）⇒ `LRT-*` 直接返回
- *   空数组 + `note:"lrt_no_vehicle"`，**不做任何 DSAT 调用**，也不报错。
+ *   DSAT 是巴士系统、**无轻轨数据**（Spec §3 实测穷尽）⇒ `LRT-*` 直接返回空数组 + `note:"lrt_no_vehicle"`，不调 DSAT、不报错。
  *
  * ── 风控 ──────────────────────────────────────────────────────────────
  *   两处 DSAT 调用均以 `purpose="live_pos"` 记账 —— 只记账、**不参与熔断判定**
@@ -32,6 +32,7 @@
  *   会把计时器的自动车距快照一起静默 30 分钟（见 src/lib/risk.ts）。
  *
  * 只读接口，无副作用。
+ * ⚠️ 本文件已满载 300 行（门禁上限）：新增逻辑请抽到 `src/lib/nav/dsat-fields.ts` 或另建模块，勿在此堆积。
  */
 import { NextRequest, NextResponse } from "next/server";
 import { getPool } from "@/lib/db";
@@ -39,6 +40,9 @@ import { API_ERROR } from "@/lib/http/errors";
 import { attachProgress, type VehicleProgress } from "@/lib/nav/progress";
 import { getBusLocations, getBusPositions } from "@/lib/dsat/client";
 import { wgs84ToGcj02 } from "@/lib/amap/coord";
+import { recordVehiclePlatesAsync } from "@/lib/dsat/vehicle-plates";
+// 站码/数值/超时归一：与 `/api/station/eta` 共用同一份实现（原为两处逐字重复）
+import { withTimeout, numOrNull, mainCode, stripCodePrefix } from "@/lib/nav/dsat-fields";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -56,6 +60,20 @@ interface StopRef {
 interface Vehicle {
   plate: string;
   busType: string | null;
+  /**
+   * ★ v3.6.1 新增：**车队编号**（DSAT `busCode`，如 `HE380`/`E3222`）。UI 在车牌行居右
+   * 显示编号角标（主人需求：「在巴士车牌那一行居右制作…如标签 HE380」）。
+   *
+   * ⚠️ 契约（只增不改）：取不到就**整个键省略**，不输出 `null`/空串（避免误判"有编号但为空"）。
+   *   型号名映射在库里（`vehicle_plates`）；**本接口只吐编号**，不吐型号名。
+   *
+   * ⚠️⚠️ **不可假设恒定存在**（实测约 99.6%，非 100%）：坐标与编号来自两个**独立并行**
+   *   接口（location 给坐标 / bus 给编号，见文件头），某车在「位置已上报、报站未挂上」的
+   *   瞬间即「有坐标无编号」—— 两轮全量扫描 743 车次中 3 例（约 0.4%），**下一帧即恢复**。
+   *   ⇒ 前端须写 `v.busCode && <Badge/>`；用 `!== null` 会把 `undefined` 判成有值 → 空角标。
+   *   也**不要**加骨架屏/占位：约 99.6% 的正常情况会被白占一块空白。
+   */
+  busCode?: string;
   /** GCJ-02 纬度 */
   lat: number;
   /** GCJ-02 经度 */
@@ -67,40 +85,6 @@ interface Vehicle {
   atStation: StopRef | null;
   /** ★ v3.4.0：区间进度（`?progress=1` 时填充；详见 src/lib/nav/progress.ts） */
   progress?: VehicleProgress;
-}
-
-/** 站码归一：`T373/1` → `T373`（去站台后缀，与全站口径一致） */
-function mainCode(raw: string): string {
-  return /^[A-Za-z]+\d+/.exec(String(raw ?? ""))?.[0] ?? String(raw ?? "");
-}
-
-/** 剥掉站名里的「站码前缀」（`C653 金峰南岸` → `金峰南岸`） */
-function stripCodePrefix(raw: string): string {
-  return String(raw ?? "").replace(/^[A-Za-z]+\d+(?:\/\d+)?\s+/, "");
-}
-
-/** 超时包装：到点即拒（调用方按「无数据」处理） */
-function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error("timeout")), ms);
-    p.then(
-      (v) => {
-        clearTimeout(t);
-        resolve(v);
-      },
-      (e) => {
-        clearTimeout(t);
-        reject(e);
-      },
-    );
-  });
-}
-
-/** 数值归一：空串/非数 → null（用于 lat/lng；DSAT 的 `speed` 已于 v3.6.0 停用，不再经此归一） */
-function numOrNull(v: unknown): number | null {
-  if (v === null || v === undefined || v === "") return null;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
 }
 
 export async function GET(req: NextRequest) {
@@ -184,15 +168,22 @@ export async function GET(req: NextRequest) {
       return { code: main, name: nameOf.get(main) ?? main };
     };
 
-    // ⑥ 挂载站索引：车牌 → { 站序, 站码, status }
+    // ⑥ 挂载站索引：车牌 → { 站序, 站码, status, 车队编号 }
     //    status '1' = 停靠挂载站；'0' = 已离挂载站、正驶向下一站（挂载站=刚离的站，非下一站）
-    const mountOf = new Map<string, { idx: number; code: string; status: string }>();
+    //    ★ `busCode`（车队编号）只在这里出现（位置接口不含它），故与挂载信息一起收进索引，
+    //      供 §⑧ 的 vehicle_plates 标定使用 —— 同一次响应白送，不额外发请求。
+    const mountOf = new Map<string, { idx: number; code: string; status: string; busCode: string | null }>();
     for (let i = 0; i < stationBlocks.length; i++) {
       const code0 = stationBlocks[i].staCode != null ? String(stationBlocks[i].staCode) : "";
       for (const bus of stationBlocks[i].busInfo ?? []) {
         const plate = String(bus.busPlate ?? "").trim();
         if (!plate) continue;
-        mountOf.set(plate, { idx: i, code: code0, status: String(bus.status ?? "") });
+        mountOf.set(plate, {
+          idx: i,
+          code: code0,
+          status: String(bus.status ?? ""),
+          busCode: bus.busCode != null ? String(bus.busCode).trim() : null,
+        });
       }
     }
 
@@ -229,9 +220,15 @@ export async function GET(req: NextRequest) {
         }
       }
 
+      // ★ v3.6.1：车队编号（来自报站接口的 `busCode`）。取不到 ⇒ 该键整个不出现。
+      //   刻意不用 `busCode: undefined` 占位 —— JSON.stringify 本会省略 undefined，
+      //   但显式条件展开更能表达「缺席是语义」这一意图，也避免将来序列化方式变化时行为漂移。
+      const busCode = m?.busCode && m.busCode !== "" ? m.busCode : null;
+
       vehicles.push({
         plate,
         busType: b.busType != null ? String(b.busType) : null,
+        ...(busCode ? { busCode } : {}),
         lat: gcj.lat,
         lng: gcj.lng,
         status,
@@ -240,6 +237,17 @@ export async function GET(req: NextRequest) {
         atStation,
       });
     }
+
+    // ⑦-c 车牌 ↔ 车队编号 ↔ 车型 标定入库（2026-10-30 主人拍板「对应数据入库」）：
+    //   同一次响应已含 busPlate/busCode/busType ⇒ **零额外请求**，只是把本会丢的对应关系存下。
+    //   即发即忘（after()）：任何失败只 warn，不影响也不拖慢车辆位置返回。
+    recordVehiclePlatesAsync(
+      vehicles.map((v) => ({
+        plate: v.plate,
+        busCode: mountOf.get(v.plate)?.busCode ?? null,
+        busType: v.busType,
+      })),
+    );
 
     let note: string | undefined;
     if (!locData) note = "dsat_locations_unavailable";

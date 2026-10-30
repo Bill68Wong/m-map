@@ -18,11 +18,14 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  CUT_TOLERANCE_M,
+  anchorOf,
   cutAt,
   mainOf,
+  monotonicCut,
   progressOf,
   rankBoardingVehicles,
+  type BoardAnchor,
+  type MonoCutState,
   type TrackProgress,
   type TrackVehicle,
 } from "@/lib/nav/track";
@@ -50,12 +53,22 @@ const POLL_MS = 12_000;
 const MISS_LIMIT = 3;
 /** GPS 采样窗口保留时长（ms） */
 const FIX_KEEP_MS = 90_000;
-/** ★ 本批：蓝点吸附到线路投影的最大距离（米）——对不上就冻结（Token `--you-snap-max`） */
+/**
+ * ★ 本批：蓝点吸附到线路投影的最大距离（米）——对不上就冻结（Token `--you-snap-max`）
+ * ⚠️ 该 CSS Token（`globals.css:7010`）**未接线**，改它不生效；值以此常量为准。
+ */
 const YOU_SNAP_MAX_M = 60;
 /** ★ 本批：蓝点精度门（米）——超过视为不可信 ⇒ 冻结 */
 const YOU_ACC_MAX_M = 150;
 /** ★ 本批：自动下车瞬态反馈停留时长（ms） */
 const JUST_ALIGHTED_MS = 5_000;
+/**
+ * ★ T3：已驶过灰线的**出线门槛**（两者同时满足才画）。
+ *   · `MIN_TRAVELED_IDX = 2` ⇒ 至少 2 条完整线段（否则是蓝点旁的一小撇）；
+ *   · `MIN_TRAVELED_M = 40`  ⇒ 累计 ≥40m（澳门市区两个站点间距约 150~300m，40m 约等于驶离上车站）。
+ */
+const MIN_TRAVELED_IDX = 2;
+const MIN_TRAVELED_M = 40;
 
 /* ── 文案（去 AI 化；06 §4 最终文案表）── */
 const NOTE_NO_PROGRESS = "这段暂时看不到实时进度，请对照站名，快到了自己下车";
@@ -166,6 +179,16 @@ export interface UseRideTrackingOpts {
   anchors: OverviewLegInput[] | null;
   strips: SegmentStrip[] | null;
   active: boolean;
+  /**
+   * ★ 一条导航流（T1）：**当前正在步行**（首段走站 / 末段走到目的地）。
+   *
+   * 与 `riding` **互斥**：步行活跃期间**不得自动上车**（`tryAuto` 直接返回）。
+   * 为什么必须下传而不是靠调用方不渲染：自动上车由 12s 车辆轮询 + GPS 帧两个 effect 触发，
+   * 调用方拦不住「已经在跑的定时器」—— 只有引擎内部早退才是真互斥
+   * （旧版页面注释写着"步行中禁止 ride 自动上车"，但引擎根本没有这个入参）。
+   * 手动「手动标记上车」不受影响（那是用户显式意图）。
+   */
+  walkActive?: boolean;
   /** ★ 新增：用户定位（GCJ-02；由 useUserFix 提供，只读） */
   userFix?: UserFix | null;
   /** ★ 新增：在用户手势内申请 GPS（useUserFix.start；开始导航 / 手动上车时调用） */
@@ -178,8 +201,59 @@ function hintOf(v: TrackVehicle): string {
   return "";
 }
 
+/**
+ * ★ T7：已驶过灰线的**可观测钩子**（QA 用 `body[data-traveled]` 断言状态）。
+ * 取值：`none | ok | frozen:bad-snap | frozen:backward | frozen:too-fast | frozen:shrink`。
+ * ⚠️ 不复用 `data-walk-*`（那是步行三线，语义不同）。
+ *
+ * 另两个**诊断**属性（**不进 `data-traveled`**，否则状态枚举断言会变脆）：
+ *   · `data-traveled-ver` = `perp:<真垂距>,<到最近顶点距离>` —— 横向判定实际用的度量 +
+ *     量化高估值，供 QA 直接对比顶点量化误差；
+ *   · `data-traveled-cut` = `<projIdx>,<projLenM>` —— **仅拒帧时写**，表示本帧投影
+ *     「本来会落到哪」。拒帧时 `traveled` 返回的是 `prev`，没有它就分不清
+ *     「定位真偏了」还是「算法判错了」。单位米、1 位小数；**accept 时移除**。
+ */
+function setTraveledAttr(
+  v: string | null,
+  diag?: { verPerp: number; verVertex: number; projIdx: number; projLenM: number },
+  cut?: { idx: number; lenM: number } | null,
+) {
+  if (typeof document === "undefined") return;
+  try {
+    if (v == null) {
+      document.body.removeAttribute("data-traveled");
+      document.body.removeAttribute("data-traveled-ver");
+      document.body.removeAttribute("data-traveled-cut");
+      return;
+    }
+    document.body.setAttribute("data-traveled", v);
+    if (diag) {
+      document.body.setAttribute(
+        "data-traveled-ver",
+        `perp:${diag.verPerp.toFixed(1)},${diag.verVertex.toFixed(1)}`,
+      );
+    }
+    // 只在拒帧传 `cut` ⇒ accept 时该属性被移除（避免每帧多一次 DOM 写入）
+    if (cut) {
+      document.body.setAttribute("data-traveled-cut", `${cut.idx},${cut.lenM.toFixed(1)}`);
+    } else {
+      document.body.removeAttribute("data-traveled-cut");
+    }
+  } catch {
+    /* SSR / 只读 body —— 观测钩子失败不得影响导航 */
+  }
+}
+
 export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
-  const { card, legs, anchors, strips, active, userFix = null, onRequestGps } = opts;
+  const { card, legs, anchors, strips, active, walkActive = false, userFix = null, onRequestGps } = opts;
+  /**
+   * ★ 一条导航流（T1）：步行活跃的**最新值镜像**。
+   *   自动上车的两个触发源（12s 轮询 effect / GPS 帧 effect）都是长跑定时器，
+   *   若把 `walkActive` 塞进它们的依赖，会在步行↔乘车切换时把定时器重建一遍；
+   *   ref 镜像既保证「立刻生效」（下一帧读到新值），又不打断轮询。
+   */
+  const walkActiveRef = useRef(walkActive);
+  walkActiveRef.current = walkActive;
 
   const [phase, setPhase] = useState<RidePhase>("off");
   const [legIndex, setLegIndex] = useState(0);
@@ -187,6 +261,13 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
   const [prog, setProg] = useState<TrackProgress | null>(null);
   const [alarm, setAlarm] = useState<"none" | "soon" | "now">("none");
   const [traveled, setTraveled] = useState<LL[] | null>(null);
+  /**
+   * ★ T7：灰线的**单调游标**（跨帧记忆；`null` = 本段首帧 / 刚被清空）。
+   *   ⚠️ 拒帧时**不更新** ⇒ `elapsed` 持续累积，too-fast 才会自然解除、60s 后才会放行回退。
+   */
+  const traveledCurRef = useRef<MonoCutState | null>(null);
+  /** 灰线是否**已经上屏**（决定 `data-traveled` 是 `ok/frozen:*` 还是 `none`） */
+  const traveledShownRef = useRef(false);
   const [traveling, setTraveling] = useState(false);
   const [note, setNote] = useState("");
   const [candidates, setCandidates] = useState<{ plate: string; hint: string }[]>([]);
@@ -215,6 +296,17 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
   const lockRef = useRef<{ release: () => Promise<void> } | null>(null);
   /** 本帧原始车辆（R1 判定 + 换车用） */
   const listRef = useRef<TrackVehicle[]>([]);
+  /**
+   * ★ T6：本帧原始车辆（**接口原样**，含站名 / `isLast` / `status`）—— 仅供 UI（地图图标 + 车辆卡）。
+   *   与 `listRef`（逻辑用的瘦身结构）并存：位置判定只用 code，展示要 name，两者用途不同，别合并。
+   */
+  const listLiteRef = useRef<VehicleLite[]>([]);
+  /**
+   * ★ 候车「锚定车」（本段本次候车有效）：首次排名第一的那辆。
+   *   用途：过站过滤的几何判据基准（`passedBoardOf` 需知道"锚定时它离上车站多近"），
+   *   否则"距离变大"无法与"本来就在远处"区分。换腿 / 进入 riding / reset 时清空。
+   */
+  const anchorRef = useRef<BoardAnchor | null>(null);
   /** 最近 GPS 采样（R2 / 安全网用） */
   const fixesRef = useRef<FixLite[]>([]);
   /** 自动判定状态（冷却 / 单次） */
@@ -283,28 +375,23 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
    * · 其他相位 ⇒ `[]`。
    *
    * 随 12s 帧（`listTick`）重算 ⇒ `VehicleLayer` 重定位（不是只拉一次）。
+   *
+   * ★ T6：**直接复用接口原样的 `VehicleLite`**（`listLiteRef`），不再从 `TrackVehicle` 反造。
+   *   旧实现 `toLite()` 把 `interval.from.name` / `atStation.name` 写成 `""`、`isLast` 也没映射
+   *   ⇒ 导航态点车辆后卡片只有站号没有站名、末班标记丢失（点击链路本来是通的，断在数据）。
+   *   运营商涂装色仍是帧顶层字段（`lastCompanyRef`），注入方式不变。
    */
   const mapVehicles = useMemo<VehicleLite[]>(() => {
     if (phase !== "riding" && phase !== "boarding") return [];
-
-    /** 帧内单车 → 视图模型（`company` 由帧顶层注入，决定涂装色） */
-    const toLite = (v: TrackVehicle): VehicleLite => ({
-      plate: v.plate,
-      lat: v.lat,
-      lng: v.lng,
-      status: (v.status as VehicleLite["status"]) ?? "unknown",
-      interval: v.interval
-        ? { from: { code: v.interval.from.code, name: "" }, to: { code: v.interval.to?.code ?? "", name: "" } }
-        : null,
-      atStation: v.atStation ? { code: v.atStation.code, name: "" } : null,
-      company: lastCompanyRef.current ?? undefined,
+    const lites = listLiteRef.current;
+    const withCompany = (v: VehicleLite): VehicleLite => ({
+      ...v,
+      company: lastCompanyRef.current ?? v.company,
     });
-
-    if (phase === "boarding") return listRef.current.map(toLite);
-
+    if (phase === "boarding") return lites.map(withCompany);
     if (!plate) return [];
-    const v = listRef.current.find((x) => x.plate === plate);
-    return v ? [toLite(v)] : [];
+    const v = lites.find((x) => x.plate === plate);
+    return v ? [withCompany(v)] : [];
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, plate, listTick]);
 
@@ -356,13 +443,25 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
     pausedTickRef.current();
   }, [phase, active, userFix]);
 
+  /**
+   * ★ T7：**唯一**的灰线清空出口 —— state / 游标 / 上屏标记 / 观测属性必须同生共死。
+   *   漏清 ref 的后果：下一段沿用上一段的 `idx` ⇒ `shrink` 或 `backward` 会把每一帧都拒掉
+   *   ⇒ 灰线在本段内**永久不出现**（比画错更难查）。
+   */
+  const clearTraveled = useCallback(() => {
+    setTraveled(null);
+    traveledCurRef.current = null;
+    traveledShownRef.current = false;
+    setTraveledAttr(null);
+  }, []);
+
   const reset = useCallback(() => {
     setPhase("off");
     setLegIndex(0);
     setPlate(null);
     setProg(null);
     setAlarm("none");
-    setTraveled(null);
+    clearTraveled();
     setNote("");
     setCandidates([]);
     setAutoSwitched(false);
@@ -374,6 +473,8 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
     missRef.current = 0;
     alarmRef.current = "none";
     listRef.current = [];
+    listLiteRef.current = []; // ★ T6：UI 侧车队同步清空（否则换腿瞬间闪一下上一腿的车）
+    anchorRef.current = null; // ★ 锚定车只对「本段本次候车」有效
     ladderRef.current = null;
     lrtStateRef.current = { passedIdx: -1, computed: -1, dist: 0, ts: 0, badStreak: 0 };
     autoUsedRef.current = false;
@@ -395,7 +496,7 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
     setYouAt(null);
     setListTick(0);
     setLadderTick(0);
-  }, []);
+  }, [clearTraveled]);
 
   useEffect(() => {
     if (!active) reset();
@@ -485,7 +586,9 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
           { cache: "no-store" },
         );
         const j = (await r.json()) as { vehicles?: VehicleLite[]; company?: string | null };
-        const list: TrackVehicle[] = (j.vehicles ?? []).map((v) => ({
+        const lites = j.vehicles ?? [];
+        listLiteRef.current = lites; // ★ T6：UI 用（含站名 / 末班）
+        const list: TrackVehicle[] = lites.map((v) => ({
           plate: v.plate,
           lat: v.lat,
           lng: v.lng,
@@ -501,7 +604,23 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
 
         const boardMain = stopsBoard(strips, legIndex) || mainOf(anchors?.[legIndex]?.board?.code ?? "");
         if (!lockPlate) {
-          const ranked = rankBoardingVehicles(list, boardMain, boardPos);
+          /**
+           * ★ 候车『锚定 + 过站过滤』（纯逻辑在 `lib/nav/track.ts`，此处只接线）：
+           *   ① 首帧没有锚 ⇒ 先锚定（取排序第一名），作为几何判据基准；
+           *   ② `filterPassed: true` ⇒ 已驶过**上车站**的车不再算候选。
+           *   为什么必须过滤：不过滤时用户等的车过站后仍留在候选里 ⇒ `ranked.length === 0`
+           *   永不成立 ⇒「候选中没车 / 可能错过班次」提示永远不触发；且后车会顶到第一位，
+           *   手动上车（`board()`）可能锁到后车。
+           *   ⚠️ 判据是「有证据才判」（站序优先，无站序才用几何），不会误删没证据的车。
+           */
+          if (!anchorRef.current && list.length) {
+            anchorRef.current = anchorOf(list, boardMain, boardPos, { nowMs: Date.now() });
+          }
+          const ranked = rankBoardingVehicles(list, boardMain, boardPos, {
+            filterPassed: true,
+            stopMains,
+            anchor: anchorRef.current,
+          });
           setCandidates(ranked.slice(0, 6).map((v) => ({ plate: v.plate, hint: hintOf(v) })));
           if (phase === "boarding") setNote(ranked.length ? "" : NOTE_NO_VEHICLES);
           return;
@@ -570,6 +689,7 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
       lastSwitchTsRef.current = Date.now();
       autoUsedRef.current = true;
       ridingStartIdxRef.current = -1;
+      anchorRef.current = null; // ★ 已上车 ⇒ 候车锚点作废（下一段候车重新锚定）
       missRef.current = 0;
       alarmRef.current = "none";
       setAlarm("none");
@@ -586,6 +706,12 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
 
   const tryAuto = useCallback(() => {
     if (phase !== "boarding" || !active) return;
+    /**
+     * ★ 一条导航流（T1）**互斥落地**：步行段活跃 ⇒ 绝不自动上车。
+     *   用户还在走去车站的路上，此时车到站/离站的判据全部无意义（人车分离的起点还没发生）。
+     *   `switchToRiding` 只被本函数（自动）与手动 `board` 调用 —— 手动是用户显式意图，不拦。
+     */
+    if (walkActiveRef.current) return;
     const leg = legs[legIndex];
     if (!leg) return;
     const boardMain = stopsBoard(strips, legIndex) || mainOf(anchors?.[legIndex]?.board?.code ?? "");
@@ -615,6 +741,14 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
      并在车辆帧到位时尝试自动切换。purpose 复用 `live_pos`（服务端只记账、不参与熔断）。 */
   useEffect(() => {
     if (phase !== "boarding" || !active || !legs[legIndex]) return;
+    /**
+     * ★ T1：**步行段不轮询车辆**。
+     *   会话起点从"站在站台上按开始导航"提前到"出门就开始走"⇒ 若照旧 12s 一帧，
+     *   走 5 分钟就是 25 次 `/api/route-vehicles`（配额 + DSAT 风控都吃不消），
+     *   而且此时给"哪辆车更可能是我要坐的"排序毫无意义（人还没到站）。
+     *   走进站台后 `walkActive` 变 false ⇒ 本 effect 重跑 ⇒ 立刻拉一帧 + 恢复轮询。
+     */
+    if (walkActive) return;
     void (async () => {
       await fetchFrame(null);
       tryAuto();
@@ -627,7 +761,7 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
     }, POLL_MS);
     return () => window.clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase, active, legIndex]);
+  }, [phase, active, legIndex, walkActive]);
 
   /* GPS 帧到位（节流）也尝试自动切换 */
   useEffect(() => {
@@ -645,7 +779,12 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
 
   /* GPS 驱动推进（无车牌 / 轻轨）：用 userFix 推站序进度；★ 视觉层（已驶过灰线）**一律 GPS 切割** */
   useEffect(() => {
-    if (phase !== "riding" || !active || !userFix) return;
+    // ★ T7：非乘车态 ⇒ 移除观测属性（`clearTraveled` 走另一条路，这里兜的是「切阶段」）
+    if (phase !== "riding" || !active) {
+      setTraveledAttr(null);
+      return;
+    }
+    if (!userFix) return;
     const leg = legs[legIndex];
     if (!leg) return;
     const gpsDriven = progressSource === "gps" || !plate;
@@ -675,10 +814,44 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
       }
     }
     // ★ 本批（07 §c.4 裁定）：视觉层（灰线）**与蓝点同源 = GPS 切割**（不再用车辆切割）。
+    /**
+     * ★ T3 修复「蓝点旁那条灰色一撇」：末点**吸附到投影顶点**（线从蓝点正下方出发），
+     *   并要求「至少 2 段 + 累计 ≥40m」才出线。
+     *
+     * ★ T7（本批）：**单调游标**（`monotonicCut`）——T3 只解决了"末点用原始 GPS"，
+     *   没解决"投影落在折回的另一遍"：
+     *     · `74%` 的灰线错帧来自 `idx` 在空间重合的两遍之间跳（坍缩 / 多画）；
+     *     · 那两遍空间只差 0~60m ⇒ **蓝点看着正常**，用户只看到"线变成一小撇"。
+     *   现在：横向门与蓝点同值（60m）、回退/增速/缩短三重否决 ⇒ **拒帧即冻结，绝不清空**。
+     */
     if (leg.colored.length >= 2 && !leg.degraded) {
-      const cut = cutAt(leg.colored, { lng: userFix.lng, lat: userFix.lat });
-      if (cut.dist <= CUT_TOLERANCE_M && cut.idx >= 1) {
-        setTraveled([...leg.colored.slice(0, cut.idx + 1), [userFix.lng, userFix.lat] as LL]);
+      const now = Date.now();
+      const r = monotonicCut(
+        leg.colored,
+        { lng: userFix.lng, lat: userFix.lat },
+        traveledCurRef.current,
+        now,
+      );
+      if (r.accept) {
+        // 采纳才推进游标（拒帧不动 ts ⇒ elapsed 累积 ⇒ too-fast 会自然解除、60s 后放行回退）
+        traveledCurRef.current = { idx: r.idx, lenM: r.lenM, ts: now };
+        // 出线门槛：刚上车 idx 很小，画出来就是"蓝点旁的一小撇" ⇒ 宁可不画
+        if (r.idx >= MIN_TRAVELED_IDX && r.lenM >= MIN_TRAVELED_M) {
+          setTraveled(leg.colored.slice(0, r.idx + 1) as LL[]);
+          traveledShownRef.current = true;
+          setTraveledAttr("ok", r.diag);
+        } else {
+          setTraveledAttr("none", r.diag);
+        }
+      } else {
+        // 冻结：保留上一帧灰线（clear 会让用户以为"进度丢了"）
+        // ★ `data-traveled-cut` 只在拒帧写 —— 暴露"本来会落到哪"，QA 才分得清
+        //   「定位真偏了」还是「算法判错了」。
+        setTraveledAttr(
+          traveledShownRef.current ? `frozen:${r.reason === "first" ? "bad-snap" : r.reason}` : "none",
+          r.diag,
+          { idx: r.diag.projIdx, lenM: r.diag.projLenM },
+        );
       }
     }
     setLastUpdateTs(Date.now());
@@ -818,12 +991,12 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
     setPlate(null);
     setProg(null);
     setAlarm("none");
-    setTraveled(null);
+    clearTraveled();
     setNote("");
     setCandidates([]);
     alarmRef.current = "none";
     releaseWake();
-  }, [releaseWake]);
+  }, [releaseWake, clearTraveled]);
 
   /** 手动上车（弱样式兜底）：锁定候选第 1 / 无候选 → 换车；轻轨 → GPS 驱动 */
   const board = useCallback(() => {
@@ -841,7 +1014,9 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
           { cache: "no-store" },
         );
         const j = (await r.json()) as { vehicles?: VehicleLite[] };
-        const list: TrackVehicle[] = (j.vehicles ?? []).map((v) => ({
+        const lites = j.vehicles ?? [];
+        listLiteRef.current = lites; // ★ T6：UI 用（含站名 / 末班）
+        const list: TrackVehicle[] = lites.map((v) => ({
           plate: v.plate,
           lat: v.lat,
           lng: v.lng,
@@ -851,7 +1026,15 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
         }));
         listRef.current = list;
         const boardMain = stopsBoard(strips, legIndex) || mainOf(anchors?.[legIndex]?.board?.code ?? "");
-        const ranked = rankBoardingVehicles(list, boardMain, boardPos);
+        /* 与轮询帧**同一套候选口径**（锚定 + 过站过滤），否则"手动上车"会锁到已过站的后车 */
+        if (!anchorRef.current && list.length) {
+          anchorRef.current = anchorOf(list, boardMain, boardPos, { nowMs: Date.now() });
+        }
+        const ranked = rankBoardingVehicles(list, boardMain, boardPos, {
+          filterPassed: true,
+          stopMains,
+          anchor: anchorRef.current,
+        });
         setCandidates(ranked.slice(0, 6).map((v) => ({ plate: v.plate, hint: hintOf(v) })));
         if (!ranked.length) {
           setNote(NOTE_NO_VEHICLES_BOARD);
@@ -872,7 +1055,7 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
         setTraveling(false);
       }
     })();
-  }, [legs, legIndex, strips, boardPos, anchors, switchToRiding, ensureLadder]);
+  }, [legs, legIndex, strips, boardPos, anchors, stopMains, switchToRiding, ensureLadder]);
 
   const repick = useCallback((p: string) => {
     setPlate(p);
@@ -880,10 +1063,10 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
     missRef.current = 0;
     setNote("");
     setProg(null);
-    setTraveled(null);
+    clearTraveled();
     boardStreakRef.current = 0;
     lastSwitchTsRef.current = Date.now();
-  }, []);
+  }, [clearTraveled]);
 
   /**
    * 下车推进（手动 / 自动共用）。
@@ -913,7 +1096,7 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
         }, JUST_ALIGHTED_MS);
       }
       setProg(null);
-      setTraveled(null);
+      clearTraveled();
       setAlarm("none");
       alarmRef.current = "none";
       setPlate(null);
@@ -929,6 +1112,8 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
        *   （表现为"换乘站台上闪一下别的线路的车"）。effect 后自愈，但仍该清。
        */
       listRef.current = [];
+      listLiteRef.current = []; // ★ T6：UI 侧车队同步清空（换乘站台上闪别人车的同一处）
+      anchorRef.current = null; // ★ 换腿 ⇒ 锚定车必须重取（每段站序不同，旧锚毫无意义）
       lastCompanyRef.current = null;
       ladderRef.current = null;
       lrtStateRef.current = { passedIdx: -1, computed: -1, dist: 0, ts: 0, badStreak: 0 };
@@ -958,7 +1143,7 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
         releaseWake();
       }
     },
-    [card, legIndex, phase, plate, prog, traveled, candidates, progressSource, buzz, releaseWake],
+    [card, legIndex, phase, plate, prog, traveled, candidates, progressSource, buzz, releaseWake, clearTraveled],
   );
 
   /** 手动「我已下车」 */
@@ -979,6 +1164,14 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
     setPlate(u.plate);
     setProg(u.prog);
     setTraveled(u.traveled);
+    /**
+     * ★ T7：撤销恢复的是**点数组**，无法反推 `idx` ⇒ 游标置空。
+     *   若沿用当前游标（属于已下车的那一段之后的状态）⇒ `shrink`/`backward` 会把后续每帧
+     *   都拒掉 ⇒ 恢复后灰线永久不再增长。置空后下一帧走 `first` 重新锚定，最坏丢一帧。
+     */
+    traveledCurRef.current = null;
+    traveledShownRef.current = !!u.traveled && u.traveled.length >= 2;
+    setTraveledAttr(traveledShownRef.current ? "ok" : "none");
     setCandidates(u.candidates);
     setProgressSource(u.progressSource);
     setAlarm("none");
@@ -1030,7 +1223,7 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
     setPhase("boarding");
     setPlate(null);
     setProg(null);
-    setTraveled(null);
+    clearTraveled();
     setAlarm("none");
     setAnomaly("none");
     setAutoSwitched(false);
@@ -1041,7 +1234,7 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
     lastSwitchTsRef.current = Date.now();
     boardingStartedAtRef.current = Date.now(); // ★ 回到等车态同样有启动宽限
     autoUsedRef.current = true; // 冷却后再允许自动
-  }, []);
+  }, [clearTraveled]);
 
   /** 「还没到」→ 清除到站提醒，回乘车中 */
   const onNotArrive = useCallback(() => {

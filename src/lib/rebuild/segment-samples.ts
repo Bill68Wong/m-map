@@ -48,6 +48,11 @@ export interface SegmentSampleRow {
   minutes: number;
   /** ★ 计时口径（'depart' | 'arrive'），**不是** segment_stats 的 stop/pass */
   arrive_kind: string;
+  /** ★ v1.2.0：终点站停站时长（分）。离开口径下 minutes = run(A→B) + dwell_B，
+   *  dwell_b_min 即 dwell_B。老产物 / timer 样本没有这一项 → NULL。 */
+  dwell_b_min?: number | null;
+  /** ★ v1.2.0：dwell_B ≥ 长停站阈值（默认 3 分）→ 该样本的 minutes 含停站，非纯行驶 */
+  long_stop?: boolean;
   source: "track" | "timer";
   observed_at: Date;
   weekday: number;
@@ -135,6 +140,12 @@ function readTrackFile(file: string): { label: string; rows: SegmentSampleRow[];
       from_idx: s.fromIdx === null || s.fromIdx === undefined ? null : Number(s.fromIdx),
       minutes: Number(s.minutes),
       arrive_kind: String(s.kind ?? "depart"),
+      // ★ v1.2.0：派生器（track-derive v1.2.0+）随样本落盘 dwell_B；老产物没有 → undefined → NULL
+      dwell_b_min:
+        s.dwellMin === null || s.dwellMin === undefined || !Number.isFinite(Number(s.dwellMin))
+          ? null
+          : Number(s.dwellMin),
+      long_stop: s.longStop === true,
       source: "track",
       observed_at: d,
       weekday: mp.weekday,
@@ -186,40 +197,91 @@ async function collectTimerRows(pool: Pool): Promise<SegmentSampleRow[]> {
     });
 }
 
-/** UNNEST 批量 UPSERT（ON CONFLICT DO NOTHING）；返回实际插入行数 */
+/** UNNEST 批量 UPSERT（ON CONFLICT DO NOTHING）；返回实际插入行数
+ *  ★ v1.2.0：`dwell_b_min` / `long_stop` 两列由 db/migrate-v3600.ts 增加。
+ *  迁移**尚未执行**时（生产库只读窗口 / 未报批）本函数仍可工作 —— 自动降级为不写入这两列，
+ *  避免「代码先上、迁移未跑」直接把入库打挂。列存在性每次进程只查一次（缓存）。
+ */
+let _dwellCols: boolean | null = null;
+async function hasDwellColumns(client: PoolClient): Promise<boolean> {
+  if (_dwellCols !== null) return _dwellCols;
+  const r = await client.query(
+    `SELECT count(*)::int AS n FROM information_schema.columns
+      WHERE table_name = 'segment_samples' AND column_name IN ('dwell_b_min','long_stop')`,
+  );
+  _dwellCols = Number((r.rows[0] as { n: number } | undefined)?.n ?? 0) >= 2;
+  return _dwellCols;
+}
+
 async function insertBatch(client: PoolClient, rows: SegmentSampleRow[]): Promise<number> {
   if (!rows.length) return 0;
-  const res = await client.query(
-    `INSERT INTO segment_samples
-       (run_label, route_code, dir, plate, from_main, to_main, from_station, to_station,
-        from_idx, minutes, arrive_kind, source, observed_at, weekday, time_bucket)
-     SELECT run_label, route_code, dir, plate, from_main, to_main, from_station, to_station,
-            from_idx, minutes, arrive_kind, source, observed_at, weekday, time_bucket
-       FROM UNNEST($1::text[], $2::text[], $3::smallint[], $4::text[], $5::text[], $6::text[],
+  const withDwell = await hasDwellColumns(client);
+  // ★ v3.6.0 修复（沉默逻辑错误，2026-10-30 实测）：原实现 `ON CONFLICT ... DO NOTHING`，
+  //   而「重跑派生 → 重新导入」产生的 8 元组唯一键（run_label, source, route_code, dir, plate,
+  //   from_station, to_station, observed_at）**与库内既有行完全相同**（同一批原始帧 ⇒ 同一时刻）
+  //   ⇒ 每一行都被判「重复」跳过，`dwell_b_min` 永远是 NULL。
+  //   实测证据：单轮 APPLY 读到 3361 / 入库 0 / 跳过 3361，而新产物含 dwellMin 3361 条。
+  //   后果不是报错而是**静默无效**：migrate-v3600 的说明写「重跑派生并导入后 dwell 才有值」，
+  //   但只改导入不改冲突策略，这条链路永远走不通。
+  //   ⇒ 有 dwell 列时改为 DO UPDATE，且**只更新 dwell 两列**（其余列本就相同，不动可避免误伤）；
+  //     旧产物没有 dwellMin（EXCLUDED 为 NULL）时用 COALESCE 保住库内已有值，不会被抹掉。
+  //   ⚠️ DO UPDATE 下 PostgreSQL 禁止同一条语句命中同一行两次 ⇒ 先按唯一键去重。
+  const dedup = new Map<string, SegmentSampleRow>();
+  for (const r of rows) {
+    const k = [r.run_label, r.source, r.route_code, r.dir, r.plate, r.from_station, r.to_station, r.observed_at.getTime()].join("|");
+    dedup.set(k, r); // 保留最后一条（同键同内容，取谁都一样）
+  }
+  const list = [...dedup.values()];
+  if (list.length !== rows.length) {
+    console.log(`  ⚠️ 批内同键重复 ${rows.length - list.length} 条（DO UPDATE 不允许一条语句命中同一行两次）→ 已去重`);
+  }
+  rows = list;
+  const cols = `run_label, route_code, dir, plate, from_main, to_main, from_station, to_station,
+        from_idx, minutes, arrive_kind, source, observed_at, weekday, time_bucket${
+          withDwell ? ", dwell_b_min, long_stop" : ""
+        }`;
+  const types = `$1::text[], $2::text[], $3::smallint[], $4::text[], $5::text[], $6::text[],
                    $7::text[], $8::text[], $9::smallint[], $10::numeric[], $11::text[], $12::text[],
-                   $13::timestamptz[], $14::smallint[], $15::text[])
-            AS x(run_label, route_code, dir, plate, from_main, to_main, from_station, to_station,
-                 from_idx, minutes, arrive_kind, source, observed_at, weekday, time_bucket)
+                   $13::timestamptz[], $14::smallint[], $15::text[]${
+                     withDwell ? ", $16::numeric[], $17::boolean[]" : ""
+                   }`;
+  const args: unknown[] = [
+    rows.map((r) => r.run_label),
+    rows.map((r) => r.route_code),
+    rows.map((r) => r.dir),
+    rows.map((r) => r.plate),
+    rows.map((r) => r.from_main),
+    rows.map((r) => r.to_main),
+    rows.map((r) => r.from_station),
+    rows.map((r) => r.to_station),
+    rows.map((r) => r.from_idx),
+    rows.map((r) => r.minutes),
+    rows.map((r) => r.arrive_kind),
+    rows.map((r) => r.source),
+    rows.map((r) => r.observed_at),
+    rows.map((r) => r.weekday),
+    rows.map((r) => r.time_bucket),
+  ];
+  if (withDwell) {
+    args.push(
+      rows.map((r) => r.dwell_b_min ?? null),
+      rows.map((r) => r.long_stop ?? false),
+    );
+  }
+  const onConflict = withDwell
+    ? `DO UPDATE SET
+         dwell_b_min = COALESCE(EXCLUDED.dwell_b_min, segment_samples.dwell_b_min),
+         long_stop   = COALESCE(EXCLUDED.long_stop, segment_samples.long_stop)`
+    : `DO NOTHING`;
+  const res = await client.query(
+    `INSERT INTO segment_samples (${cols})
+     SELECT ${cols.replace(/\n\s*/g, " ")}
+       FROM UNNEST(${types})
+            AS x(${cols.replace(/\n\s*/g, " ")})
      ON CONFLICT (run_label, source, route_code, dir, plate, from_station, to_station, observed_at)
-     DO NOTHING
+     ${onConflict}
      RETURNING 1`,
-    [
-      rows.map((r) => r.run_label),
-      rows.map((r) => r.route_code),
-      rows.map((r) => r.dir),
-      rows.map((r) => r.plate),
-      rows.map((r) => r.from_main),
-      rows.map((r) => r.to_main),
-      rows.map((r) => r.from_station),
-      rows.map((r) => r.to_station),
-      rows.map((r) => r.from_idx),
-      rows.map((r) => r.minutes),
-      rows.map((r) => r.arrive_kind),
-      rows.map((r) => r.source),
-      rows.map((r) => r.observed_at),
-      rows.map((r) => r.weekday),
-      rows.map((r) => r.time_bucket),
-    ],
+    args,
   );
   return res.rowCount ?? 0;
 }

@@ -78,9 +78,12 @@ export interface RouteSheetProps {
   onOpenDetail: (card: RecommendCard, degraded: boolean) => void;
   /** ★ v3.6.0 S5：步行跟随相关（宿主提供，见 NavShell 的 walk 装配） */
   walk?: {
-    onStart: (seg: "out", steps: import("@/lib/walk/walk-shared").WalkStep[]) => void;
-    onExpand: () => void;
+    /** ★ T1：进入跟随（`out` = 走到上车站 · `in` = 下车站走到目的地） */
+    onStart: (seg: "out" | "in", steps: import("@/lib/walk/walk-shared").WalkStep[]) => void;
+    onExpand: (seg: "out" | "in") => void;
     preview: import("./NavDetailBody").WalkPreview;
+    /** ★ T1：末段步行预览（下车站 → 目的地） */
+    previewIn?: import("./NavDetailBody").WalkPreview;
     /** ★ 是否**正在跟随**（walk 态）—— 决定是否禁 peek */
     active?: boolean;
   } | null;
@@ -483,9 +486,18 @@ export default function RouteSheet({
               destCoord={detail.destCoord ?? null}
               onSwitchCard={detail.onSwitchCard}
               immersive={immersive}
-              onWalkStart={walk?.onStart}
+              /**
+               * ★ 一体化（用户反馈 2026-10-31）：**进入导航后不得再有手动「开始步行」**。
+               *   传 `null` ⇒ `NavDetailBody` 的步行预览块（含「开始步行」按钮）与
+               *   「步骤」展开键整块消失 —— 阶段切换由系统驱动（出发→自动 walk-out，
+               *   到站→自动上车，下车→自动 walk-in）。
+               *   口径：手动启动按钮**只允许出现在尚未开始导航的详情页**（`active=false`）。
+               *   「结束导航」不受影响（页面级 `.nav-walk-exit` / track 的结束按钮）。
+               */
+              onWalkStart={walk?.active ? null : walk?.onStart}
               onWalkExpand={walk?.onExpand}
               walkPreview={walk?.preview}
+              walkInPreview={walk?.previewIn}
             />
           )}
         </div>

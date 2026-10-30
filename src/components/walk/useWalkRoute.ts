@@ -8,12 +8,20 @@
  *   （架构 §3.3「AC-08 可行性」）。解法不是改指标，而是**把延迟藏到用户看不见的地方**：
  *   详情体一到（用户还在读卡片）就并行预取，用户点「展开步骤」时已命中 ⇒ 观测上零网络。
  *
- * ── AC-08a 硬约束（**写死在这里，别放宽**）───────────────────────────────
+ * ── AC-08a 预算（**已按新口径更正**，别放宽）──────────────────────────────
+ *   | 用途 | 次数 |
+ *   |------|------|
+ *   | 预取（首段 1 + 末段 1） | 2 |
+ *   | 重算（自动 1 次「回到路线」+ 手动 1 次） | 2 |
+ *   | **单次导航合计上限** | **4** |
+ *
  *   · 预取**只有首段与末段两条**，**不得沿路全量预取**；
- *   · 单用户单次导航的步行请求总数 **≤2 次**；
- *   · 推进/滚动过程中**不再补请求**（同时踩配额与 AC-08a）。
- *   ⇒ 本 hook 只在 `ods` 的两个 key 上各取一次；`ensure()` 只读缓存/复用进行中的 promise，
- *     **不会**因为用户来回展开而重复请求。
+ *   · 推进/滚动过程中**不再补请求**；
+ *   · `reload()` 是唯一会突破预取预算的路径，因此**在本 hook 内硬封顶**
+ *     （同一段最多 2 次：偏航自动重算 1 次 + 用户手动重试 1 次），
+ *     超限直接返回 —— 不能让 UI 的反复点击把配额打穿。
+ *     （旧注释写「总数 ≤2」是旧口径，已过时：偏航重算是产品明确要的能力。）
+ *   ⇒ `ensure()` 只读缓存/复用进行中的 promise，不会因来回展开而重复请求。
  *
  * ── 缓存 ──────────────────────────────────────────────────────────────
  *   模块级 `Map`（不是 ref）：一个页面里多个组件实例共享同一份；
@@ -54,6 +62,11 @@ interface CacheEntry extends WalkSegState {
 
 /** 缓存 TTL：5 分钟（架构 §4.2） */
 export const WALK_CACHE_TTL_MS = 5 * 60_000;
+/**
+ * ★ 同一段的**重算次数上限**（AC-08a 预算：自动 1 + 手动 1 = 2）。
+ *   预取不算在内（预取走 `load`，不经过 `reload`）。
+ */
+export const WALK_RELOAD_MAX = 2;
 
 /** 模块级缓存（跨组件实例共享） */
 const CACHE = new Map<string, CacheEntry>();
@@ -194,20 +207,47 @@ export function useWalkRoute(ods: { out?: WalkOd | null; in?: WalkOd | null }) {
     load(seg, key, od);
   }, [outKey, inKey, outOd, inOd, states, load]);
 
-  /** 偏航重算 / 用户手动重试：绕过缓存强制重取（**唯一允许突破 ≤2 次**的路径） */
-  const reload = useCallback((seg: "out" | "in") => {
-    const key = seg === "out" ? outKey : inKey;
-    const od = seg === "out" ? outOd : inOd;
-    if (!key || !od) return;
-    CACHE.delete(key);
-    INFLIGHT.delete(key);
-    load(seg, key, od);
-  }, [outKey, inKey, outOd, inOd, load]);
+  /**
+   * 偏航重算 / 用户手动重试：绕过缓存强制重取。
+   * ★ 唯一允许突破「预取 2 次」的路径 ⇒ **必须在这里封顶**（同段 ≤ `WALK_RELOAD_MAX`）。
+   *   计数按 `seg|key` 记（换段/换 OD 重新计数），超限静默返回。
+   */
+  const reloadCountRef = useRef<Record<string, number>>({});
+  const reload = useCallback(
+    (seg: "out" | "in") => {
+      const key = seg === "out" ? outKey : inKey;
+      const od = seg === "out" ? outOd : inOd;
+      if (!key || !od) return;
+      const tag = `${seg}|${key}`;
+      const used = reloadCountRef.current[tag] ?? 0;
+      if (used >= WALK_RELOAD_MAX) return;
+      reloadCountRef.current[tag] = used + 1;
+      CACHE.delete(key);
+      INFLIGHT.delete(key);
+      load(seg, key, od);
+    },
+    [outKey, inKey, outOd, inOd, load],
+  );
+
+  /**
+   * ★ 剩余重算次数（与 `reload` 的计数器**同源** —— 两套计数必然漂移）。
+   * UI/观测只读这个值，不要另开一个 `useRef` 自己数。
+   */
+  const reloadLeft = useCallback(
+    (seg: "out" | "in"): number => {
+      const key = seg === "out" ? outKey : inKey;
+      if (!key) return 0;
+      const used = reloadCountRef.current[`${seg}|${key}`] ?? 0;
+      return Math.max(0, WALK_RELOAD_MAX - used);
+    },
+    [outKey, inKey],
+  );
 
   return {
     out: states.out ?? EMPTY,
     in: states.in ?? EMPTY,
     ensure,
     reload,
+    reloadLeft,
   };
 }

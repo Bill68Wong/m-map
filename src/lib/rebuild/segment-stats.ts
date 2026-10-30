@@ -44,6 +44,14 @@
 import type { Pool } from "pg";
 import { bucketOf, bucketOfRoute, macauParts } from "./buckets";
 import { getHolidays, macauDayOf } from "./holidays";
+import { LONG_STOP_MIN, loadLongStopPolicy, shouldExcludeLongStop } from "./long-stop";
+import type { LongStopPolicy } from "./long-stop";
+
+/**
+ * ★ v3.6.0：长停站判据已抽到 `./long-stop.ts`（单一源，与 build-hop-stats 共用）。
+ *   此处 re-export 保持既有导入路径不变。
+ */
+export { LONG_STOP_MIN } from "./long-stop";
 
 /**
  * ★ v3.4.0：`bucketOf` / `macauParts` 已迁移至 `./buckets`（零依赖共享层）——
@@ -73,6 +81,30 @@ const NORM: Record<string, Kind> = {
 const ENDPOINT = new Set<Kind>(["arrive", "pass", "board", "alight"]);
 /** 起点站的停站类型 → arrive_kind 档位 */
 const kindOfStart = (k: Kind) => (k === "pass" ? "pass" : "stop");
+/** ★ v3.6.0：终点站的停站类型 → arrive_kind 档位（离开口径下**这才是自洽的那个**）
+ *  离开口径 minutes = run + dwell_B ⇒ 差里含的是**终点站**的停站：
+ *    B 甩站（pass）→ 无 dwell_B → 接近纯行驶 → "pass" 档
+ *    B 停靠（arrive/board/alight）→ 含 dwell_B → "stop" 档
+ *  默认仍走 kindOfStart（行为不变，见 opts.arriveKindMode），切换需显式传 "dest"。
+ *  ⚠️ **不要与「排除 dwell ≥ LONG_STOP_MIN」同时启用**：两者治的是同一个病（终点站停站）。
+ *     叠加后 stop 档（终点站停靠）里的长停已被排掉 → stop 与 pass（甩站≈纯行驶）趋同 →
+ *     segment-lookup 里 L1/L2 优先取 stop 档的分层失去区分度，白留复杂度。
+ *     本期结论：只上「排 dwell」，本开关保持 origin 观察一期，切换前先量两档是否仍有差异。 */
+const kindOfEnd = (k: Kind) => (k === "pass" ? "pass" : "stop");
+
+/** ★ v3.6.0：长停站阈值（分）——dwell_B ≥ 此值 **且终点站是总站** 的样本判为「含司机休息」，
+ *  从时长聚合中排除。依据（实测 52 个 run_label / 183,086 条 track 样本，
+ *  ⚠️ 不是 60 轮 —— 60 是采集轮数，其中 8 轮未入库；口径以 DB 内实际 run_label 数为准）：
+ *    · 26 路 C654 聯生圓形地總站 dwell 最大 7.75 分，C656→C654 有 27.8% 样本 ≥3 分、avg 2.64/p50 1.67；
+ *    · 25 路同段（25 也停该总站）n=206，avg 2.45→1.81。
+ *  ⚠️ **只对总站生效**（longStopScope 默认 "terminus"）。中途大站的长挂站**不排**，因为那是真实排队：
+ *     实测 M233（東北大馬路/東華）37 轮内 176 段 ≥3 分、90 辆车、p90 5.9 分（早晚高峰），
+ *     排掉会让 ETA 低估乘客实际等待。总站休息则发生在乘客下车之后，不影响到达。
+ *     一刀切排除（scope="any"）会多排 ~0.37% 样本、波及 306 个站对，仅有诊断价值。
+ *  ⚠️ 排除后的口径语义 = 「**正常情况下的区间期望，不覆盖司机休息**」。乘客若恰好上到一辆要歇的车，
+ *     ETA 会低估——这是数据源限制，不是 bug；改动前请先看 db/migrate-v3600.ts 的列注释。
+ *  ⚠️ 判据本体（阈值 / 总站集合 / 计划性待发豁免）在 `./long-stop.ts`，**不要在本文件另写一套**。
+ */
 
 interface Pt {
   code: string;
@@ -91,6 +123,10 @@ export interface SegmentSample {
   source: "timer" | "free" | "track";
   /** 观测时刻（毫秒）。事件路径取起点站事件时刻；供 segment_samples 入库保留原始时间。 */
   t: number;
+  /** ★ v3.6.0：终点站停站时长（分）。仅 track 样本可能有值（dwell_b_min 列）；事件路径为 null。 */
+  dwell?: number | null;
+  /** ★ v3.6.0：dwell ≥ LONG_STOP_MIN → 该样本的 minutes 含长时间停站 */
+  longStop?: boolean;
 }
 
 export interface SegmentPairStat {
@@ -120,7 +156,11 @@ export interface SegmentRebuildResult {
     reverse: number;
     /** 跨线回退成功回收的段（本线站序解不出，但该邻接对属另一条线） */
     recovered: number;
+    /** ★ v3.6.0：因「终点站长停站」（dwell_B ≥ LONG_STOP_MIN）被排除的样本数 */
+    longDwell: number;
   };
+  /** ★ v3.6.0：长停站排除策略的计数（候选 / 排除 / 各前置门拦下的站数与站对数） */
+  longStopPolicy?: LongStopPolicy["stats"];
   /** 写入行数（dry 时为 0） */
   written: number;
   /** 分层行数（不含兜底） */
@@ -140,9 +180,17 @@ export interface SegmentRebuildResult {
 
 export async function rebuildSegmentStats(
   pool: Pool,
-  opts: { dry?: boolean; sampleFrom?: "events" | "samples" | "both" } = {},
+  opts: {
+    dry?: boolean;
+    sampleFrom?: "events" | "samples" | "both";
+    /** ★ v3.6.0：arrive_kind 分档依据 —— "origin"=起点站（默认，行为不变）· "dest"=终点站（与离开口径自洽） */
+    arriveKindMode?: "origin" | "dest";
+    /** ★ v3.6.0：长停站排除范围 —— "terminus"=仅总站（默认）· "any"=所有站点（含中途拥堵，会低估 ETA） */
+    longStopScope?: "terminus" | "any";
+  } = {},
 ): Promise<SegmentRebuildResult> {
   const dry = !!opts.dry;
+  const arriveKindMode = opts.arriveKindMode ?? "origin";
   // ★ v1.3.0：「样本来源」选项，默认 'events' = 完全保持原有行为（向后兼容）。
   //   events  = 仅用 DB 事件（timer_sessions + free_rides）→ 旧行为
   //   samples = 仅用 segment_samples 原始样本（追踪采集）
@@ -284,6 +332,7 @@ export async function rebuildSegmentStats(
       cross: 0,
       reverse: 0,
       recovered: 0,
+      longDwell: 0,
     };
     // skip 不参与，直接过滤（其前后点会变成跨站，从而被丢弃）
     const seq = pts.filter((p) => p.kind !== "skip");
@@ -373,7 +422,7 @@ export async function rebuildSegmentStats(
         to: b.code,
         weekday,
         bucket,
-        arriveKind: kindOfStart(a.kind),
+        arriveKind: arriveKindMode === "dest" ? kindOfEnd(b.kind) : kindOfStart(a.kind),
         minutes: r1(minutes),
         source,
         t: a.t.getTime(),
@@ -385,7 +434,7 @@ export async function rebuildSegmentStats(
   const samples: SegmentSample[] = [];
   const stats = {
     head: 0, tail: 0, redirect: 0,
-    sameStation: 0, zeroGap: 0, unmatched: 0, cross: 0, reverse: 0, recovered: 0,
+    sameStation: 0, zeroGap: 0, unmatched: 0, cross: 0, reverse: 0, recovered: 0, longDwell: 0,
   };
 
   /** 对一个行程跑两个方向，取顺向解更多的那个 */
@@ -422,6 +471,7 @@ export async function rebuildSegmentStats(
       "cross",
       "reverse",
       "recovered",
+      "longDwell",
     ] as const)
       stats[k] += bestRun.st[k] ?? 0;
   }
@@ -483,25 +533,71 @@ export async function rebuildSegmentStats(
   // ⚠️ arrive_kind 档位：采集样本的起点站均为「DSAT status=1 停靠 → 翻 0 离开」，
   //    无「甩站」概念 → 一律归 **stop** 档（与手动「停靠」样本同档，优先被 lookupHop 的 L1/L2 取用）。
   let aggSamples: SegmentSample[] = samples;
+  /** ★ v3.6.0：因终点站长停站被排除的 track 样本数（写入 stats.longDwell） */
+  let trackLongDwell = 0;
+  // ★ v3.6.0：长停站策略计数（仅 samples/both 路径加载；events 路径无 dwell 数据，保持 undefined）
+  let longStopPolicyStats: LongStopPolicy["stats"] | undefined;
   if (sampleFrom !== "events") {
+    // ★ v3.6.0：dwell_b_min 列由 db/migrate-v3600.ts 增加；迁移未执行时降级为 NULL（不阻塞重算）
+    const dwellCol = Number(
+      (
+        await q(
+          `SELECT count(*)::int AS n FROM information_schema.columns
+            WHERE table_name='segment_samples' AND column_name='dwell_b_min'`,
+        )
+      )[0]?.n ?? 0,
+    ) > 0;
     const tableRows = await q(
-      `SELECT route_code, from_station, to_station, weekday, time_bucket, minutes, observed_at
+      `SELECT route_code, from_station, to_station, weekday, time_bucket, minutes, observed_at,
+              ${dwellCol ? "dwell_b_min" : "NULL::numeric AS dwell_b_min"}
          FROM segment_samples
         ${sampleFrom === "both" ? "WHERE source <> 'timer'" : ""}`,
     );
-    const fromTable: SegmentSample[] = tableRows.map((r) => ({
-      route: r.route_code as string,
-      from: r.from_station as string,
-      to: r.to_station as string,
-      weekday: r.weekday as number,
-      bucket: r.time_bucket as string,
-      arriveKind: "stop",
-      minutes: Number(r.minutes),
-      source: "track",
-      t: new Date(r.observed_at as string).getTime(),
-    }));
+    // ★ v3.6.0：终点站集合（任一线路某方向的 seq=1 或 seq=max）——长停站排除**只对总站生效**。
+    //   为什么不能一刀切排除所有 dwell≥3：实测中途大站 M233（東北大馬路/東華）在 37 轮里
+    //   有 176 段 ≥3 分挂站、涉及 90 辆车、p90 5.9 分（早晚高峰）——那是**真实排队/拥堵**，
+    //   是乘客实际要等的时间，排掉会让 ETA 低估。总站休息则发生在**乘客下车之后**，不会推迟到达。
+    // ★ v3.6.0：判据本体（总站集合 + 前置门 headway-sync / insufficient）在 `./long-stop.ts`
+    //   —— **不要在本文件另写一套**。此处只按策略判定并累计计数。
+    // ⚠️ 必须传 `isHoliday`：判据里的分桶要与本文件 ④ 段（`bucketOfRoute(..., holidays.has(...))`）
+    //    **口径一致**，否则同一样本在两处落在不同桶（节假日在工作日会被判据算成高峰）。
+    //    `getHolidays` 有模块级缓存（TTL 6h），此处提前加载不影响成本，下方 ④ 段复用同一变量。
+    const holidays = await getHolidays(pool);
+    const policy = await loadLongStopPolicy(q, (ms) => holidays.has(macauDayOf(ms)));
+    longStopPolicyStats = policy.stats;
+    const longStopScope = opts.longStopScope ?? "terminus";
+    const fromTable: SegmentSample[] = [];
+    for (const r of tableRows) {
+      const dwell =
+        r.dwell_b_min === null || r.dwell_b_min === undefined ? null : Number(r.dwell_b_min);
+      // ★ v3.6.0：终点站长停站（dwell_B ≥ 阈值 ∧ 命中排除面）→ minutes 含司机休息，
+      //   不参与时长聚合（否则 C656→C654 这类段的均值被系统性抬高）。
+      //   scope="any" 是**诊断开关**（含中途拥堵，会低估 ETA），生产默认 "terminus"。
+      const isLongStop =
+        longStopScope === "any"
+          ? dwell !== null && dwell >= LONG_STOP_MIN
+          : shouldExcludeLongStop(String(r.route_code), mainCode(r.to_station as string), dwell, policy);
+      if (isLongStop) {
+        trackLongDwell++;
+        continue;
+      }
+      fromTable.push({
+        route: r.route_code as string,
+        from: r.from_station as string,
+        to: r.to_station as string,
+        weekday: r.weekday as number,
+        bucket: r.time_bucket as string,
+        arriveKind: "stop",
+        minutes: Number(r.minutes),
+        source: "track",
+        t: new Date(r.observed_at as string).getTime(),
+        dwell,
+        longStop: false,
+      });
+    }
     aggSamples = sampleFrom === "samples" ? fromTable : [...samples, ...fromTable];
   }
+  stats.longDwell = trackLongDwell;
 
   // ================= ④ 聚合 =================
   // ★ v3.4.0：分层键升级为「-1 | bucketOfRoute 新五桶 | kind」——
@@ -509,6 +605,8 @@ export async function rebuildSegmentStats(
   //   不再生成 weekday 精确行（实验⑦b/⑦c：星期维度无增益、周一可并入工作日池）。
   const keys = new Map<string, number[]>(); // route|from|to|weekday|bucket|kind -> minutes[]
   // ★ v3.5.5：澳门公众假期集合（lrt_holidays——分桶的「节假日按周末同款」判定；缓存 TTL 6h）
+  //   ⚠️ 判据段（`loadLongStopPolicy` 之前）也取了一次；`getHolidays` 是**模块级缓存**（TTL 6h），
+  //      两次调用拿到的是同一个 Set、零 DB 往返 ⇒ 两处口径必然一致，不会静默漂移。
   const holidays = await getHolidays(pool);
   const push = (route: string, from: string, to: string, w: number, b: string, k: string, min: number) => {
     const key = `${route}|${from}|${to}|${w}|${b}|${k}`;
@@ -618,6 +716,7 @@ export async function rebuildSegmentStats(
     bySource,
     byKind,
     stats,
+    longStopPolicy: longStopPolicyStats,
     written: rows.length,
     layered: rows.length - fallback,
     routeCount: [...routeCountMap.entries()],

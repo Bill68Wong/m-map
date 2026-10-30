@@ -86,6 +86,17 @@ export default function NavStrip({
   const board = stops[0];
   const alight = stops[stops.length - 1];
   const est = stops.some((s) => s.role === "mid" && s.level >= 3);
+  /**
+   * ★ T5：本段「车上约 N 分」。
+   *   数据源 = `SegmentStrip.rideMin`（轻轨段优先用时刻表口径 `rideSecText`），**只用现有字段**。
+   *   为什么必须单独抽一行：这句话原来只藏在**折叠键**里（`!open` 才渲染），
+   *   而导航态强制 `open = true`（要逐站可见）⇒ 一进导航就再也看不到"这趟车要坐多久"。
+   *   现在折叠/展开两态都有：收起时在折叠键上（原有），展开/导航时在本行。
+   */
+  const rideText =
+    strip.kind === "lrt" && strip.rideSecText ? strip.rideSecText : `${Math.round(strip.rideMin)} 分`;
+  /** 已过站数（导航态才显示；`passedIdx` = 已完全驶过的最后一站） */
+  const passedCount = nav ? Math.max(0, nav.passedIdx + 1) : 0;
 
   /** 追踪态 class（附在各站节点上） */
   const stateCls = (k: number): string => {
@@ -155,9 +166,15 @@ export default function NavStrip({
       /* ★ 本批：观测钩子 H5 —— 仅当前乘车段（有 nav）写 data-nav-leg */
       data-nav-leg={nav && nav.legIndex != null ? String(nav.legIndex) : undefined}
     >
-      {board && row(0, true)}
+      {/* ★ T5：展开态（导航强制展开 / 手动展开）也保留「车上约 N 分」——见 `rideText` 注释 */}
+      {open && (
+        <p className="navstrip__ride" data-ride-min={Math.round(strip.rideMin)}>
+          车上约 <b>{rideText}</b>
+          {nav && <span className="navstrip__ride-sub">· 已过 {passedCount} 站</span>}
+        </p>
+      )}
 
-      {/* 中间站：静态时默认收起；导航中强制展开 */}
+      {board && row(0, true)}      {/* 中间站：静态时默认收起；导航中强制展开 */}
       {mids > 0 && !open && (
         <button className="rc-strip__toggle" onClick={() => setOpenManual(true)} aria-expanded={false}>
           途经 <b>{mids}</b> 站 · 车上约{" "}
