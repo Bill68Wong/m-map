@@ -7,6 +7,9 @@
  *     · `pickBoarding` —— 「我已上车」时从在途车中锁定**用户坐的那辆**；
  *     · `progressOf`   —— 由车辆区间/挂靠站推导「已过到第几站 / 下一站是谁」；
  *     · `cutAt`        —— 把车辆坐标投影到该段乘车 polyline 上，供「已驶过路段变绿」切割。
+ *   ★ v3.6.1（需求 7）新增：`anchorOf` / `passedBoardOf` —— 候车阶段按锚点剔除**已过站**的车，
+ *     让「候选中没车（错过班次）」能够成立；`rankBoardingVehicles` 以 `opts.filterPassed` 接入
+ *     （默认关闭 = 旧行为不变，接线在 `useRideTracking`）。
  *
  * ── 为什么车道数据当主信号（用户拍板 2026-09-24）────────────────────────
  *   官方数据与报站同源（站点级准确）、车牌可稳定锁定、无定位权限门槛；
@@ -18,7 +21,7 @@
  *   · 一切「找不到 / 对不上」都**如实返回**（unknown/lost），由调用方决定冻结或提示，
  *     **绝不猜测**（呼应「报站数必须符合物理常识」的项目口径）。
  */
-import { nearestOnPath, type LL } from "./route-overview";
+import { cumDistM, nearestOnPath, type LL } from "./route-overview";
 import type { VehicleProgress } from "./progress";
 
 /** 追踪用的车辆子集（= `/api/route-vehicles` 的 vehicles[] 元素；坐标已 GCJ-02） */
@@ -101,14 +104,125 @@ export function progressOf(stopMains: string[], v: TrackVehicle | null): TrackPr
 }
 
 /**
+ * ★ v3.6.1（需求 7 · 追踪补漏）：**候车锚**——`start()` 时记下首帧排序第一名的身份与位置。
+ *
+ * ── 为什么需要 ────────────────────────────────────────────────────────
+ *   `rankBoardingVehicles` 只看 `status ∈ {moving, stopping, terminal}` 与「到上车站的几何距离」，
+ *   **不过滤已过站的车** ⇒ 两个后果：
+ *     ① 用户等的车过站后仍留在候选里 ⇒「候选中没车（错过班次）」这个信号**永不成立**
+ *        （`useRideTracking` 只有在 `ranked.length === 0` 时才会提示）；
+ *     ② 后车驶来会顶到第一位 ⇒ `switchToRiding(res.plate)` 可能锁到后车。
+ *   ⇒ 用**首帧第一名的车牌**做锚，之后按「该车是否已越过上车站 / 距离是否单调增大」判定过站。
+ *
+ * ── ⚠️ 级别说明（别写错）────────────────────────────────────────────────
+ *   `autoBoardOf` 是**定位主导**（R1 车辆信号只降门槛、不触发）⇒ 本改动**不会导致上错车**，
+ *   它修的是「**错过班次提示缺失**」+「候选排序失真」。锁牌（`switchToRiding`）只在
+ *   `aux.strong && 唯一` 时才发生，且 `aux` 的 strong 判据是「刚从本站开走」——
+ *   已过站的车挂靠站不再是本站 ⇒ 不会成为 strong。
+ */
+export interface BoardAnchor {
+  /** 锚定车牌 */
+  plate: string;
+  /** 锚定时该车距上车站的几何距离（米）；无坐标 ⇒ `null` */
+  distM: number | null;
+  /** 锚定时该车「还有多久到站」的秒数（`BusArrival.loSec`）；无 ⇒ `null`（仅供诊断/对比） */
+  loSec: number | null;
+  /** 锚定时刻（ms） */
+  atMs: number;
+}
+
+/** 锚定时距上车站 ≤ 此值 ⇒ 才承认「我们确实看到它还在上车站附近」 */
+export const PASS_ANCHOR_NEAR_M = 150;
+/** 之后距离增大超过此值 ⇒ 判「已驶离上车站」（几何判据，需配合锚点距离门） */
+export const PASS_MARGIN_M = 120;
+
+/** 车辆到上车站的直线距离（米）；无坐标 ⇒ `null` */
+export function distToBoardM(
+  v: Pick<TrackVehicle, "lat" | "lng">,
+  boardPos?: { lng: number; lat: number } | null,
+): number | null {
+  if (!boardPos) return null;
+  if (!Number.isFinite(v.lat) || !Number.isFinite(v.lng)) return null;
+  const dx = (v.lng - boardPos.lng) * 111320 * Math.cos((boardPos.lat * Math.PI) / 180);
+  const dy = (v.lat - boardPos.lat) * 111320;
+  return Math.hypot(dx, dy);
+}
+
+/**
+ * 记候车锚：取**当前排序第一名**（停靠本站 > 刚离开本站 > 距站最近）。
+ * @returns 无候选 ⇒ `null`（此时无从锚定，调用方应保持 `anchor = null`）
+ */
+export function anchorOf(
+  vehicles: TrackVehicle[],
+  boardMain: string,
+  boardPos?: { lng: number; lat: number } | null,
+  opts?: { loSec?: number | null; nowMs?: number },
+): BoardAnchor | null {
+  const ranked = rankBoardingVehicles(vehicles, boardMain, boardPos);
+  const top = ranked[0];
+  if (!top) return null;
+  return {
+    plate: top.plate,
+    distM: distToBoardM(top, boardPos),
+    loSec: opts?.loSec ?? null,
+    atMs: opts?.nowMs ?? Date.now(),
+  };
+}
+
+/**
+ * 该车是否**已越过上车站**（三条判据，任一成立即可，均为「有证据才判」）。
+ *
+ * ① **站序判据**（最可靠，需 `stopMains`）：`progressOf` 给出 `atIdx > 0`
+ *    （停在第 1 站及以后）或 `between` 且 `passedIdx ≥ 0`（已驶离上车站）。
+ * ② **几何判据**（需锚 + 坐标）：锚定时该车**确实在上车站 150m 内**，
+ *    而现在距站比锚定时远了 > 120m ⇒ 它在远离上车站（API 已按 `dir` 过滤，
+ *    同向车不会「从远处开来又变远」）。
+ * ③ 其余一律 `false` —— **宁可留着候选，也不误删**（呼应「找不到就如实返回」）。
+ */
+export function passedBoardOf(input: {
+  vehicle: TrackVehicle;
+  /** 本段站序（下标 0 = 上车站）；缺省 ⇒ 退化为几何判据 */
+  stopMains?: string[] | null;
+  boardPos?: { lng: number; lat: number } | null;
+  anchor?: BoardAnchor | null;
+}): boolean {
+  const { vehicle: v, stopMains, boardPos, anchor } = input;
+
+  // ① 站序判据
+  if (stopMains && stopMains.length >= 2) {
+    const p = progressOf(stopMains, v);
+    if (p.atIdx != null && p.atIdx > 0) return true;
+    if (p.kind === "between" && p.passedIdx >= 0) return true;
+    if (p.kind === "at" && p.atIdx === 0) return false;
+  }
+
+  // ② 几何判据（需锚 + 锚点确实在上车站附近）
+  if (anchor && anchor.plate === v.plate && anchor.distM != null && anchor.distM <= PASS_ANCHOR_NEAR_M) {
+    const now = distToBoardM(v, boardPos);
+    if (now != null && now - anchor.distM > PASS_MARGIN_M) return true;
+  }
+
+  // ③ 无证据 ⇒ 不判过站
+  return false;
+}
+
+/**
  * 「我已上车」候选排序：把在途车按「更可能是用户乘坐的那辆」排序。
  * 打分：停靠**本上车站** > 刚离开本上车站 > 距上车站更近。
  * @param boardPos 上车站坐标（GCJ-02；来自 detail-body legs，缺失时跳过距离项）
+ * @param opts     ★ v3.6.1：`filterPassed`（默认 **false** = 保持旧行为）+ 站序/锚点。
+ *                 开启后**剔除已越过上车站的车** ⇒ 全部过站时候选为空 ⇒
+ *                 调用方能如实提示「候选中没车（错过班次）」（`NOTE_NO_VEHICLES`）。
  */
 export function rankBoardingVehicles(
   vehicles: TrackVehicle[],
   boardMain: string,
   boardPos?: { lng: number; lat: number } | null,
+  opts?: {
+    filterPassed?: boolean;
+    stopMains?: string[] | null;
+    anchor?: BoardAnchor | null;
+  },
 ): TrackVehicle[] {
   const board = mainOf(boardMain);
   const score = (v: TrackVehicle): number => {
@@ -123,6 +237,16 @@ export function rankBoardingVehicles(
   };
   return [...vehicles]
     .filter((v) => v.status === "moving" || v.status === "stopping" || v.status === "terminal")
+    .filter(
+      (v) =>
+        !opts?.filterPassed ||
+        !passedBoardOf({
+          vehicle: v,
+          stopMains: opts.stopMains,
+          boardPos,
+          anchor: opts.anchor,
+        }),
+    )
     .sort((a, b) => score(a) - score(b));
 }
 
@@ -136,8 +260,204 @@ export function cutAt(poly: LL[], pos: { lng: number; lat: number }): { idx: num
   return { idx: r.idx, dist: r.distM };
 }
 
-/** 投影可信容差（米）：超过则**冻结**上次进度（隧道/漂移时宁可不更新，不画错） */
+/**
+ * 投影可信容差（米）：超过则**冻结**上次进度（隧道/漂移时宁可不更新，不画错）。
+ *
+ * ⚠️ 本常量**当前无消费者**（灰线已改用 `monotonicCut` 的 60m 门）。
+ *    anomaly 判定另有硬编码 250（`src/lib/nav/boarding-detect.ts:473`），
+ *    **两者语义尚未统一**；统一属独立改造，勿顺手合并。
+ */
 export const CUT_TOLERANCE_M = 250;
+
+/* ══════════════════ 已驶过灰线：**单调游标**（T7 · 2026-10-30） ══════════════════
+ *
+ * ── 为什么需要（现场症状的根因，见调查结论）────────────────────────────────
+ *   `nearestOnPath` 是「最近**顶点**」且对**整条** `colored` 线性扫描，**没有任何
+ *   "沿里程单调"约束**。澳门多条线路往返同路 / 环线 / 掉头 / 绕转盘 ⇒ 折线在空间上
+ *   **折回自己**（实测责任重合段的空间间距仅 0~40m，沿线却相隔数百米到十几公里）。
+ *   GPS 落在两遍之间时，`idx` 就在两遍之间**任意跳**：
+ *     · 跳到**近**的一遍 ⇒ 灰线从几公里**缩成几十米**（= 「蓝点旁一小撇」）；
+ *     · 跳到**远**的一遍 ⇒ 灰线**多画几公里**。
+ *   ⚠️ 关键：那两遍空间上只差几十米 ⇒ **蓝点看着完全正常**，用户只能看到"线不对"。
+ *
+ * ── 判据（顺序即优先级，任一不过 → **冻结**上一帧，绝不清空）────────────────
+ *   ① 横向：**真垂距** `perpDistM(...) > TRAVELED_SNAP_MAX_M` → `bad-snap`
+ *      ★ 与蓝点吸附门（`youDot` 的 60m）**同源** —— 两套容差（60 vs 250）
+ *        作用在同一投影上，正是"蓝点飞到线外、灰线照画"缺口的来源；
+ *      ★★ **绝不能用 `cut.dist`**（到最近顶点的距离）：顶点间距中位 19.4m / p90 71.9m，
+ *        段中点时该值会**系统性高估**真垂距（实测中位 1.3m、p90 16.5m、p99 68.6m，
+ *        `> 2×真垂距+3m` 占 12.3%）⇒ 拿它当 60m 门会**误拒 12% 的合法帧**，
+ *        把「灰线画错」换成「灰线老是卡住」。`cut.dist` 只作 `reason` 的诊断量，不判 accept。
+ *   ② 回退：`idx < prev.idx - TRAVELED_BACK_IDX` → `backward`
+ *      ★ **长间隔放行**（`> TRAVELED_STALE_MS` 与 ④ 成对豁免）—— 切后台 2 分钟 /
+ *        车已掉头时若照判回退，灰线会**永久冻死**；
+ *   ③ 增速：沿线上行 ≤ `MAX_SPEED_MPS × elapsed + 120` → 否则 `too-fast`；
+ *   ④ 不缩短：`lenM < prev.lenM - 1` → `shrink`（「缩成一小撇」的最后一道闸）。
+ */
+
+/** 「已驶过灰线」游标（跨帧记忆；纯数据，不含 DOM / 不含 React） */
+export interface MonoCutState {
+  /** 上一帧采纳的顶点下标 */
+  idx: number;
+  /** 上一帧采纳的「已驶过沿线里程」（米；= `pathLenM(poly.slice(0, idx+1))`） */
+  lenM: number;
+  /** 采纳时刻（ms）——拒帧**不更新**，让 `elapsed` 持续累积（否则 too-fast 永不解除） */
+  ts: number;
+}
+
+export type MonoCutReason = "first" | "ok" | "bad-snap" | "backward" | "too-fast" | "shrink";
+
+export interface MonoCutResult {
+  /** 采纳后的下标（拒帧时为 `prev.idx`；首帧拒帧为 -1） */
+  idx: number;
+  /** 采纳后的已驶过里程（米；拒帧时为 `prev.lenM`） */
+  lenM: number;
+  accept: boolean;
+  reason: MonoCutReason;
+  /**
+   * 诊断量（**不参与 accept/reject**）：
+   *   · `verPerp` = 真垂距（判定实际用的就是这个）；
+   *   · `verVertex` = `cutAt` 的「到最近顶点距离」（量化高估值，留作 QA 对比量化误差）；
+   *   · `projIdx` / `projLenM` = **被拒时**本帧投影本来会落到的位置
+   *     （`idx`/`lenM` 在拒帧时返回 `prev`，看不出真实投影在哪 —— QA 判「定位偏了 vs 算法判错了」
+   *      必须靠这两个量；accept 时与 `idx`/`lenM` 相等）。
+   */
+  diag: { verPerp: number; verVertex: number; projIdx: number; projLenM: number };
+}
+
+/**
+ * 灰线横向吸附门（米）——**与蓝点 `YOU_SNAP_MAX_M` 同值**。
+ * ⚠️ 不是 `CUT_TOLERANCE_M(250)`：250 是「这个定位可信吗」的语义（anomaly 判定仍用它），
+ *    而「能不能据此画已驶过路段」必须和蓝点一样严，否则两者会分离出缺口。
+ */
+export const TRAVELED_SNAP_MAX_M = 60;
+/** 沿线上行速度上限（m/s）——澳门公交最高远低于 20（= 72km/h），留足余量 */
+export const TRAVELED_MAX_SPEED_MPS = 20;
+/** 长间隔放行阈值（ms）——超过则**成对豁免**回退与不缩短（切后台 / 掉头后不冻死） */
+export const TRAVELED_STALE_MS = 60_000;
+/** 回退容忍格数（抖动）；超过即判投影跳变 */
+export const TRAVELED_BACK_IDX = 2;
+/** 长度缩短容忍（米）；超过即判投影跳变 */
+export const TRAVELED_SHRINK_EPS_M = 1;
+
+/**
+ * 点到折线第 `idx` 号顶点相邻两段（`idx-1→idx`、`idx→idx+1`）的**真实垂距**（米），取较小者。
+ *
+ * ── 为什么不能拿 `nearestOnPath().distM` 代替（本项目的关键坑）──────────────
+ *   `nearestOnPath` 返回的是「到最近**顶点**」的距离，**不是**到线段的垂距。
+ *   GPS 落在两顶点中间时，该值 = √(垂距² + 半段长²) ⇒ **系统性偏大**
+ *   （顶点间距中位 19.4m / p90 71.9m）。实测：真垂距 25m 的点在段中点会被算成 ~55m。
+ *   ⇒ 任何「这个定位离线多近」的门槛都必须用本函数，否则量化误差会吃掉容差。
+ *
+ * ── 实现口径 ────────────────────────────────────────────────────────────
+ *   · 局部平面近似与 `distM` 完全一致（`dLat·111320`、`dLng·111320·cos(lat)`）；
+ *   · 只查 `idx` 相邻两段：`nearestOnPath` 已保证 `idx` 是本折线上最近的顶点，
+ *     真实垂足**必然**落在这两段内（否则那个端点就不是最近顶点）；
+ *   · 端点退化（`idx` 为首/末顶点，只有一段）时只算存在的那一段；
+ *   · 段长为 0（重复顶点）⇒ 退化为点距；`poly` 空 / `idx` 越界 ⇒ `Infinity`。
+ */
+export function perpDistM(poly: LL[], idx: number, p: { lng: number; lat: number }): number {
+  if (!poly.length || idx < 0 || idx >= poly.length) return Number.POSITIVE_INFINITY;
+  const latMid = ((poly[idx][1] + p.lat) / 2) * (Math.PI / 180);
+  const kx = 111320 * Math.cos(latMid);
+  const ky = 111320;
+  const px = p.lng * kx;
+  const py = p.lat * ky;
+
+  /** 点到单段的垂距（垂足超出段内 ⇒ 退化为到近端距离） */
+  const segDist = (ai: number, bi: number): number => {
+    const ax = poly[ai][0] * kx;
+    const ay = poly[ai][1] * ky;
+    const bx = poly[bi][0] * kx;
+    const by = poly[bi][1] * ky;
+    const dx = bx - ax;
+    const dy = by - ay;
+    const l2 = dx * dx + dy * dy;
+    if (!(l2 > 0)) return Math.hypot(px - ax, py - ay); // 重复顶点
+    let t = ((px - ax) * dx + (py - ay) * dy) / l2;
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+  };
+
+  let best = Number.POSITIVE_INFINITY;
+  if (idx > 0) best = Math.min(best, segDist(idx - 1, idx));
+  if (idx + 1 < poly.length) best = Math.min(best, segDist(idx, idx + 1));
+  return best === Number.POSITIVE_INFINITY ? segDist(idx, idx) : best;
+}
+
+/**
+ * 单调游标切割（纯函数）。
+ * @param poly 乘车段彩段（GCJ-02，`colored`）
+ * @param pos  本帧原始定位（GCJ-02）
+ * @param prev 上一帧**采纳**的游标（null = 首帧）
+ * @param now  本帧时刻（ms）
+ */
+export function monotonicCut(
+  poly: LL[],
+  pos: { lng: number; lat: number },
+  prev: MonoCutState | null,
+  now: number,
+): MonoCutResult {
+  const cut = cutAt(poly, pos);
+  const cum = cumDistM(poly);
+  /** 截至第 i 顶点的沿线里程（越界 → 0） */
+  const lenAt = (i: number): number => (i >= 0 && i < cum.length ? cum[i] : 0);
+  /**
+   * ★ 横向判定用 **真垂距**，不用 `cut.dist`（到最近顶点的距离）。
+   *   理由见本段顶部 ★★ 与 `perpDistM` 的 JSDoc：顶点量化会让 `cut.dist` 系统性高估
+   *   （段中点真垂距 25m → `cut.dist` ≈ 55m），拿它当 60m 门会误拒约 12% 的合法帧。
+   */
+  const perp = perpDistM(poly, cut.idx, pos);
+  const snapOk = cut.idx >= 0 && perp <= TRAVELED_SNAP_MAX_M;
+  const diag = {
+    verPerp: perp,
+    verVertex: cut.dist,
+    projIdx: cut.idx,
+    projLenM: lenAt(cut.idx),
+  };
+
+  // ① 首帧：没有任何历史可对照 ⇒ 只判横向
+  if (!prev) {
+    return snapOk
+      ? { idx: cut.idx, lenM: lenAt(cut.idx), accept: true, reason: "first", diag }
+      : { idx: -1, lenM: 0, accept: false, reason: "first", diag };
+  }
+
+  // ② 横向（与蓝点同门；真垂距）
+  if (!snapOk) return { idx: prev.idx, lenM: prev.lenM, accept: false, reason: "bad-snap", diag };
+
+  const deltaMs = Math.max(0, now - prev.ts);
+  const elapsed = deltaMs / 1000;
+  /**
+   * ★ 长间隔 ⇒ **同时豁免「回退」（③）与「不缩短」（④）**。
+   *   ⚠️ 必须**成对**豁免，这不是可选优化：`cum` 单调递增 ⇒
+   *      `idx` 回退 **⟺** `lenM` 变小（数学等价）。
+   *      只豁免 ③ 而不豁免 ④ ⇒ 第 ④ 步会在同一帧立刻把它拦回来 ⇒
+   *      "跨帧放行"**形同虚设**，用户切后台 2 分钟 / 车已掉头后灰线**永久冻死**。
+   *   代价：恢复的那一帧灰线可能变短一次。但此时中间已经 60s+ 没有帧，
+   *        用户看不到"连续缩短"的过程，而"永久冻死"是不可恢复的错误 —— 取后者。
+   */
+  const stale = deltaMs > TRAVELED_STALE_MS;
+
+  // ③ 回退 —— **长间隔放行**（否则切后台 / 掉头后永久冻死）
+  if (!stale && cut.idx < prev.idx - TRAVELED_BACK_IDX) {
+    return { idx: prev.idx, lenM: prev.lenM, accept: false, reason: "backward", diag };
+  }
+
+  // 增速：沿线上行米数（= `pathLenM(poly.slice(prev.idx, cut.idx+1))`，累积里程差等价且无切片分配）
+  const upM = cut.idx > prev.idx ? cum[cut.idx] - cum[prev.idx] : 0;
+  if (upM > TRAVELED_MAX_SPEED_MPS * elapsed + 120) {
+    return { idx: prev.idx, lenM: prev.lenM, accept: false, reason: "too-fast", diag };
+  }
+
+  // ④ 不缩短 —— 「缩成一小撇」的最后一道闸（换腿后游标残留 / 几何变更都会在此被拦）
+  const lenM = lenAt(cut.idx);
+  if (!stale && lenM < prev.lenM - TRAVELED_SHRINK_EPS_M) {
+    return { idx: prev.idx, lenM: prev.lenM, accept: false, reason: "shrink", diag };
+  }
+
+  return { idx: cut.idx, lenM, accept: true, reason: "ok", diag };
+}
 
 /**
  * ★ 本批（需求⑤ / AC-43/44）：**段内位置比** `frac ∈ [0,1]`（纯函数，`07 §d.2`）。

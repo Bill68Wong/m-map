@@ -17,12 +17,25 @@
  *     ★ v3.1.1 #7 起**也不看打字预测是否在途**（否则输入后立刻点会被原生 disabled 吞掉）。
  *
  * ── ★ v3.6.0：线路分区（AC-40/41/43）与搜索态恢复（AC-45）──────────────
- *   · **线路分区在最顶部**，与「地点 / 站点」分区互不混排；点线路行 **不填起终点**，
- *     而是跳 `/line/[code]`（AC-41 明令：不得走旧 `/routes`、不得把线路当起终点）。
+ *   · **线路分区在最顶部**，与「地点 / 站点」分区互不混排；点线路行 **不填起终点**
+ *     （AC-41 明令：不得走旧 `/routes`、不得把线路当起终点）。
  *   · **无线路命中 ⇒ 分区不渲染**（AC-43：不留空标题、不报错）。
- *   · 从 `/line` 返回时用 `sessionStorage` 恢复**当前**搜索态（`q` + 结果列表）：
- *     `/line` 是独立路由 ⇒ 跳过去 `NavShell` 整棵卸载，纯内存 state 必然归零。
+ *   · 从线路视图返回时用 `sessionStorage` 恢复**当前**搜索态（`q` + 结果列表）。
  *     ⚠️ 与「不记忆历史出发点」不冲突 —— 见 `SS_KEY` 上方的界线说明。
+ *
+ * ── ★ v3.6.1：点线路 **不跳页**，改在首页地图上打开（行为等价于右栏点线路）──────
+ *   原实现 `router.push("/line/[code]")` 会打开独立全景页（整页卸载 + 重新加载）。
+ *   现改为：**本组件调用 `onOpenLine(code)`**（由 `NavShell` 接到 `rv.pickLine`）⇒
+ *   同一张地图、同一套线路视图 UI（底部线路标签 + 换向 + 刷新）、同一条返回路径。
+ *   · 线路视图打开期间本层**不渲染但保持挂载**（`lineOpen`）⇒ `q`/`resp` 一个字节都不丢，
+ *     退出线路视图即刻回到「搜索词与结果都在」的状态（不需要任何持久化）；
+ *   · `/line/[code]` 独立页**保留**（别人分享的深链不能死），仅在 `onOpenLine` **缺失**时兜底。
+ *
+ * ── ★ v3.6.1：结果行的类型标签结构 ────────────────────────────────────────
+ *   行首标签 = **类型**（「巴士线路」/「轻轨线路」/「公交站」/「地点」），与既有站点/地点
+ *   行用的是**同一个** `ResultTag` 组件、同一个 `.ssheet__type` class（不为线路另造一套）；
+ *   线路号则是紧跟其后的**线路色圆角标签**（`.linechip` + `chipInkOf` ⇒ 底色取 `routes.color`，
+ *   字色按对比度自适应）。即：`[巴士线路] [50] 在地图查看走向`。
  *
  * ── 与旧 `PoiSearchBox` 的差别 ────────────────────────────────────────
  *   旧组件是「输入框 + **下拉浮层**」，适合嵌在抽屉里；
@@ -37,6 +50,7 @@ import Icon from "@/components/ui/Icon";
 import RouteStack from "@/components/RouteStack";
 import { chipInkOf } from "@/lib/ui/chip-ink";
 import type { NavPoint, PoiKind, PoiSearchResult, PoiSuggestResponse, RouteSuggestion } from "@/lib/nav/types";
+import type { RouteLineItem } from "./RouteLinesSheet";
 
 const DEBOUNCE_MS = 300;
 
@@ -44,9 +58,14 @@ const DEBOUNCE_MS = 300;
  * ★ v3.6.0（AC-45）：**同会话内**返回时恢复当前搜索态。
  *
  * ── 为什么必须持久化（这不是"可能"，是必然）──────────────────────────────
- *   AC-41 要求点线路结果 **URL 变化** ⇒ `/line/[code]` 必须是独立路由
- *   （不能做成覆盖层，否则 URL 不变、不满足契约）⇒ 跳过去时 `NavShell` 整棵卸载
- *   ⇒ 返回是**重新 mount**，纯内存的 `q`/`resp` 归零 ⇒ 输入框空、结果列表空。
+ *   只要点线路会让 `NavShell` 整棵卸载（走独立路由 `/line/[code]`），返回就是
+ *   **重新 mount** ⇒ 纯内存的 `q`/`resp` 归零 ⇒ 输入框空、结果列表空。
+ *
+ * ★ v3.6.1：首页路径**已不再跳页**（`onOpenLine` ⇒ 本组件只隐藏、不卸载）
+ *   ⇒ 这条持久化对**首页主路径已非必需**，但**必须保留**：
+ *   ① 深链兜底路径（`onOpenLine` 缺失时仍走 `router.push`）依赖它；
+ *   ② 用户从搜索层直接刷新 / 前进后退时也依赖它。
+ *   ⚠️ 不要因为"现在不跳页了"就删掉这两段 —— 删了深链回归必挂。
  *
  * ── 为什么用 `sessionStorage` 而不是 `localStorage` ──────────────────────
  *   本文件头既有约束：**不记忆历史出发点**（产品 R5 明确不用 localStorage）——
@@ -57,13 +76,12 @@ const DEBOUNCE_MS = 300;
  */
 const SS_KEY = "mmap.search.v1";
 /**
- * 「从 `/line` 返回」的**一次性**标记。
+ * 「从 `/line` 返回」的**一次性**标记（★ v3.6.1 起**仅深链兜底路径**写入）。
  *
  * ── 为什么需要它 ────────────────────────────────────────────────────────
- *   AC-45 要求返回后**看到**「输入框仍是 26、结果列表仍在那」。
- *   只恢复 `q`/`resp` 不够 —— 从 `/line` 返回时 `NavShell` 重新 mount，
- *   `stage` 会被算成 `map`/`panel`（取决于 URL），**搜索层根本没打开**，
- *   用户看到的是首页 ⇒ "输入框仍在那"无从谈起。
+ *   返回后要**看到**「输入框仍是 26、结果列表仍在那」。只恢复 `q`/`resp` 不够 ——
+ *   从 `/line` 返回时 `NavShell` 重新 mount，`stage` 会被算成 `map`/`panel`
+ *   （取决于 URL），**搜索层根本没打开**，用户看到的是首页。
  *   ⇒ 跳转前打标记；NavShell mount 时若看到它，就把 `stage` 直接置为 `search`
  *     并**立即删除**（一次性）—— 这样刷新页面/新开 tab 都不会莫名弹搜索层。
  */
@@ -97,13 +115,70 @@ function writeSaved(editing: "dest" | "from", q: string, resp: PoiSuggestRespons
   }
 }
 
-/** 结果类型徽章（简体） */
-const TYPE_LABEL: Record<PoiKind, string> = {
+/**
+ * 结果行的**类型标签**种类（★ v3.6.1）。
+ *
+ * 前四种来自 `PoiKind`（有坐标的结果），后两种是线路结果（`RouteSuggestion`，无坐标）。
+ * 合在一个联合类型里，是为了让**五种标签共用同一个组件、同一个 class** ——
+ * 「巴士线路」既不是新标签体系，也不是新视觉语言，它就是既有「公交站 / 地点」标签的第五个取值。
+ */
+type ResultTagKind = PoiKind | "bus_route" | "lrt_route";
+
+/**
+ * 类型标签文案（**唯一文案源** —— 行内标签只从这里取，杜绝两处各写一份）。
+ * ⚠️ 线路两类**不做分区标题**（主人要的是行内结构），所以这里只服务行内标签。
+ */
+const TAG_TEXT: Record<ResultTagKind, string> = {
   station: "公交站",
   lrt_station: "轻轨站",
   place: "地点",
   poi: "地点",
+  bus_route: "巴士线路",
+  lrt_route: "轻轨线路",
 };
+
+/**
+ * 结果行类型标签（★ v3.6.1）。
+ *
+ * ── 为什么必须是一个组件 ────────────────────────────────────────────────
+ *   主人原话：线路行的左侧标签**不是**线路号，而是「巴士线路 / 轻轨线路」四个字，
+ *   **样式与「公交站」「地点」一致**。⇒ 五类标签一律走这里、一律 `.ssheet__type`，
+ *   否则线路标签迟早被改成另一套字号/圆角/配色（那正是要修的病）。
+ *
+ * ── 为什么不给线路另加色调 ──────────────────────────────────────────────
+ *   线路行紧跟着就有一个**线路色**圆角标签（`.linechip`）。若类型标签也上色，
+ *   一行里两个彩色块互相抢眼（每屏强调色预算只有 2 处）⇒ 线路类型标签用中性底，
+ *   站点类保留既有色调变体（`--station` / `--lrt_station`，**本轮未改**）。
+ */
+function ResultTag({ kind }: { kind: ResultTagKind }) {
+  const variant =
+    kind === "station"
+      ? " ssheet__type--station"
+      : kind === "lrt_station"
+        ? " ssheet__type--lrt_station"
+        : "";
+  return <span className={`ssheet__type${variant}`}>{TAG_TEXT[kind]}</span>;
+}
+
+/**
+ * 「待确认」项的标签种类（★ v3.6.1）。
+ *
+ * `PoiPendingMatch.targetKind` 是后端给的自由字符串，而 `ResultTag` 只认联合类型
+ * ⇒ 在这里收敛一次。
+ *
+ * ⚠️ **这里刻意不写 `LRT-` 前缀判断**：线路的权威种类只有一处 —— `resp.routes[].kind`
+ *   （后端 `RouteSuggestion.kind`，`poi-search.ts` 的 `code.startsWith("LRT-")` 是**唯一**
+ *   判定点）。而线路命中在 `poi-search.ts` 里是 `routes.push(...) + continue`，
+ *   **永远不会进 `pending`** ⇒ 本函数的 `route` 取值只是一行**不可达**的防御性兜底，
+ *   真出现了也不该由前端二次猜（多一套判定迟早与后端分叉）。
+ */
+function tagKindOfPending(p: { targetKind: string }): ResultTagKind {
+  if (p.targetKind === "station" || p.targetKind === "lrt_station") return p.targetKind;
+  /** 不可达（见上）：`pending` 只从 `station` / `lrt_station` 分支产生；写巴士仅为形状完整 */
+  if (p.targetKind === "route") return "bus_route";
+  if (p.targetKind === "place") return "place";
+  return "poi";
+}
 
 /** 巴士站显示名带站码（`M1 關閘總站`）；轻轨站/地点用原名 */
 function displayName(r: PoiSearchResult): string {
@@ -138,6 +213,37 @@ export interface SearchSheetProps {
   quickPairs: QuickPair[];
   onPick: (p: NavPoint, which: "dest" | "from") => void;
   onPickQuick: (from: NavPoint, to: NavPoint) => void;
+  /**
+   * ★ v3.6.1：点线路结果 ⇒ **由宿主在首页右栏打开线路视图**（URL 不变、不跳页）。
+   *
+   * 参数就是右栏所需的 `RouteLineItem`（`RouteLinesSheet.tsx` 的权威形状
+   * `{ code, kind, label, color }`）——**字段映射在这里一次做完**，
+   * 宿主只需 `onOpenLine={rv.pickLine}`，不必自己拼、也不必知道 `RouteSuggestion` 长什么样。
+   *
+   * ⚠️ 定义成**可选**：必填会逼收藏页等其他调用方实现一个空壳；
+   *   未接线时退化为旧的 `/line/[code]` 深链（深链页保留给外部分享，行为不变）。
+   */
+  onOpenLine?: (line: RouteLineItem) => void;
+  /**
+   * ★ v3.6.1：线路视图是否已打开（宿主传 `!!rv.picked`）。
+   *
+   * 为 `true` 时本层**不渲染但保持挂载** —— 地图让出来给线路走向，而 `q`/`resp`
+   * 这些搜索中间态一个都不丢；线路视图一关（`rv.picked` 变 null）本层立刻回到屏幕，
+   * 搜索词与结果原样还在（这就是「返回后搜索面板还在」的实现方式，不依赖 sessionStorage）。
+   *
+   * ⚠️ 只有「宿主给了 `onOpenLine` 却没给本 prop」时才走兜底：点完线路立即 `onBack()`
+   *   收起本层（并行开发期的保护，否则用户看到全屏搜索页顶在刚打开的线路上）。
+   *   非 `undefined`（无论 true/false）时**一律由宿主决定收放**，本组件不越权关层。
+   *
+   * ⚠️⚠️ **硬约束（宿主必须遵守，写在这里是因为它不在本文件内）**：
+   *   宿主必须让 `stage === "search"` **保持不变**。挂载条件是
+   *   `{stage === "search" && <SearchSheet/>}`（`NavShell`）——**不要**用
+   *   `setStage("map")` / `setStage("panel")` 来"收起"本层：那会**卸载**组件，
+   *   `q`/`resp` 归零，与 `lineOpen` 的设计直接冲突。
+   *   ⚠️ 破坏它**不会报错、不会白屏**，表现只是"返回后搜索词丢了"——典型的静默回归，
+   *   只能靠这条注释留给下一个人。
+   */
+  lineOpen?: boolean;
   /** 左上角返回（关闭全屏、回到半屏或地图） */
   onBack: () => void;
 }
@@ -177,19 +283,37 @@ function distMeters(a: { lng: number; lat: number }, b: { lng: number; lat: numb
 }
 
 /**
- * 线路结果行（AC-40 视觉规格 · 设计 §2.8）
+ * 线路结果行（★ v3.6.1 结构重做 · 设计 §2.8）
  *
- * ── 三层结构 ────────────────────────────────────────────────────────────
- *   `.linechip`  主题色徽章：**列宽固定 72px** —— 否则 2 字的 `25` 与 4 字的 `石排灣線`
- *                会把右侧名称左缘推得忽左忽右（同屏多行时非常明显）。
- *                底色 = 该线路主题色（`colors[code]`），字色用 `chipInkOf()` 按底色算
- *                （浅底上白字只有 1.x:1，必须自适应；死带会加深底色）。
- *   `.line-result__name`   线路显示名（线路本身即"名字"，不再重复编号）
- *   `.line-result__sub`    「查看全线站点」—— 承担"点了会跳页"的预告（AC-40 必需）
+ * ── 行内从左到右（主人逐字口径：「『巴士线路』『50』」）──────────────────
+ *   `[类型标签]`  「巴士线路」/「轻轨线路」—— 与「公交站」「地点」同一个 `ResultTag`、
+ *                 同一个 `.ssheet__type`（同字号/同圆角/同内距/同分隔线）；
+ *   `[线路色标签]` 线路号/线名 —— `.linechip`，底色 = 该线 `routes.color`；
+ *   `[→]`          行尾提示"点了会打开"。
+ *   ⚠️ 行内**不放**说明文字：主人这一条只要求标签结构，多一段「在地图查看走向」
+ *      会把线路号挤离左侧、每行也更啰嗦 ⇒ 该句只作为 `aria-label` 给读屏。
+ *
+ * ── 颜色口径（留痕，防"以为需求漏做"）──────────────────────────────────
+ *   ★ 主人原话为「圆角**白字**」标签；此处按设计 §2.4 走 `chipInkOf()` **对比度自适应**
+ *     —— 深底白字、浅底转深字。纯白字在浅绿（如 `#93d50a`）上只有 1.x:1 不可读，
+ *     那才是缺陷；且 P0 明令复用既有取值函数、不得自造色表。
+ *
+ * ── 为什么复用 `.ssheet__item` 而不是另建行样式 ──────────────────────────
+ *   主人要求「样式与现有『公交站』『地点』一致（字号、颜色、**间距、分隔线**）」。
+ *   `.ssheet__item` 就是站点/地点行的本体（min-height 52 / padding 10 14 / gap 8 /
+ *   border-bottom 分隔线 / :active 反馈）⇒ 直接用它，分隔线天然对齐，零新增 CSS。
+ *   ⚠️ **不能**再叠 `.line-result`：它的 `border: 0` 会把分隔线抹掉。
  *
  * ── 无障碍 ──────────────────────────────────────────────────────────────
- *   整行是一个 `<button>`；`aria-label` 带上「查看…全线站点」，
- *   避免读屏只念出「26」这种两个字符的编号而不知所指。
+ *   整行是 `<button>`；行内已无说明文字 ⇒ `aria-label` 必须自带完整语意
+ *   （读屏只念「50」两个字符不知所指，也不知道点了会发生什么）；
+ *   线路号标签自身也带 `aria-label`（如「50 巴士线路」）。
+ *
+ * ⚠️ **根元素必须是原生 `<button>`（或 `<a>`），不得改成 `<div role="button">`**。
+ *   hover / 按压回弹 / `focus-visible` / 触摸态四条反馈**全部**来自 `globals.css` 的
+ *   `button` 原语（`:443` / `:449` / `:436`）与 `.ssheet__item:active`（`:4371`）；
+ *   换成 div + role 后四态**一条都不生效**，而且**不报错、lint 也不报** —— 用户只会
+ *   觉得"这张卡点不动"。（判据：行级可点击只查标签，不查样式。）
  */
 function LineResultRow({
   r,
@@ -202,24 +326,37 @@ function LineResultRow({
 }) {
   const ink = chipInkOf(color);
   const chip = chipTextOf(r);
+  const tagKind: ResultTagKind = r.kind === "lrt" ? "lrt_route" : "bus_route";
+  const tagText = TAG_TEXT[tagKind];
+  /** 读屏整句：巴士说「50 路巴士线路」，轻轨不能套「路」（「氹仔线路轻轨线路」不通） */
+  const rowLabel = r.kind === "lrt" ? `${chip} 轻轨线路，在地图上查看走向` : `${chip} 路巴士线路，在地图上查看走向`;
   return (
-    <button
-      type="button"
-      className="line-result"
-      onClick={() => onOpen(r)}
-      aria-label={`${chip} 线路 · 查看全线站点`}
-    >
+    <button type="button" className="ssheet__item" onClick={() => onOpen(r)} aria-label={rowLabel}>
+      <ResultTag kind={tagKind} />
       <span
         className="linechip"
-        style={{ background: ink.bg, color: ink.ink }}
+        style={{
+          background: ink.bg,
+          color: ink.ink,
+          /**
+           * ★ v3.6.1：`globals.css` 里 `.linechip` 的 **72px 固定列宽**是为**旧布局**服务的
+           *   —— 那时线路号右边还有一列「线路名」，固定宽度才能保证名称左缘对齐。
+           *   新布局中线路号是**紧跟类型标签的同行小标签**（`[巴士线路][50]`），
+           *   行内已无名称列 ⇒ 固定列宽失去意义，改按内容撑开（34px 与设计的下限一致）；
+           *   `marginRight:auto` 把行尾的箭头推到右边，避免整行挤在左侧。
+           *   ⚠️ 只覆盖尺寸，圆角/字重/`data-chip-ink` 描边一律沿用既有 `.linechip`。
+           */
+          flex: "0 0 auto",
+          width: "auto",
+          minWidth: "34px",
+          padding: "0 8px",
+          marginRight: "auto",
+        }}
         data-chip-ink={ink.tone}
+        aria-label={`${chip} ${tagText}`}
       >
         {ink.dot && <span className="linechip__dot" style={{ background: ink.dot }} aria-hidden="true" />}
         <span className="linechip__text">{chip}</span>
-      </span>
-      <span className="line-result__main">
-        <span className="line-result__name">{r.name}</span>
-        <span className="line-result__sub">查看全线站点</span>
       </span>
       <Icon name="forward" size={16} />
     </button>
@@ -235,6 +372,8 @@ export default function SearchSheet({
   quickPairs,
   onPick,
   onPickQuick,
+  onOpenLine,
+  lineOpen,
   onBack,
 }: SearchSheetProps) {
   const router = useRouter();
@@ -398,15 +537,35 @@ export default function SearchSheet({
   const lrtRoutes = routeHits.filter((r) => r.kind === "lrt");
 
   /**
-   * ★ v3.6.0（AC-41）：线路结果 **不填起终点**，跳独立全景页。
-   *   · 明确**不**走旧 `/routes`（已下线）；
-   *   · 明确**不**调 `onPick`（否则会把线路当成目的地塞进导航 —— AC-41 明令禁止）。
-   *   `useRouter().push` ⇒ 真实 URL 变化，浏览器返回键可回到本页（配合 AC-45 恢复搜索态）。
+   * ★ v3.6.1：线路结果 **不填起终点**（AC-41：不得把一条线路当成目的地塞进导航），
+   * 且**不再跳页** —— 就地交给宿主在首页右栏打开（URL 不变）。
+   *
+   * 两条分支：
+   *   ① `onOpenLine` 已接线 ⇒ 把 `RouteSuggestion` **显式映射**成右栏的 `RouteLineItem`
+   *      后交出去（`kind` 用后端的 `r.kind`，**不从前缀猜**；`label` 复用 `chipTextOf`；
+   *      `color` 取 `colors[code]`，缺色时给兜底色 —— **绝不把 undefined 塞进去**，
+   *      `NavBrandBar` 是 `style={{ background: picked.color }}`，空串/undefined 会让
+   *      白字落在透明底上（等于看不见））。
+   *      **本分支不写 `SS_RETURN`**：那个标记的语义是"从 `/line` 返回时重开搜索层"
+   *      （`NavShell` mount 时消费），不跳页还写会留下脏标记，下次刷新莫名弹搜索层。
+   *   ② 未接线 ⇒ 保留旧的深链 `/line/[code]`（独立页留给外部分享链接）：
+   *      跳转前打 `SS_RETURN` 一次性标记，返回时 `NavShell` 会重新打开本层。
    */
   function openLine(r: RouteSuggestion) {
     const code = (r.code ?? r.name ?? "").trim();
     if (!code) return;
-    // 线路码可能是中文（`LRT-氹仔线`）⇒ 必须编码，否则 URL 里出现裸中文（部分代理会 400）
+    if (onOpenLine) {
+      onOpenLine({
+        code,
+        kind: r.kind,
+        label: chipTextOf(r),
+        color: colors?.[code] || "var(--primary)",
+      });
+      // 并行开发期兜底：宿主只接了回调、没接 `lineOpen` ⇒ 收起本层，否则全屏搜索页会盖住刚打开的线
+      if (lineOpen === undefined) onBack();
+      return;
+    }
+    // 兜底：深链。线路码可能是中文（`LRT-氹仔线`）⇒ 必须编码，否则 URL 里出现裸中文（部分代理会 400）
     try {
       window.sessionStorage.setItem(SS_RETURN, "1");
     } catch {
@@ -417,6 +576,17 @@ export default function SearchSheet({
   /** 另一个端点（非编辑中的那个）—— 用于双输入条时显示 */
   const other = editing === "from" ? dest : from;
   const otherLabel = other?.label ?? (editing === "from" ? "（未选）" : "我的位置");
+
+  /**
+   * ★ v3.6.1：线路视图打开期间 **什么都不渲染**，但**组件保持挂载**（关键）。
+   *
+   * · 必须"不渲染"：`.ssheet` 是 `position: fixed; inset: 0; z-index: 60` 的全屏层，
+   *   留着它用户根本看不到地图上的线路走向（表现就是"点了没反应"）；
+   * · 必须"保持挂载"：一卸载 `q`/`resp`/`busy` 全部归零 —— 而主人要求
+   *   「从线路视图返回后，搜索面板与搜索词还在」。不卸载 ⇒ 天然满足，零持久化；
+   * · 位置必须在**所有 hooks 之后**（否则 hooks 顺序会随 `lineOpen` 变化 ⇒ React 报错）。
+   */
+  if (lineOpen) return null;
 
   return (
     <section className="ssheet" role="dialog" aria-modal="true" aria-label="搜索地点">
@@ -480,7 +650,9 @@ export default function SearchSheet({
             {/* ★ 附近站点推荐 —— 产品口径：「中间是推荐条（巴士轻轨站点，无其他）」 */}
             {nearby.length > 0 && (
               <div className="ssheet__sect">
-                <p className="ssheet__sect-title t-label">附近站点</p>
+                <p className="ssheet__sect-title t-label" role="heading" aria-level={3}>
+                  附近站点
+                </p>
                 {nearby.map((s) => (
                   <button
                     key={s.code}
@@ -493,7 +665,7 @@ export default function SearchSheet({
                       )
                     }
                   >
-                    <span className="ssheet__type ssheet__type--station">公交站</span>
+                    <ResultTag kind="station" />
                     <span className="ssheet__main">
                       <span className="ssheet__name">{`${s.code} ${s.name}`.trim()}</span>
                     </span>
@@ -504,7 +676,9 @@ export default function SearchSheet({
             )}
             {quickPairs.length > 0 && (
               <div className="ssheet__sect">
-                <p className="ssheet__sect-title t-label">常用</p>
+                <p className="ssheet__sect-title t-label" role="heading" aria-level={3}>
+                  常用
+                </p>
                 {quickPairs.map((f) => (
                   <button
                     key={f.id}
@@ -537,17 +711,18 @@ export default function SearchSheet({
           <div className="ssheet__list">
             {/*
               ★★ v3.6.0（AC-40）：**线路分区在最顶部**，且与地点/站点分区**互不混排**。
-              ── 三条硬约束 ──────────────────────────────────────────────────
-                ① 分区标题（「巴士线路」/「轻轨线路」）只在区头出现**一次**；
-                ② 每行 = 主题色徽章（列宽固定 72px）+ 名称 + 副标题「查看全线站点」；
-                ③ **无线路命中 ⇒ 整个分区不渲染**（AC-43：不留空标题、不报错）。
+              ★★ v3.6.1：**线路区不再有独立分区标题** ——
+                主人原话是「搜索后**左侧的标签**不是线路标签，而是『巴士线路』…而线路标签在
+                **它的右边**」⇒ 他要的是**行内**结构 `[巴士线路][50]`。行内已经说了类型，
+                再在上面加一层同名标题就是同屏同一个词出现两次（噪音）⇒ 两个 `<h3>` 已删，
+                巴士/轻轨的区分完全由行内标签承担，组间靠 `.ssheet__sect--routes` 的上内距留白。
+                线路区与「地点/站点」区之间**仍有明确分界** —— 见下方 `--split` 那条分隔线。
               ── 为什么线路不能和站点混排 ────────────────────────────────────
-                线路行的**动作**是「跳全景页看这条线」，站点行是「设为目的地」。
+                线路行的**动作**是「在地图上打开这条线」，站点行是「设为目的地」。
                 混排会让两件不同的事长得一样，用户点了线路以为选了终点（AC-41 明令禁止）。
             */}
             {busRoutes.length > 0 && (
               <div className="ssheet__sect ssheet__sect--routes" data-route-sect="bus">
-                <p className="ssheet__sect-title t-label">巴士线路</p>
                 {busRoutes.map((r) => (
                   <LineResultRow key={`r-bus-${r.code}`} r={r} color={colors?.[r.code]} onOpen={openLine} />
                 ))}
@@ -555,16 +730,20 @@ export default function SearchSheet({
             )}
             {lrtRoutes.length > 0 && (
               <div className="ssheet__sect ssheet__sect--routes" data-route-sect="lrt">
-                <p className="ssheet__sect-title t-label">轻轨线路</p>
                 {lrtRoutes.map((r) => (
                   <LineResultRow key={`r-lrt-${r.code}`} r={r} color={colors?.[r.code]} onOpen={openLine} />
                 ))}
               </div>
             )}
 
-            {/* 地点 / 站点分区：有线路分区时加分隔线（视觉上明确"这是另一类结果"） */}
+            {/*
+              线路区 ⇄ 地点/站点区 的分界线（既有 class，未新增样式）。
+              ★ v3.6.1：文案保持「地点 / 站点」不变 —— 它同时承担"另一类结果开始了"的分隔职责。
+            */}
             {(routeHits.length > 0 && (results.length > 0 || pending.length > 0)) && (
-              <p className="ssheet__sect-title ssheet__sect-title--split t-label">地点 / 站点</p>
+              <p className="ssheet__sect-title ssheet__sect-title--split t-label" role="heading" aria-level={3}>
+                地点 / 站点
+              </p>
             )}
 
             {results.map((r, i) => {
@@ -573,7 +752,7 @@ export default function SearchSheet({
               const addr = cleanAddr(r.address);
               return (
                 <button key={`${r.name}-${i}`} type="button" className="ssheet__item" onClick={() => pick(r)}>
-                  <span className={`ssheet__type ssheet__type--${r.kind}`}>{TYPE_LABEL[r.kind] ?? "地点"}</span>
+                  <ResultTag kind={r.kind} />
                   <span className="ssheet__main">
                     <span className="ssheet__name">{displayName(r)}</span>
                     {addr && <span className="ssheet__addr t-muted">{addr}</span>}
@@ -591,9 +770,7 @@ export default function SearchSheet({
                 onClick={() => void pickPending(p.name)}
                 title="点「搜索」获取精确位置"
               >
-                <span className={`ssheet__type ssheet__type--${p.targetKind}`}>
-                  {TYPE_LABEL[p.targetKind as PoiKind] ?? "站点"}
-                </span>
+                <ResultTag kind={tagKindOfPending(p)} />
                 {p.targetKind === "route" ? (
                   <RouteStack codes={[p.name]} colorOf={(c) => colors?.[c] ?? null} />
                 ) : (

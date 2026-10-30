@@ -135,6 +135,14 @@ export interface HeadwayHit {
   dayType: string;
   /** true = 该时段跨午夜（`toMin > 1440`） */
   crossesMidnight: boolean;
+  /**
+   * ★ 需求 7（换乘盲区修正）：命中时段的**起止分钟**（含跨午夜时 `toMin > 1440`）。
+   *   供 `transfer-slack.ts` 计算「到达点距时段尾的余量」——桶内唯一可用的时序信息。
+   */
+  fromMin: number;
+  toMin: number;
+  /** 命中时实际用来比对的「当日分钟」（= `nowMin` 或 `nowMin + 1440`，与 `toMin` 同域） */
+  arrivalMin: number;
 }
 
 /**
@@ -179,6 +187,9 @@ export function headwayAt(
             span: `${row.timeFrom}-${row.timeTo}`,
             dayType: row.dayType,
             crossesMidnight: row.toMin > 1440,
+            fromMin: row.fromMin,
+            toMin: row.toMin,
+            arrivalMin: t,
           };
         }
         break;
@@ -219,6 +230,28 @@ export const TRANSFER_WAIT_HI_WEIGHT = 2 / 3;
 export function conservativeWaitMin(hit: Pick<HeadwayHit, "lo" | "hi">): number {
   return (hit.lo + 2 * hit.hi) / 3;
 }
+
+/**
+ * ★ v3.6.1（需求 7 · 档 ③）：**连班距中位数都拿不到**时的换乘余量取值。
+ *
+ * ── 三档取值（`model.ts` 巴士第 2 段 slackMin，与 `07` 文档 §h.3 对齐）────────
+ *   | 档 | 数据情况 | `waitMin`（进 totalMin） | `slackMin`（只进 cost/风险项） |
+ *   |----|----------|--------------------------|--------------------------------|
+ *   | ①  | `headwayAt` 命中时段行 | `(lo + 2·hi)/3` | `max(0, 2·lo − hi)` |
+ *   | ②  | 未命中、但中位数可用 | 该线/全表中位数 | `0`（区间丢了 ⇒ 按最不确定） |
+ *   | ③  | 连中位数都没有 | 0（且卡面明示「等车时间暂无数据」） | **本常量** |
+ *
+ * ── 为什么档 ③ 不取 `null`（不判 `yes`）───────────────────────────────────
+ *   若档 ③ 取 `null`，风险项为 0 ⇒ 比档 ②（`0` ⇒ `tight`）**更宽松**，等于
+ *   「数据越少越不告警」—— 与「不确定时按风险处理」的方向相反，且它唯一的托底是
+ *   一句卡面文案（删文案 / 换组件渲染，静默乐观就回来了）。
+ *   ⇒ 档 ③ 也走 `tight` 侧。`null` 只保留给「同场换乘不写该字段（`undefined`）」与
+ *   「字段缺失」这两种**本就不该有风险信号**的情形。
+ *
+ * ⚠️ **取值待测量**（`scripts/compare-slack-impact.ts` 的档 ③ 占比 + top3 翻转组数），
+ *   现默认 `0`（= 与档 ② 同口径）。改这里会同时改 cost 与排序，属可审计常量。
+ */
+export const SLACK_NO_DATA = 0;
 
 /**
  * 班距中位数（分钟）——`headwayAt` 未命中时的**数据驱动降级**。

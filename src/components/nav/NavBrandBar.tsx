@@ -18,8 +18,11 @@ import RefreshButton from "./RefreshButton";
 import { COOLDOWN_VEHICLE_SEC } from "./useCooldown";
 
 export interface NavBrandBarProps {
-  /** 当前查看的线路（null = 未进入路线查看模式） */
-  picked: { label: string; color: string; kind: "bus" | "lrt" } | null;
+  /**
+   * 当前查看的线路（null = 未进入路线查看模式）。
+   * ★ v3.6.1：加 `code` —— 线路标签旁新增「全部站点」入口需要它拼 `/line/[code]` 深链。
+   */
+  picked: { label: string; color: string; kind: "bus" | "lrt"; code?: string } | null;
   canReverse: boolean;
   cooldownSec: number;
   onReverse: () => void;
@@ -30,6 +33,13 @@ export interface NavBrandBarProps {
   onLocate: () => void;
   /** ★ v3.2.0（需求 10 / AC-84）：导航语境 ⇒ 隐藏「查看路线」与「M Map logo」 */
   navMode?: boolean;
+  /**
+   * ★ v3.6.1：「查看全部站点」入口（跳 `/line/[code]` 深链页）。
+   *   为什么需要：搜索结果改成"首页地图内打开线路"后，`/line/[code]` 只剩外部分享链接可达，
+   *   成了孤儿页；这里给一个显式入口，深链页与 `SS_RETURN` 一并保留。
+   *   不传 ⇒ 不渲染（收藏页等无地图上下文的调用方不受影响）。
+   */
+  onOpenAllStops?: (code: string) => void;
 }
 
 export default function NavBrandBar({
@@ -42,6 +52,7 @@ export default function NavBrandBar({
   onOpenLines,
   onLocate,
   navMode = false,
+  onOpenAllStops,
 }: NavBrandBarProps) {
   return (
     <div className="nav-brandbar">
@@ -62,6 +73,20 @@ export default function NavBrandBar({
         {picked && (
           <span className="nav-linechip" style={{ background: picked.color }}>
             <span className="nav-linechip__text">{picked.label}</span>
+            {/* ★ v3.6.1「全部站点」：复用 chip 内小键的视觉规格（不新造样式）。
+                导航态不提供 —— 那会中途跳出整条导航；退出线路视图后入口仍在。 */}
+            {picked.code && onOpenAllStops && !navMode && (
+              <button
+                type="button"
+                className="nav-linechip__x"
+                data-open-all-stops="on"
+                aria-label={`查看 ${picked.label} 全部站点`}
+                title="查看全部站点"
+                onClick={() => onOpenAllStops(picked.code as string)}
+              >
+                <Icon name="list" size={16} />
+              </button>
+            )}
             <button
               type="button"
               className="nav-linechip__x"

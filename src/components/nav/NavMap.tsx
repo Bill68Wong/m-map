@@ -45,10 +45,14 @@ import {
 } from "./nav-map-fit";
 import { drawOverview } from "./nav-map-overview";
 import {
+  clearWalkGhosts,
   clearWalkLayers,
   ensureWalkLayers,
   readWalkStyle,
   splitStepByRatio,
+  syncWalkGhosts,
+  type WalkGhost,
+  type WalkGhostRec,
   type WalkLayers,
 } from "./nav-map-walk";
 import type { WalkStep } from "@/lib/walk/walk-shared";
@@ -209,6 +213,25 @@ export interface NavMapProps {
   /** 步行线的重画版本号（ratio 变化但对象引用不变时也能刷新） */
   walkVersion?: number;
   /**
+   * ★ P0（2026-10-31）：**上层是否已有可用定位**（`!!myPos`）。
+   *
+   * 高德 `Geolocation` 失败（桌面浏览器常见：走 IP 粗定位、或 key/域名未授权）时，
+   * 本组件会挂「无法定位 · 请手动选择出发点」。但上层还有 `useUserFix` 的浏览器 GPS
+   * 兜底 —— 此时蓝点在正确位置、`出发` 可点、能正常规划，
+   * **再说"无法定位"就是假话**（与"缺口要诚实"正好相反）。
+   * ⇒ 有外部位置时**什么都不说**，真定不到才说。不做"定位较慢"之类的中性话术。
+   */
+  hasExternalPos?: boolean;
+  /**
+   * ★ 一条导航流：**非当前段的步行走廊**（`nav-map-walk.ts#syncWalkGhosts`）。
+   *
+   * 为什么与 `walk` 分开：`walk`（三线）只在「正在跟随这一段」时存在，
+   *   而末段/首段的**完整走廊**要在整条导航过程中一直画着（否则乘车途中看不到
+   *   「下车后还要走多远」）。两者互斥（当前段走三线、其余段走 ghost），不重复画。
+   * `null` / `[]` ⇒ 0ms 全部移除。
+   */
+  walkGhosts?: WalkGhost[] | null;
+  /**
    * ★ 2026-09-25：**导航追踪 · 用户定位蓝点（人）**。
    *   非空 ⇒ 画蓝点（原生 marker z128 < 车辆 130）；`null` ⇒ 移除（拒权/无信号/上车重合）。
    */
@@ -259,6 +282,8 @@ export default function NavMap({
   overview = null,
   walk = null,
   walkVersion = 0,
+  hasExternalPos = false,
+  walkGhosts = null,
   userFix = null,
   traveled = null,
   lineStops = null,
@@ -289,6 +314,8 @@ export default function NavMap({
   const stationMarkersRef = useRef<Map<string, any>>(new Map());
   /** ★ v3.6.0 S5：步行三线（done/now/ahead）的 Polyline 句柄 */
   const walkLayersRef = useRef<WalkLayers>({ donePath: null, nowPath: null, aheadPath: null });
+  /** ★ 一条导航流：非当前段的步行走廊（ghost，按 key 增量 diff） */
+  const walkGhostRef = useRef<Map<string, WalkGhostRec>>(new Map());
   /**
    * ★ 2026-09-22 路线查看模式：
    *   · `routePolylinesRef` 当前画的线（退出时逐个 remove）；
@@ -357,6 +384,14 @@ export default function NavMap({
 
   const [phase, setPhase] = useState<"loading" | "ready" | "failed">("loading");
   const [note, setNote] = useState<string>("");
+  /**
+   * ★ P0：**定位失败用布尔状态，不用文案反查**。
+   *   之前是失败时直接 `setNote("无法定位…")` ⇒ 一旦 `hasExternalPos` 稍后才变 true
+   *   （高德先失败、浏览器 GPS 后到，实测就是这个顺序），那句提示会**永久挂着**，
+   *   而页面其实完全可用 —— 用户看到"无法定位"却能正常出发。
+   *   ⇒ 失败只记布尔；展示文案在渲染处**派生**（条件实时求值，位置一到立刻消失）。
+   */
+  const [locateFailed, setLocateFailed] = useState(false);
   const [locating, setLocating] = useState(false);
 
   /**
@@ -417,6 +452,7 @@ export default function NavMap({
           const pos = { lng: result.position.lng, lat: result.position.lat };
           locatedRef.current = true;
           lastLocatePosRef.current = pos;
+          setLocateFailed(false); // ★ P0：定位成功 ⇒ 失败标记归零（与下方 setNote("") 同源）
           canvasRef.current?.removeAttribute("data-locate-outside");
           // ★ 本批：GPS 实时蓝点（UserDotLayer）存在时，**不再创建 mepin**（单一点，AC-40/41）。
           if (!userFix && mapRef.current) {
@@ -435,8 +471,14 @@ export default function NavMap({
           else pendingLocateRef.current = { pos, focus }; // 边界未就绪 → 暂存，就绪后再决定
           onLocate?.(pos);
         } else {
-          // ★ 定位失败 → 停在澳门视野（不重设视角）+ 提示（§D.1）
-          setNote("无法定位 · 请手动选择出发点");
+          /**
+           * ★ 定位失败 → 停在澳门视野（不重设视角）。
+           * ★ P0：只记**布尔**，不写文案 —— 展示在渲染处派生（见 `noteText`）。
+           *   因为高德可能先失败、浏览器 GPS 后到（实测就是这个顺序），
+           *   若在此写死文案，`hasExternalPos` 变 true 后那句"无法定位"会永久挂着，
+           *   而页面其实完全可用 ⇒ 用户看到"无法定位"却能出发 = 假话。
+           */
+          setLocateFailed(true);
           onLocate?.(null);
         }
       });
@@ -1363,6 +1405,21 @@ export default function NavMap({
    *   （不做淡出）：把"步行线与乘车彩段共存"的窗口直接消掉，避免踩 z 层级的坑。
    * · 切分与样式全在 `nav-map-walk.ts`（纯函数，可对拍）——本 effect 只管生命周期。
    */
+  /**
+   * ★ P0（2026-10-31）：`walk` 是调用方**每渲染新建的对象字面量**
+   *   （`NavShell.tsx` `walk={{ steps, currentIdx, ratio, donePath }}`）⇒
+   *   若把 `walk` 放进 effect 依赖，就是「每次渲染都重画」：
+   *   先 `clearWalk`（remove 三条）再重建，配合空 `path` ⇒ AMap 抛 `Polyline path`。
+   *   这正是本文件注释早先写的"不把整个 walk 对象塞进依赖"——代码与注释不一致，现修正。
+   *   ⇒ 几何本体从 **ref** 读，依赖只用**原始值**（含 `walkVersion` 兜"同值改内容"）。
+   */
+  const walkRef = useRef(walk);
+  walkRef.current = walk;
+  const walkLive = !!walk && walk.steps.length > 0;
+  const walkStepsLen = walk?.steps.length ?? 0;
+  const walkCurIdx = walk?.currentIdx ?? -1;
+  const walkRatio = walk?.ratio ?? 0;
+
   useEffect(() => {
     const map = mapRef.current;
     const AMap = amapRef.current;
@@ -1372,39 +1429,151 @@ export default function NavMap({
       walkLayersRef.current = clearWalkLayers(map as never, walkLayersRef.current);
     };
 
-    if (!walk || !walk.steps.length) {
+    const w = walkRef.current;
+    if (!w || !w.steps.length) {
       clearWalk();
       canvasRef.current?.removeAttribute("data-walk-paths");
+      canvasRef.current?.removeAttribute("data-walk-layers");
       return;
     }
 
     const style = readWalkStyle(document.documentElement);
-    walkLayersRef.current = ensureWalkLayers(
-      map as never,
-      (AMap.Polyline as unknown) as never,
-      style,
-      walkLayersRef.current,
-    );
-    const L = walkLayersRef.current;
-
     /**
      * `donePath`：**累积轨迹**（调用方给），不参与切分；偏航重算后仍保留。
      * `nowPath`：当前步按 `ratio` 切开后的**后半**（还没走的那截）。
      * `aheadPath`：当前步之后的所有步（整段）。
      */
-    const { remaining } = splitStepByRatio(walk.steps[walk.currentIdx], walk.ratio);
-    const ahead = walk.steps.slice(walk.currentIdx + 1).flatMap((s) => s.polyline);
+    const idx = Math.max(0, Math.min(w.currentIdx, w.steps.length - 1));
+    const { remaining } = splitStepByRatio(w.steps[idx], w.ratio);
+    const ahead = w.steps.slice(idx + 1).flatMap((s) => s.polyline);
+    const paths = { done: (w.donePath ?? []) as [number, number][], now: remaining, ahead };
 
-    L.donePath?.setPath((walk.donePath ?? []) as never);
-    L.nowPath?.setPath(remaining as never);
-    L.aheadPath?.setPath(ahead as never);
+    // ★ 建层时带 seed ⇒ 空几何的层**不会被创建**（避免 `Polyline path`）
+    let ensureErr = "";
+    try {
+      walkLayersRef.current = ensureWalkLayers(
+        map as never,
+        (AMap.Polyline as unknown) as never,
+        style,
+        walkLayersRef.current,
+        paths,
+      );
+    } catch (e) {
+      // ★ 自检：建层失败必须在钩子里可见（否则真机上表现为"没线"却查不出原因）
+      ensureErr = String((e as Error)?.message ?? e).slice(0, 80);
+    }
+    const L = walkLayersRef.current;
+
+    /**
+     * ★ 增量 `setPath`（**不再先清后建**）+ **空则移除**：
+     *   高德对空 `path` 直接抛错；且"最后一步的 ahead"必然为空数组 ——
+     *   这是 `Polyline path` 报错的主要来源（一次导航可刷出数百条）。
+     */
+    const apply = (layer: typeof L.donePath, path: [number, number][]) => {
+      if (!layer) return null;
+      if (path.length < 2) {
+        map.remove(layer as never);
+        return null;
+      }
+      layer.setPath(path as never);
+      return layer;
+    };
+    L.donePath = apply(L.donePath, paths.done);
+    L.nowPath = apply(L.nowPath, paths.now);
+    L.aheadPath = apply(L.aheadPath, paths.ahead);
+
     canvasRef.current?.setAttribute(
       "data-walk-paths",
-      `${(walk.donePath ?? []).length}/${remaining.length}/${ahead.length}`,
+      `${paths.done.length}/${remaining.length}/${ahead.length}`,
     );
 
-    return clearWalk;
-  }, [walk, walkVersion]);
+    /**
+     * ★ 真机自检钩子（`canvas[data-walk-layers]`，2026-10-31）：
+     *   回答"步行线到底是**没画**还是**画了看不见**"—— 这两者修法完全不同，必须先分清。
+     *
+     * 取值格式（每层 `层名:点数@色/w宽/z层级`，缺失层进 `missed:`，建层异常进 `err:`）：
+     *   `done:2@#8c93a0/w5/z69 | now:6@#0b6e4f/w7/z73 | ahead:9@#0b6e4f/w5/z70`
+     *   `… | missed:done,ahead`            ← 该画（≥2 点）但没建/被移除
+     *   `… | err:Get property 'add' …`     ← ensureWalkLayers 抛错（AMap 层面失败）
+     *
+     * ⚠️ 只读，不参与任何绘制判定；加这个钩子**没有改动任何绘制逻辑**。
+     */
+    const layerDesc = (
+      name: string,
+      layer: typeof L.donePath,
+      path: [number, number][],
+      st: { color: string; weight: number; z: number },
+    ): string | null => (layer ? `${name}:${path.length}@${st.color}/w${st.weight}/z${st.z}` : null);
+    const parts = [
+      layerDesc("done", L.donePath, paths.done, style.done),
+      layerDesc("now", L.nowPath, paths.now, style.now),
+      layerDesc("ahead", L.aheadPath, paths.ahead, style.ahead),
+    ].filter((s): s is string => !!s);
+    const missed = (["done", "now", "ahead"] as const).filter((name) => {
+      const path = paths[name];
+      const layer = name === "done" ? L.donePath : name === "now" ? L.nowPath : L.aheadPath;
+      return path.length >= 2 && !layer; // 该画但没画出来
+    });
+    const wl = [...parts, missed.length ? `missed:${missed.join(",")}` : "", ensureErr ? `err:${ensureErr}` : ""]
+      .filter(Boolean)
+      .join(" | ");
+    canvasRef.current?.setAttribute("data-walk-layers", wl);
+    // ⚠️ 不再 `return clearWalk`：cleanup 会造成"每次依赖变化先 remove 再重建"。
+    //    卸载清理由下方独立的 unmount effect 负责。
+  }, [walkLive, walkStepsLen, walkCurIdx, walkRatio, walkVersion]);
+
+  /** 卸载兜底：三线只在卸载时清一次（正常路径走增量 setPath / 空则 remove） */
+  useEffect(() => {
+    return () => {
+      const map = mapRef.current;
+      if (map) walkLayersRef.current = clearWalkLayers(map as never, walkLayersRef.current);
+    };
+  }, []);
+
+  /**
+   * ★ 一条导航流：**非当前段的步行走廊**（ghost）。
+   *
+   * 与上面三线 effect **各自独立**：三线只在「正在跟随这一段」时存在，ghost 覆盖
+   *   「其余段」（未走的绿细虚线 / 已走完的灰细虚线）。两者由调用方保证互斥
+   *   （`NavShell` 不把当前跟随段同时放进来），所以不会在同一段上叠两遍。
+   * 依赖 `walkGhosts` 引用（调用方 `useMemo` 稳定）+ `walkVersion`（同引用改内容也能刷新）。
+   */
+  useEffect(() => {
+    const map = mapRef.current;
+    const AMap = amapRef.current;
+    if (!map || !AMap) return;
+
+    const clear = () => {
+      walkGhostRef.current = clearWalkGhosts(map as never, walkGhostRef.current);
+      canvasRef.current?.removeAttribute("data-walk-ghosts");
+    };
+
+    if (!walkGhosts || !walkGhosts.length) {
+      clear();
+      return;
+    }
+
+    const style = readWalkStyle(document.documentElement);
+    walkGhostRef.current = syncWalkGhosts(
+      map as never,
+      (AMap.Polyline as unknown) as never,
+      style,
+      walkGhostRef.current,
+      walkGhosts,
+    );
+    canvasRef.current?.setAttribute("data-walk-ghosts", String(walkGhostRef.current.size));
+
+    /* ⚠️ **不返回清理函数**：本 effect 的价值就是「增量 diff、不重建折线」，
+       每次依赖变化都先清后建会闪一下（三线 effect 那样做是因为它每帧都重画）。
+       离场时由上面的 `clear()` 分支与 `map.destroy()` 负责，无泄漏。 */
+  }, [walkGhosts, walkVersion]);
+
+  /**
+   * ★ P0：最终展示的提示文案 = 通用 `note`（地图加载失败等）**或** 定位失败文案。
+   *   定位文案**在此实时求值**：`hasExternalPos` 一旦变 true（浏览器 GPS 到位）就自动消失。
+   *   ⇒ 不需要"定位恢复后清提示"的反向逻辑，也就不会再出现"永久挂着"。
+   */
+  const noteText = note || (locateFailed && !hasExternalPos ? "无法定位 · 请手动选择出发点" : "");
 
   return (
     <div
@@ -1460,7 +1629,7 @@ export default function NavMap({
           {note && <p className="t-label t-muted">{note}</p>}
         </div>
       )}
-      {phase === "ready" && note && <div className="nav-map__note t-label">{note}</div>}
+      {phase === "ready" && noteText && <div className="nav-map__note t-label">{noteText}</div>}
     </div>
   );
 }

@@ -25,6 +25,8 @@ export type PickedLine = RouteLineItem & { dir?: string };
 
 interface RawVehicle {
   plate: string;
+  /** ★ v3.6.1：车队编号（DSAT `busCode`）；报站失败时**整个键不存在** */
+  busCode?: string;
   lat: number;
   lng: number;
   status?: string;
@@ -123,6 +125,14 @@ export function useRouteVehicles(): UseRouteVehicles {
           : ((VALID_STATES.has(raw) ? raw : "unknown") as VehicleLite["status"]);
         return {
           plate: v.plate,
+          /**
+           * ★ v3.6.1：**必须显式拷贝**，否则角标永远不出现。
+           *   本 `map` 是「显式对象重建」—— 新字段不写进来就会被静默丢弃，
+           *   即使 `/api/route-vehicles` 已经在吐 `busCode`（`route.ts:254-262`）。
+           * ⚠️ 用 `?? undefined` 而不是 `?? null`：后端刻意让**缺失的键整体不存在**，
+           *   这里要保持同一语义（`undefined` 不会进 JSON，`null` 会被序列化出来）。
+           */
+          busCode: v.busCode ?? undefined,
           lat: v.lat,
           lng: v.lng,
           status,

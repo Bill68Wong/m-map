@@ -29,6 +29,7 @@
  *      理由：AC-50d 是硬约束（响应体不含内部信息），而高德 `info` 会带
  *      `INVALID_USER_KEY` 这类串 —— 等于把**密钥状态**告诉调用方。
  *      高德 `info` / `infocode` 只进服务端 `console.warn`（并区分「无路网 20003」与「服务/配置故障」）。
+ *   零距离/极短距离（< 1m）**不属错误**，返回 `ok:true` + 空 `steps`，不打上游。
  */
 import { NextRequest } from "next/server";
 import { fetchWalkingSteps } from "@/lib/amap/walking";
@@ -70,6 +71,32 @@ export async function GET(req: NextRequest) {
   if (fromLng === null || fromLat === null || toLng === null || toLat === null) {
     // 不区分"缺哪个参数"—— 参数名属内部契约，回给客户端只会变成泄漏面
     return errorResponse(API_ERROR.bad_request);
+  }
+
+  // 零距离/极短距离**不打上游**：高德对 from==to 返回错误，映射过来就是 500，
+  // 而业务语义上「不需要走」不是错误 ⇒ 直接回一条空路线，前端不必为此走 failed 分支。
+  const R = 6371000;
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const dLat = toRad(toLat - fromLat);
+  const dLng = toRad(toLng - fromLng);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(fromLat)) * Math.cos(toRad(toLat)) * Math.sin(dLng / 2) ** 2;
+  const distM = 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
+  if (distM < 1) {
+    return Response.json(
+      {
+        ok: true,
+        steps: [],
+        totalDistM: 0,
+        stepsTotalM: 0,
+        totalDurationS: 0,
+        distanceM: 0,
+        durationS: 0,
+        polyline: "",
+      },
+      { headers: { "Cache-Control": "no-store" } },
+    );
   }
 
   const r = await fetchWalkingSteps(

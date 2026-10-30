@@ -49,6 +49,17 @@ npm run db:backup      # 备份数据库（跑危险操作前先做）
 
 > 提交 PR 前：`npx tsc --noEmit` · `npm run lint` · `npm run build` **三条都要绿**。
 
+### 本地专属脚本（不在仓库里）
+
+以下两份脚本**刻意不入库**（`gitignore` 已排除），原因是它们含上游内部接入点与鉴权细节：
+
+| 文件 | 用途 | 缺了会怎样 |
+|---|---|---|
+| `scripts/track-collect.mjs` | 追踪式计时采集（`npm run track:collect` / `track:plan`） | 采集命令报错，网站运行不受影响 |
+| `db/sync-all-routes.ts` | 巴士线路站序全量同步（`npm run db:sync-all`） | 同步命令报错，网站运行不受影响 |
+
+两者都**不参与 Next.js 打包**（`scripts/`、`db/` 只在本地执行），所以移出不影响线上。换机器部署时向项目负责人索取，放到同名路径即可。
+
 ### ⚠️ 三条最容易踩的坑
 
 1. **本地连的就是线上生产库**（项目只有一套库）。改数据前先说一声，跑危险脚本要显式加 `--allow-prod`

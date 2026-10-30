@@ -39,10 +39,12 @@ export type Ring = [number, number][];
 export interface MacauDistrict {
   /** 澳门行政区边界环（GCJ-02，官方数据）—— 遮罩的「洞」 */
   rings: Ring[];
-  /**
-   * 横琴口岸澳方管辖区官方环（GCJ-02）—— 一并镂空用。
-   * 取不到时为空数组（此时该区域会被压暗，按 §1.4 ② 的口径）。
-   */
+/**
+ * 横琴口岸澳方管辖区官方环（GCJ-02）—— 一并镂空用。
+ * 取不到时为空数组（此时该区域会被压暗，按 §1.4 ② 的口径）。
+ * ★ v3.6.1：此处并入 `HENGQIN_PORT_RING`（手工环，高德无此 adcode）——
+ *   所以 district 成功分支下**永不为空**；「SDK 440499 拿不到」另有 console.warn。
+ */
   exclaveRings: Ring[];
   /** 外扩后的 bbox（覆盖澳门 + 横琴口岸澳方管辖区）—— 供 setLimitBounds / setBounds */
   bounds: MacauBounds;
@@ -54,6 +56,32 @@ export interface MacauDistrict {
 export const MACAU_ADCODE = "820000";
 /** 横琴口岸澳方管辖区 adcode（在高德行政区划里属广东） */
 export const HENGQIN_EXCLAVE_ADCODE = "440499";
+
+/**
+ * 横琴口岸澳方口岸区官方环（**手工数据，非高德行政区划**）。
+ *
+ * ⚠️ 高德行政区划**无此实体**（2026-10-30 实测：REST 搜「横琴口岸」「粤澳深度合作区」均 0 命中；
+ *    adcode 440499 只覆盖澳大横琴校区，其环 bbox `lat 22.1176~22.1340`，而横琴口岸 8 站
+ *    全部在 `lat 22.1407~22.1413` —— **环北侧外约 780m**，即便 440499 被镂空口岸依然被遮）。
+ *
+ * 来源与精度：
+ *   · 锚点 = 库内 DSAT 实测站坐标（`stations` 表自带 lat/lng）：
+ *     LRT-HQ `113.54486,22.140725` 与 T560/1~7，站 bbox `lng 113.5449~113.5463 · lat 22.1407~22.1413`；
+ *   · 顶点 = 公开地图目测级（**±100m**，只用于遮罩镂空，不用于任何计算/判定）；
+ *   · 标定日期 **2026-10-30**。若口岸围网范围变化需人工更新。
+ *
+ * ⚠️ 环**不要画大**：北/东边一旦盖到横琴内地一侧，遮罩会反过来把内地区域镂空（漏出非澳门区）。
+ */
+export const HENGQIN_PORT_RING: Ring = [
+  [113.54, 22.135],
+  [113.543, 22.135],
+  [113.548, 22.136],
+  [113.551, 22.138],
+  [113.552, 22.143],
+  [113.548, 22.147],
+  [113.542, 22.147],
+  [113.538, 22.144],
+];
 
 /**
  * 兜底矩形（DistrictSearch 失败时使用）。
@@ -68,8 +96,10 @@ export const MACAU_FALLBACK_BOUNDS: MacauBounds = {
 };
 
 /**
- * bbox 外扩量（度）。实测 bbox 已把横琴口岸澳方管辖区（≈113.53~113.56 / 22.11~22.13）
- * 包住，此处再外扩 0.012°（≈1.3km）留出余量，避免边缘站点/定位点被 `setLimitBounds` 卡边。
+ * bbox 外扩量（度）。实测 bbox 已把横琴口岸澳方管辖区包住
+ * （站 bbox `lng 113.5449~113.5463 · lat 22.1407~22.1413`，DSAT 实测；2026-10-30 起由
+ *  `HENGQIN_PORT_RING` 手工环并入 unionBounds，北到 `22.147`，仍在澳门主环 bbox `22.214` 之内），
+ * 此处再外扩 0.012°（≈1.3km）留出余量，避免边缘站点/定位点被 `setLimitBounds` 卡边。
  */
 const BBOX_PAD = 0.012;
 
@@ -276,14 +306,28 @@ export async function loadMacauDistrict(AMap: any, timeoutMs = DISTRICT_TIMEOUT_
     ]);
 
     if (!macauRings || !macauRings.length) {
+      // ⚠️ fallback 分支**故意不带** HENGQIN_PORT_RING：
+      //    遮罩绘制条件是 `dist.rings.length && fill`（NavMap）——rings 为空时整个遮罩不画
+      //    （data-map-mask=off，全亮），此时 exclaveRings 根本不会被消费；
+      //    若带了，将来谁把绘制条件改成「rings 空也画局部遮罩」，path=[outer,手工环]
+      //    会变成「全世界除横琴口岸外全暗」的灾难遮罩。
       return { rings: [], exclaveRings: [], bounds: { ...MACAU_FALLBACK_BOUNDS }, source: "fallback" };
     }
 
     const exclave = exclaveRings ?? [];
-    const merged = unionBounds(bboxOf(macauRings), bboxOf(exclave)) ?? MACAU_FALLBACK_BOUNDS;
+    // ★ 静默失效观测：440499 的环**只存在于 JS SDK**（REST 版 poly 为空，2026-10-30 实测）。
+    //   SDK 通道一旦拿不到（插件失败/超时/数据变更），澳大校区会重新被遮罩压暗且**不报错**
+    //   ——手工环只能救横琴口岸，救不了澳大。这里必须喊出来。
+    if (!exclave.length)
+      console.warn(
+        "[district] exclaveRings(SDK 440499) 为空——澳大横琴校区将无法镂空（横琴口岸由手工环兜底不受影响）",
+      );
+    // 手工环并入：镂空面 = 澳大校区（官方环）+ 横琴口岸（手工环）
+    const exclaveAll = [...exclave, HENGQIN_PORT_RING];
+    const merged = unionBounds(bboxOf(macauRings), bboxOf(exclaveAll)) ?? MACAU_FALLBACK_BOUNDS;
     return {
       rings: macauRings,
-      exclaveRings: exclave,
+      exclaveRings: exclaveAll,
       bounds: padBounds(merged),
       source: "district",
     };

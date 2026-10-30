@@ -23,6 +23,16 @@ import type { VehicleProgress } from "@/lib/nav/progress";
 /** `/api/route-vehicles` 单车（前端视图模型；`company` 由调用方从响应顶层注入） */
 export interface VehicleLite {
   plate: string;
+  /**
+   * ★ v3.6.1：**车队编号**（DSAT `busCode`，如 `HE380` / `E3246` / 纯数字 `2107`）。
+   *
+   * ⚠️ 语义是「**整个键可能不存在**」，不是 `null`、不是空串：
+   *    它来自报站接口，报站失败时该字段整体缺席（此时 `interval` 也是 null、`status="unknown"`）。
+   *    ⇒ 判断一律用 `vehicle.busCode && …`；
+   *      **不要**写 `busCode !== null`（`undefined !== null` 为真 ⇒ 会渲染空角标）。
+   * 长度 4~5 字符（全库实测），纯数字那批是澳巴真实旧编号，不是脏数据。
+   */
+  busCode?: string;
   /** GCJ-02 */
   lat: number;
   lng: number;

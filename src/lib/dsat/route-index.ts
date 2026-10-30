@@ -122,11 +122,21 @@ export async function buildRouteIndex(pool: Pool): Promise<RouteIndex> {
  */
 export async function queryRouteIndexRows(pool: Pool): Promise<[RouteStopRow[], StationRow[]]> {
   const [stopsRes, stRes] = await Promise.all([
+    // ★ v3.6.0：`WHERE r.is_active` —— **停运线路不得进候选**。
+    //   何以必须在这里过滤：站序索引是「线路 → 站序 → 逐跳枚举」的唯一原料，
+    //   推荐 / 替代线路 / 站牌线路全部从 `dirStops` 派生 ⇒ 一旦停运线路留在索引里，
+    //   它会作为一个**可被规划出来**的方案复活（36 路自 2026-10-24 并入 MT2 后即属此类）。
+    //   ⚠️ **此处是唯一过滤点**：删掉这个条件，已取消的线路就会重新出现在导航候选里，
+    //     且不会有任何报错（沉默逻辑错误，只有对比导航方案时才会暴露）。
+    //   前置条件：`routes.is_active` 由 `db:sync-all` 的对账步骤维护
+    //   （不在本次 DSAT 清单内的 bus 线路 → is_active=false）；本查询不再额外硬编码线路名，
+    //   以免「停运事实」在代码里长成第二份真相。
     pool.query(
       `SELECT r.code AS route, rs.dsat_dir,
               array_agg(rs.station_code ORDER BY rs.seq) AS stops
          FROM route_stations rs
          JOIN routes r ON r.id = rs.route_id
+        WHERE r.is_active
         GROUP BY r.code, rs.dsat_dir
         ORDER BY r.code, rs.dsat_dir`,
     ),
