@@ -38,6 +38,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import WalkNavPanel from "./WalkNavPanel";
+import { useWalkVoice } from "./useWalkVoice";
 import type { WalkNavPhase, WalkNavRequest, WalkNavResult } from "./walk-nav";
 import Icon from "@/components/ui/Icon";
 import NavMap from "./NavMap";
@@ -147,6 +148,8 @@ export default function NavShell({
    *   · 新开一段步行 / 关闭会话 / 离开详情 ⇒ 自动复位（见下方 effects）。
    */
   const [walkFollowing, setWalkFollowing] = useState(false);
+  /** ★ 2026-10-30（试验）：步行语音播报（开关持久化 · iOS 需在手势内解锁） */
+  const walkVoice = useWalkVoice();
   /** 会话镜像（重新规划时读最新 req，避免闭包过期） */
   const walkSessionRef = useRef(walkSession);
   walkSessionRef.current = walkSession;
@@ -352,7 +355,9 @@ export default function NavShell({
     startFix();
     setWalkFollowing(true);
     acquireWake();
-  }, [startFix, acquireWake]);
+    // ★ 必须在用户手势内调用：iOS Safari 首次语音需手势解锁，否则首句被静默吞掉
+    walkVoice.unlock();
+  }, [startFix, acquireWake, walkVoice]);
 
   /** 会话结束（关闭/离开详情）⇒ 退出跟随并释放常亮 */
   useEffect(() => {
@@ -702,6 +707,7 @@ export default function NavShell({
           onStartFollow={startWalkFollow}
           onStopFollow={stopWalkFollow}
           onReroute={rerouteWalkNav}
+          voice={walkVoice}
         />
       )}
 

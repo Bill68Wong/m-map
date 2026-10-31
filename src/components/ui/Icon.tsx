@@ -62,6 +62,8 @@ import {
   IconPinned,
   IconPlus,
   IconTrain,
+  IconVolume,
+  IconVolumeOff,
   IconWalk,
   IconX,
 } from "@tabler/icons-react";
@@ -150,6 +152,9 @@ const REGISTRY: Record<string, any> = {
   caretDown: IconChevronDown,
   caretUp: IconChevronUp,
   expandVertical: IconArrowsUpDown,
+  /* ★ 2026-10-30（步行语音）：播报开关的「开 / 静音」两态（Tabler 同库，stroke=2 不变） */
+  volume: IconVolume,
+  volumeOff: IconVolumeOff,
   /* 数据 / 工具（旧版功能页）
      ★ v3.3.0（AC-109）：`records` 原用 `IconClipboardList` —— 其**项目符号 = 零长度段**（`l.01 0`），
         在 `strokeLinecap="butt"`（本项目固定）下不渲染 ⇒ 图标「缺项目符号」。改 `IconClipboardText`：

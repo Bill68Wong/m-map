@@ -6006,6 +6006,15 @@ html[data-sheet-dragging="on"] .nav-locate-fab {
   font-weight: var(--fw-announce);
   color: var(--on-surface);
 }
+/* ★ 2026-10-30（试验）：语音开关 + 关闭按钮成组 */
+.walk-nav__head-right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.walk-nav__voice[aria-pressed="true"] {
+  color: var(--primary);
+}
 .walk-nav__od {
   margin: 0;
   color: var(--meta);

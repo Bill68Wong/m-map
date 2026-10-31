@@ -13,6 +13,7 @@
  *   距离/时长基准一律用高德返回值，卡片 `hint*` 只在查询期间兜底。
  * ⚠️ 容器复用 `.nav-card-overlay`（fixed z90 > 面板 70），本组件不自己定位。
  */
+import { useEffect } from "react";
 import Icon from "@/components/ui/Icon";
 import {
   walkEtaMin,
@@ -21,6 +22,7 @@ import {
   type WalkNavRequest,
   type WalkNavResult,
 } from "./walk-nav";
+import type { WalkVoiceApi } from "./useWalkVoice";
 
 /** GPS 点（GCJ-02；来自 `useUserFix`） */
 export interface WalkFix {
@@ -48,6 +50,15 @@ export interface WalkNavPanelProps {
   onStopFollow: () => void;
   /** 从当前位置重新规划（偏航/绕路时用；保留跟随） */
   onReroute: () => void;
+  /** 语音播报（Web Speech API；由 `NavShell` 持有，开关/解锁也在那一层） */
+  voice: WalkVoiceApi;
+}
+
+/** 朗读用距离（取整到 10 米，避免「437 米」这种啰嗦读法） */
+function sayDistance(m: number): string {
+  if (!Number.isFinite(m) || m <= 0) return "0 米";
+  if (m >= 1000) return `${(m / 1000).toFixed(1)} 公里`;
+  return `${Math.round(m / 10) * 10} 米`;
 }
 
 function fmtDistance(m: number | null | undefined): string {
@@ -72,6 +83,7 @@ export default function WalkNavPanel({
   onStartFollow,
   onStopFollow,
   onReroute,
+  voice,
 }: WalkNavPanelProps) {
   const ok = phase === "ready" && result?.ok ? result : null;
   const failed = phase === "failed" || (result && !result.ok) ? result : null;
@@ -79,6 +91,47 @@ export default function WalkNavPanel({
     ok && fix && following ? walkProgress(ok.path, ok.steps, fix, request.to) : null;
   const etaMin = ok && progress ? walkEtaMin(progress, ok) : null;
   const step = ok && progress ? ok.steps[progress.stepIndex] : null;
+
+  /**
+   * ── 语音播报（四个时机 · 全部按会话 id 去重，重规划即重新播「开始」）──
+   *   ① 开始跟随：全程距离 + 预计分钟；
+   *   ② 换步：朗读高德原文转向（`stepIndex` 变化才触发 ⇒ 不随 GPS 每帧刷屏）；
+   *   ③ 偏航：提示返回原路线（12s 内最多一次）；
+   *   ④ 到达：提示导航结束。
+   */
+  useEffect(() => {
+    if (!following || !ok) return;
+    voice.speak(
+      `start-${request.id}`,
+      `开始步行导航，全程${sayDistance(ok.distanceM)}，预计${Math.max(1, Math.round(ok.durationMin))}分钟`,
+      2_000,
+    );
+  }, [following, ok, request.id, voice]);
+
+  const stepIdx = progress?.stepIndex ?? -1;
+  const arrived = !!progress?.arrived;
+  const offRoute = !!progress?.offRoute;
+
+  useEffect(() => {
+    if (!following || !ok || stepIdx < 0 || arrived) return;
+    const s = ok.steps[stepIdx];
+    if (s) voice.speak(`step-${request.id}-${stepIdx}`, s.instruction, 2_500);
+  }, [following, ok, stepIdx, arrived, request.id, voice]);
+
+  useEffect(() => {
+    if (!following || !offRoute) return;
+    voice.speak(`offroute-${request.id}`, "已偏离路线，请返回原路线", 12_000);
+  }, [following, offRoute, request.id, voice]);
+
+  useEffect(() => {
+    if (!following || !arrived) return;
+    voice.speak(`arrived-${request.id}`, `已到达${request.to.label}附近，导航结束`, 60_000);
+  }, [following, arrived, request.id, request.to.label, voice]);
+
+  /** 退出跟随 ⇒ 立即打断播报（不留尾音） */
+  useEffect(() => {
+    if (!following) voice.cancel();
+  }, [following, voice]);
 
   return (
     <div
@@ -91,9 +144,22 @@ export default function WalkNavPanel({
     >
       <div className="walk-nav__head">
         <span className="walk-nav__title">{following ? "步行跟随" : "步行导航"}</span>
-        <button type="button" className="btn btn--text btn--sm" onClick={onClose} aria-label="关闭步行导航">
-          <Icon name="close" size={20} />
-        </button>
+        <div className="walk-nav__head-right">
+          {voice.supported && (
+            <button
+              type="button"
+              className="btn btn--text btn--sm walk-nav__voice"
+              onClick={voice.toggle}
+              aria-pressed={voice.enabled}
+              aria-label={voice.enabled ? "关闭语音播报" : "开启语音播报"}
+            >
+              <Icon name={voice.enabled ? "volume" : "volumeOff"} size={20} />
+            </button>
+          )}
+          <button type="button" className="btn btn--text btn--sm" onClick={onClose} aria-label="关闭步行导航">
+            <Icon name="close" size={20} />
+          </button>
+        </div>
       </div>
 
       <p className="walk-nav__od t-label">
