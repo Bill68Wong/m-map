@@ -13,10 +13,15 @@
  *      —— 它的 `sched_at` 已过但航班没走。若这里（或 SQL 里）出现 `sched_at > now()`，
  *      就是把负责人裁决实现错了。
  *
- * ── 状态：三态空 + stale 降级（契约 §2.5 / §2.6）───────────────────────
- *   · 空态一律 `200 + items: [] + emptyReason`（三值枚举），**永不 204**；
+ * ── 状态：三态空 + stale 降级 + 缺凭据降级（契约 §2.5 / §2.6 / ★P4）────
+ *   · 空态一律 `200 + items: [] + emptyReason`（四值枚举），**永不 204**；
  *   · 上游失败但**有旧数据** ⇒ `200 + stale:true`（响应头 `no-store`）；
- *   · 上游失败且**无任何旧数据** ⇒ `503 upstream_error`。
+ *   · 上游失败且**无任何旧数据** ⇒ `503 upstream_error`；
+ *   · ★ **未配 `AACM_APPCODE`** ⇒ `200 + emptyReason:"not_configured"`，**不 503**。
+ *     为什么必须分开：缺凭据时上游必 403，旧实现把它归成 `upstream_error`,
+ *     前端说「可能是上游或我们的采集出了问题」—— 用户去查网络、运维去查政府接口，
+ *     而真相是"部署方少配一个环境变量"。这种归因错误比不显示更贵。
+ *     此时**不发起采集**（试了必失败，每请求白打一条日志），只在每进程打一条 warn。
  *   `error` 字段只用 `API_ERROR` 六值闭集，不新增字符串。
  *
  * ── 缓存（契约 §2.7）──────────────────────────────────────────────────
@@ -36,6 +41,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { acquireToken } from "@/lib/amap/rate-limit";
 import { airportAttribution } from "@/lib/cross-border/attribution";
+import { AACM_APPCODE_ENV, hasAacmAppcode } from "@/lib/cross-border/credentials";
 import {
   isStale,
   lastSeenAtOf,
@@ -43,6 +49,7 @@ import {
   REFRESH_TTL_SEC,
   todayInMacau,
   tryRefresh,
+  type RefreshOutcome,
 } from "@/lib/cross-border/freshness";
 import { parseAfter, parseDir, parseLimit } from "@/lib/cross-border/params";
 import { buildListResponse, CACHE_HEADERS } from "@/lib/cross-border/respond";
@@ -61,6 +68,24 @@ const RL_BUCKET = "xborder";
 const RL_QPS = 5;
 const RL_BURST = 20;
 
+/**
+ * 未配凭据时**每进程只警告一次**。
+ *
+ * 不加节流的话，这个接口在缺配置的部署里会变成日志喷泉（机场页一开就 4 个请求，
+ * 每次还带 `?dir=` 两向），真正重要的错误会被冲走。warn 里只写变量名，不写值。
+ * 模块级变量 = 每实例一次；实例多起几条无妨，本来就是要人能看见。
+ */
+let warnedNoCredential = false;
+
+function warnNoCredentialOnce(): void {
+  if (warnedNoCredential) return;
+  warnedNoCredential = true;
+  console.warn(
+    `[xborder] ${AACM_APPCODE_ENV} 未配置：机场航班降级为 200 + emptyReason=not_configured` +
+      `（不再返回 503；配好后无需重启逻辑，下一请求即生效）`,
+  );
+}
+
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
   const dir = parseDir(sp.get("dir"));
@@ -75,10 +100,16 @@ export async function GET(req: NextRequest) {
   const pool = getPool();
   const schedDate = todayInMacau();
   const scope = `airport/${dir} ${schedDate}`;
+  /** 凭据是否配置（判定口径只有 `credentials.ts` 一份，见该文件头） */
+  const configured = hasAacmAppcode();
+  if (!configured) warnNoCredentialOnce();
 
   try {
     // 1) 必要时采集（新鲜则跳过；别的实例在采则跳过）。永不因采集失败而中断响应
-    const refresh = await tryRefresh(scope, () => refreshFlightsIfStale(dir, schedDate, pool));
+    //    ★ 未配凭据时**不发起**：上游必 403，试了只是白打日志 + 拖慢 2s（实测改前 2.004s）
+    const refresh: RefreshOutcome = configured
+      ? await tryRefresh(scope, () => refreshFlightsIfStale(dir, schedDate, pool))
+      : { attempted: false, ok: false };
 
     // 2) 新鲜度（= max(last_seen_at)）与数据
     const fetchedAt = await lastSeenAtOf({ table: "flights", schedDate, direction: dir }, pool);
@@ -87,8 +118,10 @@ export async function GET(req: NextRequest) {
       pool,
     );
 
-    // 3) 彻底没有数据且本轮采集失败 ⇒ 503（这一层区分是"空态"还是"上游挂了"的关键）
-    if (!refresh.ok && fetchedAt === null) {
+    // 3) 彻底没有数据且本轮**确实试过**且失败 ⇒ 503（区分"空态"与"上游挂了"的关键）
+    //    ⚠️ `refresh.attempted` 这个前提不能省：未配凭据时 attempted=false、ok=false，
+    //       少了它就会又回到 503，P4 等于没改（门禁 test-xborder-credentials 静态钉住）。
+    if (refresh.attempted && !refresh.ok && fetchedAt === null) {
       console.error(`[xborder] ${scope} 无旧数据且采集失败：${refresh.error ?? "unknown"}`);
       return errorResponse(API_ERROR.upstream_error, 503);
     }
@@ -104,6 +137,8 @@ export async function GET(req: NextRequest) {
       serverNow: macauIso(),
       dataFetchedAt: fetchedAt === null ? null : macauIso(fetchedAt),
       stale,
+      // ★ 未配凭据 ⇒ 空结果归因为 not_configured（只在"完全没数据"时生效，见 respond.ts）
+      notConfigured: !configured,
       // ⚠️ 署名由服务端下发（唯一真相），前端不得硬编码
       attribution: airportAttribution(fetchedAt),
       scope,

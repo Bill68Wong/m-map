@@ -15,7 +15,9 @@
  *   ② `statusKind` 是**我方**派生枚举，只服务着色/排序；`status` 才是真相。
  *      接口**同时**给出两者，且 `isTerminal` 由服务端按（源, 方向）算好 ——
  *      不允许前端自己拿 `statusKind` 推终态（`departed` 在离/抵两向含义相反，见 `status.ts`）。
- *   ③ 空态用 `emptyReason` 三值枚举表达，**永不** 204（204 没有 body，装不下原因）。
+ *   ③ 空态用 `emptyReason` 四值枚举表达（★P4 起加 `not_configured`），
+ *      **永不** 204（204 没有 body，装不下原因）。取值表以 `XB_EMPTY_REASONS`
+ *      为唯一真相 —— 门禁按它枚举文案，避免"加了取值却没加文案"。
  *
  * 零运行时依赖（只有 type/const），故纯解析脚本可以直接 import。
  */
@@ -73,12 +75,32 @@ export type AirportStatusKind =
 export type FerryStatusKind = "departed" | "arrived" | "eta" | "pending" | "unknown";
 
 /**
- * 空态原因（三值）。前端据此选文案，**永不靠"数组为空"猜**：
- *   `none_remaining_today` 当日有班次，但剔除终态后一条不剩（深夜常态）
- *   `no_service_today`     采集成功，但当日确实一班都没有（台风停航 / 未排班）
- *   `not_yet_collected`    从未成功采集过（`dataFetchedAt === null`）—— 这是**我方**故障
+ * 空态原因取值表（**唯一真相**：类型由它派生，UI 门禁也按它枚举文案）。
+ *
+ * ⚠️ 新增取值时必须同步 `src/components/cross-border/xb-view.ts#emptyCopy`：
+ *    那里是 if 链、没有穷尽性检查，漏加分支会**静默落进最后一个 return**
+ *    ⇒ 用户看到"数据获取中"，而真相是另一回事。`check-xborder-ui.tsx` 的
+ *    「四值四句不同的话」断言正是为此：它按本数组遍历，漏一个就红。
  */
-export type XbEmptyReason = "none_remaining_today" | "no_service_today" | "not_yet_collected";
+export const XB_EMPTY_REASONS = [
+  /** 当日有班次，但剔除终态后一条不剩（深夜常态） */
+  "none_remaining_today",
+  /** 采集成功，但当日确实一班都没有（台风停航 / 未排班） */
+  "no_service_today",
+  /** 从未成功采集过（`dataFetchedAt === null`）—— 这是**我方**故障，但还有救（等下轮采集） */
+  "not_yet_collected",
+  /**
+   * ★ P4 新增：数据源凭据未配置（`AACM_APPCODE` 缺失）。
+   *
+   * 为什么不并进 `not_yet_collected`：后者说"我们还没采到"，暗含"再等一会儿就有"；
+   * 而没有凭据时**再等一辈子也不会有**，用户会一直刷新，运维会去查上游。
+   * 两者的行动指令完全不同 ⇒ 必须分开，且前端话术不许写成"稍后重试"。
+   */
+  "not_configured",
+] as const;
+
+/** 空态原因。前端据此选文案，**永不靠"数组为空"猜** */
+export type XbEmptyReason = (typeof XB_EMPTY_REASONS)[number];
 
 /* ══════════════════════════════════════════════════════════════════════
  * 响应体

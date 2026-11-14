@@ -10,7 +10,11 @@
  *   这样"网络问题"与"形状问题"在日志里永远分得开（契约 §3.5 第 4 步的用意）。
  *
  * ── 两个必须遵守的细节 ────────────────────────────────────────────────
- *   ① 凭据从 `AACM_APPCODE` 读，**不写死、不打印**。缺失时抛错（由上层降级为 503/ stale），
+ *   ① 凭据从 `AACM_APPCODE` 读，**不写死、不打印**。缺失时抛错（路由侧已在调用
+ *      本函数**之前**按 `hasAacmAppcode()` 短路，故这个 throw 是兜底：直调本函数
+ *      的脚本/未来调用方同样会明确失败，不会带着空凭据去打上游）。
+ *      取值口径只有一份 —— `credentials.ts#readAacmAppcode`，本文件不再自己
+ *      `process.env` 拼一遍（两处各读一次必然漂移，P4 的教训）。
  *      错误文案只提变量名，不回显任何值 —— 这个值本仓库曾公开泄漏过一次
  *      （`docs/复盘-GitHub封号事故-20261028.md`），日志里再露一次等于白改。
  *   ② 先 `res.text()` 再 `JSON.parse`。直接 `res.json()` 在上游返回 HTML 错误页时
@@ -18,6 +22,7 @@
  *   ③ `res.text()` 之后、`JSON.parse` 之前消毒 U+0000（见 `sanitizeAirportRawText`）：
  *      上游瞬时控制字节会让整批 INSERT 原子失败。这是本文件唯一允许的文本加工。
  */
+import { AACM_APPCODE_ENV, readAacmAppcode } from "../credentials";
 import { AIRPORT_FLIGHT_URL, UPSTREAM_HEADERS, UPSTREAM_TIMEOUT_MS } from "../upstream/urls";
 import type { XbDir } from "../types";
 
@@ -63,10 +68,10 @@ export function sanitizeAirportRawText(rawText: string): string {
  * @throws 凭据缺失 / 非 2xx / 非 JSON —— 上层按"上游不可用"处理（有旧数据则 stale 降级）
  */
 export async function fetchAirportFlights(dir: XbDir): Promise<unknown> {
-  const appcode = String(process.env.AACM_APPCODE ?? "").trim();
+  const appcode = readAacmAppcode();
   if (!appcode) {
     // 不提"值是空的"以外的东西；变量名足够让人去 .env.example 查申请方式
-    throw new Error("[xborder] 缺少环境变量 AACM_APPCODE（见 .env.example 该变量注释）");
+    throw new Error(`[xborder] 缺少环境变量 ${AACM_APPCODE_ENV}（见 .env.example 该变量注释）`);
   }
 
   const url = AIRPORT_FLIGHT_URL[dir];
