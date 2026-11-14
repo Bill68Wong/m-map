@@ -289,6 +289,15 @@ export interface NavMapProps {
    */
   userDotSmoothMs?: number;
   /**
+   * ★ F2（2026-11-14）：**蓝点朝向箭头**（0 = 正北，顺时针，度）。
+   *   `null` / 缺省 ⇒ 不画箭头，视觉与旧版一致；非空才在蓝点上叠一层圆锥指示朝向。
+   *
+   * ⚠️ 本组件**不负责取值**（不读传感器）：来源与降级链（罗盘 → GPS 行进方向 → 正北）
+   *    在 F3 里用 `useCompassHeading` + `pickHeadingMode` 算好后从上层传进来。
+   *    这样地图层保持"给什么画什么"，也便于用固定值做像素级回归。
+   */
+  userHeading?: number | null;
+  /**
    * ★ 2026-11-05（通琴号 Spec R3/R4）：**第三类交通方式的地图图层**。
    *
    * · `tqhStations` 非空 ⇒ 画通琴号站点（★ 2026-11-06 起只有 **96 个纯通琴号站整圆**，
@@ -410,6 +419,7 @@ export default function NavMap({
   traveled = null,
   lineStops = null,
   userDotSmoothMs = 0,
+  userHeading = null,
   tqhStations = null,
   tqhActiveIds = null,
   tqhSegments = null,
@@ -2212,6 +2222,8 @@ export default function NavMap({
         enabled={phase === "ready"}
         fix={userFix}
         smoothMs={userDotSmoothMs}
+        /* ★ F2：朝向只透传，取值在 F3（本层不碰传感器） */
+        heading={userHeading}
       />
       {/* ★ v3.2.0（需求 9 / AC-83）：左下「回到我的位置」按钮**已删除** ——
           让位锁（followState=free 跳过自动取景，见上方 `if (followRef.current === "free")`）、
