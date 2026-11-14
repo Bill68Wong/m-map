@@ -7356,6 +7356,55 @@ body[data-sheet="open"] .nav-searchbar {
   z-index: 0;
   animation: navYouPing 2.4s cubic-bezier(0, 0, 0.2, 1) infinite;
 }
+
+/* ── ★ F2（2026-11-14）：朝向箭头层（`.user-dot` 的第 4 个子节点）─────────
+   它画的是"用户面朝哪"，与蓝点"用户在哪"是两件事，故独立成层：
+   · **不复用 `.user-dot` 的 transform** —— 那是 AMap 的锚点偏移（`translate(-8px,-8px)`），
+     位置平滑也长在那套坐标上；共用会让转头带动蓝点位移。
+   · `transform-origin` **必须显式写 `50% 50%`**：节点虽是正方形，但默认原点在某些
+     浏览器/缩放组合下会落到边框盒之外，表现为"箭头绕着蓝点画圈"。
+   · 形状是**光锥**而不是"箭头图标"：尖端落在蓝点中心（clip-path 第一个点 = 画布中心），
+     向前发散、半透明。蓝点仍是视觉主体，朝向是"从点里射出去的方向"。
+     2026-11-14 实拍对比：实心大三角（不透明、尾端开衩）看起来像"换了个图标"，
+     还会盖住相邻站点标记；改成光锥后两层信息互不遮挡。
+   · 居中**必须用 50% + 负 margin**，不能用 `inset:0 + margin:auto`：
+     子元素比父容器**大**时（40 > 16），`margin:auto` 在横向会被解成 0（over-constrained），
+     整体右移 5px。2026-11-14 浏览器实测：中心偏移 (5, 0)px ⇒ 已改成本写法。
+     也不能用 `transform: translate(-50%,-50%)`：transform 要留给 rotate，
+     两者共用一个属性会互相覆盖（JS 每次写 rotate 就会把位移抹掉）。
+     ⚠️ 20 = 40 / 2：改尺寸时这两个负 margin 必须一起改（门禁会算一遍）。
+   · `z-index: 0` 与 ping 同层：箭头在 DOM 里晚于 ping ⇒ 压住 ping 的正中；
+     ring(1) / core(2) 仍在它之上 ⇒ 「我在哪」永远不会被箭头挡。
+   · 没有朝向时 **`display:none`（真不渲染）**，不是"透明"：
+     这才保证"没有罗盘时与旧版逐像素一致"由结构保证，而不是碰巧看不出来。 */
+.user-dot__arrow {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 40px;
+  height: 40px;
+  /* 20 = 40 / 2（见上方注释：为什么不用 margin:auto） */
+  margin: -20px 0 0 -20px;
+  transform-origin: 50% 50%;
+  pointer-events: none;
+  z-index: 0;
+  /* 从蓝点中心向外衰减（而不是一块实色再被裁一刀）：
+     实测 0° 时远端是一条硬直线，看起来像贴了张塑料片。
+     用**竖向**渐变而不是径向：径向会让近场一大团、远端几乎看不见，方向读不出来；
+     竖向渐变从中心 50% 开始衰减到尖端透明 ⇒ 侧边仍是清晰的锥形轮廓，
+     只有远端"化开"在地图底色里。 */
+  background: linear-gradient(to top, var(--track-you) 50%, transparent 100%);
+  opacity: 0.5;
+  /* 光锥：尖端 = 画布中心（50% 50%），底边 = 画布上边 ⇒ 默认朝正北的窄扇形。
+     ⚠️ 尖端必须在中心，否则旋转时锥体会绕着"点外面"扫，看起来像整块在平移。 */
+  clip-path: polygon(50% 50%, 69% 0%, 31% 0%);
+  /* 只缓动 transform；朝向值本身已由 F1 的平滑器处理过，这里只补"帧间"的顺滑 */
+  transition: transform 120ms linear;
+  will-change: transform;
+}
+.user-dot__arrow[data-on="0"] {
+  display: none;
+}
 @keyframes navYouPing {
   0% {
     transform: scale(0.6);
@@ -7401,6 +7450,10 @@ body[data-nav-phase]:not([data-nav-phase="off"]) .nav-brandbar__acts { display: 
   /* ★ v3.1.1 #4：蓝点 ping 层直接隐藏（仅留静态核心点 + 4px 光圈） */
   .user-dot__ping {
     display: none;
+  }
+  /* ★ F2：减动效下**只取消缓动、保留朝向**（朝向是信息，不是装饰，不能一起关掉） */
+  .user-dot__arrow {
+    transition: none;
   }
   .nav-toast,
   .nav-alight-done {

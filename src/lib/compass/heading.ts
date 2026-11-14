@@ -136,6 +136,28 @@ export function headingFromOrientation(input: OrientationInput): number | null {
   return normalizeDeg(Math.atan2(vx, vy) * RAD2DEG + SCREEN_ANGLE_SIGN * screen);
 }
 
+/* ══════════════════════════ 箭头旋转（★ F2）══════════════════════════ */
+
+/**
+ * 把一帧朝向接到**连续角度**上（不做 [0,360) 归一化）。
+ *
+ * ── 为什么必须要这一步（F2 唯一的真坑）────────────────────────────────
+ *   CSS 的 `rotate()` 是按数值线性解释的：`rotate(359deg)` → `rotate(1deg)`
+ *   会被当作**倒退 358°**，视觉上就是箭头突然反向绕一整圈。
+ *   所以喂给 CSS 的必须是一条**不回绕**的数值序列：359 → 361（+2°），
+ *   而不是 359 → 1。本函数用最短弧累加，保证跨 0° 时只走那 2°。
+ *
+ * @param prevContinuous 上一次的连续角度（`null` = 第一次，从当前值起算）
+ * @param targetDeg      新的朝向（任意实数，内部归一化）
+ * @returns 连续角度（可能 >360 或 <0，这是**故意的**；不要在外面再归一化）
+ */
+export function nextArrowDeg(prevContinuous: number | null, targetDeg: number): number {
+  if (!Number.isFinite(targetDeg)) return Number.isFinite(prevContinuous as number) ? (prevContinuous as number) : 0;
+  const target = normalizeDeg(targetDeg);
+  if (prevContinuous === null || !Number.isFinite(prevContinuous)) return target;
+  return prevContinuous + shortestDeltaDeg(prevContinuous, target);
+}
+
 /* ══════════════════════════ 平滑器 ══════════════════════════ */
 
 /** 死区（度）：小于此变化视为噪声，不更新 —— 静置时箭头必须"纹丝不动" */
