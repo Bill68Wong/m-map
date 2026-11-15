@@ -16,12 +16,14 @@
  *   - **合规备注**（AC-66）：站台卡底部放完整句（小字、不换行）；紧凑处（推荐卡）放「推算」小角标。
  *   - 轻轨一律用「现正到达」；「即将进站」是巴士（DSAT 实时车距）专属文案。
  *   - 滚动：超过下一班发车时刻 + 该班保持期后自动落到再下一班（同数据，无请求）。
- *   - 空态：首班前/已收车/无数据 文案与 LiveEta 空态同风格。
+ *   - 空态：`before_first` / `after_last` / `no_data` 一律走 `@/lib/ui/service-text` 的
+ *     唯一映射（与站点卡 / 折叠栏同一句话），**不再各写一套措辞**。
  *   - 日切（澳门 0 点）自动重新拉取（服务班别/日期已变）。
  */
 import RouteStack from "./RouteStack";
 import Icon from "./ui/Icon";
 import { pickCatchTier } from "@/lib/recommend/catch-up";
+import { noVehicleText } from "@/lib/ui/service-text";
 import { TierBadge } from "./RoutePieces";
 import { TIER_TEXT, type CatchTier } from "@/lib/recommend/types";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -102,6 +104,40 @@ function inArrivalWindow(d: LrtDeparture, nowMs: number, pre: number, post: numb
 
 /** 「X 分 Y 秒」（两处统一：站台卡大字 / 推荐卡行内） */
 const secText = (totalSec: number) => `${Math.floor(totalSec / 60)} 分 ${totalSec % 60} 秒`;
+
+/**
+ * ★ 2026-11-12（负责人裁定）：轻轨**首末班时刻**的独立展示文本 —— 与无车文案**互不拼接**。
+ *
+ * ── 为什么要有这个函数（不要把时刻拼回无车文案）────────────────────────
+ *   负责人裁定无车文案「仅有这五个字，不加时间等」⇒ 时刻必须走**独立的中性元素**，
+ *   两者是两行、两个字符串。门禁 `scripts/test-service-text.ts` 会断言
+ *   `noVehicleText()` 的返回值**不含**「首班」「末班」「:」，拼回去必红。
+ *
+ * ── 渲染规则（负责人逐条指定）──────────────────────────────────────────
+ *   · 两个都有 ⇒ `首班 06:30 · 末班 23:30`
+ *   · 只有一个 ⇒ 只显示那一个（`首班 06:30` / `末班 23:30`）
+ *   · 都没有   ⇒ 返回 `null` ⇒ **整行不渲染**（不留占位符、不写「暂无时刻」）
+ *
+ * ⚠️ 数据来源 = `/api/lrt/eta` 已经下发到本组件的 `firstClock` / `lastClock`
+ *   （由服务端 `todayRow.first_min` / `last_min` 折算），**零新增查询**。
+ */
+export function clockTextOf(first: string | null, last: string | null): string | null {
+  const parts: string[] = [];
+  if (first) parts.push(`首班 ${first}`);
+  if (last) parts.push(`末班 ${last}`);
+  return parts.length ? parts.join(" · ") : null;
+}
+
+/** 时刻行：无车文案的**下一行**，中性 muted 小字（复用既有 `t-label t-muted`，不新造样式） */
+function ClockLine({ first, last }: { first: string | null; last: string | null }) {
+  const text = clockTextOf(first, last);
+  if (!text) return null; // 都没有 ⇒ 整行不渲染
+  return (
+    <p className="t-label t-muted" style={{ textAlign: "center", marginTop: 2 }}>
+      {text}
+    </p>
+  );
+}
 
 /** 澳门自然日 ymd（GMT+8，本地纯算） */
 function macauYmd(ms: number): string {
@@ -316,20 +352,23 @@ export default function LrtEta({
           轻轨时刻暂不可用 · {data.error}
         </p>
       ) : data.state !== "running" ? (
-        <p className="t-body t-muted" style={{ lineHeight: 1.7, textAlign: "center", marginTop: 4 }}>
-          {data.state === "before_first" && data.firstClock
-            ? `首班 ${data.firstClock} 开出${data.directionName ? ` · 往${data.directionName}` : ""}`
-            : data.state === "after_last" && data.lastClock
-              ? `今日已收车 · 末班 ${data.lastClock}`
-              : data.state === "before_first"
-                ? "尚未开出首班"
-                : data.state === "after_last"
-                  ? "今日已收车"
-                  : "该方向暂无时刻数据"}
-        </p>
+        <>
+          <p className="t-body t-muted" style={{ lineHeight: 1.7, textAlign: "center", marginTop: 4 }}>
+            {/*
+              ★ 2026-11-12（问题 4）：这三句原为就地硬编码（首班时刻 / 已收车时刻 / 无时刻数据），
+              与站卡、折叠栏是**同一状态的不同说法**。现统一走 `@/lib/ui/service-text` 的唯一映射。
+              ★ 负责人裁定：非营运那句**仅有五个字，不加时间等** ——
+                因此首末班时刻与方向名都**不再拼进这个字符串**；时刻改由**下一行的独立元素**
+                （`<ClockLine>`）展示，两者不拼接。
+            */}
+            {noVehicleText(data.state)}
+          </p>
+          {/* ★ 独立时刻行：`no_data`（无时刻数据）⇒ 整行不渲染；其余无车态按有则显示 */}
+          {data.state !== "no_data" && <ClockLine first={data.firstClock} last={data.lastClock} />}
+        </>
       ) : !nxtDep ? (
         <p className="t-body t-muted" style={{ lineHeight: 1.7, textAlign: "center", marginTop: 4 }}>
-          该方向暂无时刻数据
+          {noVehicleText("no_data")}
         </p>
       ) : (
         <div style={{ marginTop: 2 }}>
@@ -475,13 +514,10 @@ export function LrtEtaInline({
   }));
 
   if (state && state !== "running") {
-    return (
-      <span className="rc-live rc-live--dim">
-        {state === "before_first" ? "首班前" : state === "after_last" ? "今日已收车" : "暂无时刻"}
-      </span>
-    );
+    /* ★ 2026-11-12（问题 4）：紧凑处与站台卡 / 折叠栏共用同一映射（`after_last` 已并入 `closed`） */
+    return <span className="rc-live rc-live--dim">{noVehicleText(state)}</span>;
   }
-  if (!dep.length) return <span className="rc-live rc-live--dim">暂无时刻</span>;
+  if (!dep.length) return <span className="rc-live rc-live--dim">{noVehicleText("no_data")}</span>;
   if (!mounted) return <span className="rc-live rc-live--dim">—</span>;
 
   const nowMs = Date.now();
@@ -492,8 +528,9 @@ export function LrtEtaInline({
   const maIdxRaw = mainMs != null ? dep.findIndex((d) => d.depMs === mainMs) : -1;
   const maIdx = maIdxRaw >= 0 ? maIdxRaw : 0;
   const nxt = dep.slice(maIdx).find((d) => d.depMs > nowMs) ?? null;
-  // ★ v3.2.0：窗口内 = 「现正到达」；整日无后续班次 → 今日已收车
-  if (!nxt) return <span className="rc-live rc-live--dim">今日已收车</span>;
+  // ★ v3.2.0：窗口内 = 「现正到达」；整日无后续班次 → `after_last`
+  // ★ 2026-11-12（问题 4）：文案改走唯一映射（`after_last` = 当日服务窗口已结束 = closed）
+  if (!nxt) return <span className="rc-live rc-live--dim">{noVehicleText("after_last")}</span>;
   const remainMs = nxt.depMs - nowMs;
   const precise0 = isPrecise(nxt);
   const arriving = inArrivalWindow(nxt, nowMs, pre, postOf(precise0));

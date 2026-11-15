@@ -53,6 +53,7 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -169,7 +170,7 @@ function resolvePlaywright() {
     "playwright-core",
     "playwright",
     process.env.PLAYWRIGHT_CORE_DIR,
-    "C:/Users/ASUS/.workbuddy/binaries/node/workspace/node_modules/playwright-core",
+    join(homedir(), ".workbuddy/binaries/node/workspace/node_modules/playwright-core"),
   ].filter(Boolean);
   const tried = [];
   for (const c of cands) {

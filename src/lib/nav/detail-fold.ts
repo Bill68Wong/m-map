@@ -18,6 +18,9 @@
 import type { Pool } from "pg";
 import { nowBucketOfHolidayAware } from "@/lib/rebuild/holidays";
 import { fetchStationLive } from "@/lib/recommend/live";
+import { loadHeadway } from "@/lib/recommend/headway";
+import { serviceStateAt } from "@/lib/recommend/schedule";
+import { noVehicleText } from "@/lib/ui/service-text";
 import { etaTextOf } from "@/lib/recommend/catch-up";
 import { mainCodeOf } from "@/lib/recommend/segment-lookup";
 import type { RecStatic } from "@/lib/recommend/query";
@@ -69,9 +72,28 @@ export async function foldLiveAt(
   const out: Record<string, string> = {};
   try {
     const live = await fetchStationLive(pool, jobs, st.routeIdx, st.segIdx, { nowBucket, nowMs });
+    /**
+     * ★ 2026-11-12（问题 4）：**无车时不再写死同一句文案**。
+     *
+     * 旧写法对「凌晨 05:00 查 59 路」与「白天 12:00 但刚好没在途车」都回同一句
+     * ⇒ 用户分不清「这条线现在不跑」与「这条线在跑、只是车还没发」。
+     * 现在按 `serviceStateAt()` 的五态分流（映射表在 `@/lib/ui/service-text`，与站卡 / 轻轨共用）。
+     *
+     * ⚠️ 三处纪律：
+     *   ① **只有真的没有车时才去算**（`missing`）—— 全部有车时 0 额外开销；
+     *   ② `loadHeadway` 失败一律 `.catch(() => undefined)` ⇒ `serviceStateAt` 判 `no_data`
+     *      ⇒ 文案回落到**默认分支**（**失败不改变现状**，不猜）；
+     *   ③ 不在这里自己判营业时间（那会与 `schedule.ts` 形成第二套星期/假期口径）。
+     */
+    const missing: string[] = [];
     for (const r of Object.keys(stopCodeOf)) {
       const b = live.get(`${r}@${stopCodeOf[r]}`)?.nearest ?? null;
-      out[r] = b ? `还有 ${b.stopsAway} 站 · ${etaTextOf(b)}` : "暂无班次信息";
+      if (b) out[r] = `还有 ${b.stopsAway} 站 · ${etaTextOf(b)}`;
+      else missing.push(r);
+    }
+    if (missing.length) {
+      const headway = await loadHeadway(pool).catch(() => undefined);
+      for (const r of missing) out[r] = noVehicleText(serviceStateAt(headway, r, nowMs).state);
     }
   } catch {
     /* 实时不可用 → 收敛为空（折叠栏仍显示线路标签） */

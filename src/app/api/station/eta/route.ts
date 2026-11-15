@@ -30,7 +30,7 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { getPool } from "@/lib/db";
-import { nowBucketOfHolidayAware } from "@/lib/rebuild/holidays";
+import { getHolidays, nowBucketOfHolidayAware } from "@/lib/rebuild/holidays";
 import {
   type BiasIndex,
   type BiasLineRow,
@@ -42,6 +42,10 @@ import {
 import { LRT_PATTERN_ROUTE_NO } from "@/lib/lrt/pattern";
 import { loadStatics } from "@/lib/recommend/query";
 import { fetchStationLive } from "@/lib/recommend/live";
+import { loadHeadway } from "@/lib/recommend/headway";
+import { serviceStateAt, type ServiceState } from "@/lib/recommend/schedule";
+import { rowCandidateSec } from "@/lib/lrt/eta";
+import { dayTypeOf, macauNowParts, shiftYmd } from "@/lib/lrt/day-type";
 import { mainCodeOf } from "@/lib/recommend/segment-lookup";
 import type { BusLive } from "@/lib/recommend/types";
 import { API_ERROR, errorResponse } from "@/lib/http/errors";
@@ -109,6 +113,23 @@ interface StationEtaItem {
   secPrecise?: boolean;
   /** ★ v3.2.0 轻轨专用：氹仔线命中的站间模式串（未命中/非氹仔线 = null） */
   pattern?: string | null;
+  /**
+   * ★ 2026-11-12（问题 4）：该线**此刻的营运状态**（纯增量可选字段）。
+   *
+   * ── 为什么必须由本接口下发（前端算不出来）──────────────────────────────
+   *   `serviceStateAt()` 需要 `HeadwayIndex`，而 `loadHeadway()` 要 `Pool`（server-only）。
+   *   站卡（`StationCard.tsx:184`）是客户端组件，拿不到该索引 ⇒ 只能由接口给。
+   *
+   * ── 取值与口径 ────────────────────────────────────────────────────────
+   *   · 巴士项：`serviceStateAt()` 五态（`open|closing|closed|before_first|no_data`），
+   *     **只在 `stopsAway === null` 的项上算**（有车时前端根本不会用这个字段，省开销）；
+   *   · 轻轨项：与 `/api/lrt/eta`（`src/lib/lrt/next-departures.ts:426-436`）**同一套优先级**
+   *     映射而来 —— 那边的 `running` → 本字段 `open`，`after_last` → `closed`，
+   *     `before_first` / `no_data` 同名。判据复用同一个 `rowCandidateSec()` helper。
+   *
+   * ⚠️ 缺省（老响应 / 无车但未算）= `undefined` ⇒ 前端回落到**默认无车文案** = 改动前行为。
+   */
+  service?: ServiceState;
 }
 
 interface StationEtaResponse {
@@ -256,11 +277,35 @@ async function lrtItems(
   if (!stRow) return [];
   const apiStation = stRow.api_id;
 
-  // ② 日期类型 + 当日分钟偏移（澳门时间 GMT+8）
-  const macau = new Date(nowMs + 8 * 3_600_000);
-  const dow = macau.getUTCDay(); // 0=周日
-  const dayType = dow === 5 ? "fri" : dow === 0 || dow === 6 ? "sat_sun_holiday" : "mon_thurs";
-  const nowMin = macau.getUTCHours() * 60 + macau.getUTCMinutes();
+  // ② 日期类型 + 当日时间基准（澳门 GMT+8）
+  /**
+   * ★ 2026-11-12（问题 4 收口 · 既有缺陷修正）：**日型改为假期感知**，与 `/api/lrt/eta` 同源。
+   *
+   * ── 改前是什么（别照旧稿改回去）────────────────────────────────────────
+   *   旧写法只看星期：`dow === 5 ? "fri" : dow === 0 || dow === 6 ? "sat_sun_holiday" : "mon_thurs"`。
+   *   ⇒ 公众假期落在周一~周四时，本接口按**工作日班表**判，而轻轨实际按**周末/假期班表**跑。
+   *   后果不止是文案：`nextAt` / `depMs` / `etaSec` 一直是用**错的那一天的时刻行**算出来的。
+   *
+   * ── 为什么必须修（负责人口径）──────────────────────────────────────────
+   *   「非营运时间」是一句**断言**。假期那天若按工作日班表判成 `closed`，我们就在用户眼前
+   *   写下「现在不在营运」，而车其实在跑 —— 含糊的「暂无时刻」说错了不致命，
+   *   笃定的「非营运时间」说错了是硬伤。实测：2026-12-08（周二，公众假期）23:30，
+   *   旧代码 `service=closed`、`nextAt=null`；而轻轨当天实际运营到 23:59。
+   *
+   * ── 现在（三处都走共享实现，不另写一份）────────────────────────────────
+   *   · 日型判定：`dayTypeOf(weekday, isHoliday)`（`@/lib/lrt/day-type`，与 `/api/lrt/eta` 同一个函数）；
+   *   · 假期集合：`getHolidays(pool)`（`@/lib/rebuild/holidays`，**模块级 TTL 6h 缓存**，
+   *     不是每次请求打一条 SQL）；表缺失/查询失败 ⇒ 空集 ⇒ 退化为旧行为，不阻断；
+   *   · 时间基准：`macauNowParts()`（同一个 helper，`daySec` 直接就是「日内秒」）。
+   *   昨日日型同样用 `dayTypeOf` + `shiftYmd`，供 `prevRunning`（跨午夜续班）判据使用。
+   */
+  const now = macauNowParts(new Date(nowMs));
+  const holidays = await getHolidays(pool);
+  const dayType = dayTypeOf(now.weekday, holidays.has(now.ymd));
+  const prevYmd = shiftYmd(now.ymd, -1);
+  const prevWeekday = new Date(`${prevYmd}T00:00:00Z`).getUTCDay();
+  const prevDayType = dayTypeOf(prevWeekday, holidays.has(prevYmd));
+  const nowMin = Math.floor(now.daySec / 60);
 
   // ③ 该站全部 (线路 × 方向)
   const rows = (
@@ -287,10 +332,27 @@ async function lrtItems(
     if (r.day_type !== dayType) continue;
     byKey.set(`${r.route_no}|${r.direction}`, r);
   }
+  /**
+   * ★ 2026-11-12（问题 4）：**全量**日型行索引（不只今日）。
+   *
+   * 查表 SQL 本来就是 `WHERE api_station = $1`（全部日型、全部线路/方向）⇒ 昨日行**已在内存里**，
+   * 取它判「昨日跨午夜续班」**零新增查询**（`next-departures.ts:385-386` 同一用法）。
+   */
+  const rowOf = new Map<string, { first_min: number; last_min: number; minutes: { hour: number; minutes: number[] }[] }>();
+  for (const r of rows) {
+    rowOf.set(`${r.route_no}|${r.direction}|${r.day_type}`, {
+      first_min: r.first_min,
+      last_min: r.last_min,
+      minutes: (typeof r.minutes === "string" ? JSON.parse(r.minutes) : r.minutes) as {
+        hour: number;
+        minutes: number[];
+      }[],
+    });
+  }
 
   const items: StationEtaItem[] = [];
   /** 当日**秒级**偏移（偏差是秒级，故不能只用分钟） */
-  const nowSec = nowMin * 60 + macau.getUTCSeconds();
+  const nowSec = now.daySec;
   /**
    * ★ 2026-09-24：澳门当日 00:00 的 **UTC 毫秒**（绝对发车时刻的基准）。
    *   `nowMs + 8h` 的「日内毫秒」直接扣掉即得当日零点（不依赖任何时区 API）。
@@ -354,6 +416,31 @@ async function lrtItems(
     // ★ 绝对发车时刻（含偏差，由 fixDeparture 产出）；前端读秒的唯一依据（设备时钟倒计时）
     const depMs = best ? best.depMs : null;
 
+    /**
+     * ★ 2026-11-12（问题 4）：轻轨项的**营运状态**。
+     *
+     * 判据逐字对齐 `/api/lrt/eta`（`src/lib/lrt/next-departures.ts:426-436`），**不另造一套**：
+     *   ① 昨日跨午夜续班仍有车        → running（本字段 `open`）
+     *   ② 今日首班还没到点            → before_first
+     *   ③ 今日还有后续班次            → running（`open`）
+     *   ④ 今日行存在但无后续班次      → after_last（`closed`）
+     * `/api/lrt/eta` 的 `LrtDeparturesOk.state` 没有 `open/closed` 两个词（它叫 running/after_last），
+     * 本接口统一成 `ServiceState` 词汇，映射关系写在 `StationEtaItem.service` 注释里。
+     *
+     * ⚠️ 优先级顺序**不能调**：`before_first` 必须排在「有未来班次」之前。原因见
+     *   `next-departures.ts:418-424` 的实测记录 —— 凌晨 00:13 时「今日首班 06:30」也算「未来班次」，
+     *   若先判非空就会把「首班前」吞掉，卡片显示「还有 372 分」。
+     * ⚠️ 复用 `rowCandidateSec(prevRow, true)`（同一 helper）而不是自己读 `minutes`：
+     *   它的口径是「昨日行里只取 offset ≥ 1440 的跨午夜段并减 1440」。
+     */
+    const prevRow = rowOf.get(`${routeNo}|${direction}|${prevDayType}`);
+    const prevRunning = prevRow ? rowCandidateSec(prevRow, true).some((s) => s > nowSec) : false;
+    let service: ServiceState;
+    if (prevRunning) service = "open";
+    else if (nowSec < r.first_min * 60) service = "before_first";
+    else if (best) service = "open";
+    else service = "closed";
+
     items.push({
       route,
       dir: direction,
@@ -375,6 +462,8 @@ async function lrtItems(
       ok: true,
       kind: "lrt",
       nextAt: nextSec === null ? null : fmtHm(nextSec),
+      /** ★ 2026-11-12（问题 4）：营运状态（见 `StationEtaItem.service` 注释） */
+      service,
     });
   }
   return items;
@@ -447,7 +536,7 @@ export async function GET(req: NextRequest) {
           TOTAL_TIMEOUT_MS,
         ).catch((): Map<string, BusLive> => new Map());
 
-        items = meta.map((m) => {
+        const busItems: StationEtaItem[] = meta.map((m) => {
           const bl = liveMap.get(`${m.route}@${m.platform}`);
           const n = bl?.nearest ?? null;
           return {
@@ -465,6 +554,22 @@ export async function GET(req: NextRequest) {
             kind: "bus" as const,
           };
         });
+
+        /**
+         * ★ 2026-11-12（问题 4）：只给**无车**的项补 `service`（有车的项前端不会读它）。
+         *
+         * 三条纪律：
+         *   ① `loadHeadway` 是**整批复用**（模块级缓存 `CACHE_TTL_MS`）—— 绝不在循环里逐项调用；
+         *   ② 无车项为 0 时一次都不调用（绝大多数站点在白天都有车 ⇒ 零开销）；
+         *   ③ 载入失败 `.catch(() => undefined)` ⇒ `serviceStateAt` 判 `no_data`
+         *      ⇒ 前端回落到**默认无车文案**（**失败不改变现状**）。
+         */
+        const noVehicle = busItems.filter((it) => it.stopsAway === null);
+        if (noVehicle.length) {
+          const headway = await loadHeadway(pool).catch(() => undefined);
+          for (const it of noVehicle) it.service = serviceStateAt(headway, it.route, nowMs).state;
+        }
+        items = busItems;
       }
     }
   } catch (e) {

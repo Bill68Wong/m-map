@@ -38,6 +38,7 @@ import { loadStatics } from "@/lib/recommend/query";
 import { mainCodeOf } from "@/lib/recommend/segment-lookup";
 import { wgs84ToGcj02 } from "@/lib/amap/coord";
 import type { RecommendCard } from "@/lib/recommend/types";
+import type { PlatformCand } from "@/lib/nav/route-overview";
 import { API_ERROR, errorResponse } from "@/lib/http/errors";
 import {
   DSAT_BUCKET_CAPACITY,
@@ -59,9 +60,9 @@ interface OverviewLeg {
   /** 线路主题色（routes.color）；缺省 null → 客户端回落 var(--accent) */
   color: string | null;
   /** 上车站（GCJ-02）；解析失败 = null（客户端降级，不阻塞） */
-  board: { code: string; lng: number; lat: number } | null;
+  board: { code: string; lng: number; lat: number; platforms?: PlatformCand[] } | null;
   /** 下车站（GCJ-02）；同上 */
-  alight: { code: string; lng: number; lat: number } | null;
+  alight: { code: string; lng: number; lat: number; platforms?: PlatformCand[] } | null;
 }
 
 /** 主码 → 坐标（GCJ-02） */
@@ -72,7 +73,8 @@ type Coord = { lng: number; lat: number };
  *
  * ① 收集去重：全部 `ride.route`（色）与 `board/alight` 主码（坐标）；
  * ② 两条批量查询**并行**（`Promise.all`）：站坐标（WGS84）+ 线路色（数据）；
- * ③ 主码 → 坐标内存索引（同站多台 → 保留首个非空，合成一个物理点）；
+ * ③ 站台码 → 坐标（**保留完整站台码**，环线同一主码可能有多个站台）+ 本线站序；
+ *    leg 上另附「主码 → 按 (dir, seq) 的站台候选」（`platforms`，可选，仅巴士环线用得上）；
  * ④ 坐标 WGS84 → GCJ-02（与 /api/stations、/api/route-vehicles 同源）。
  * 任一查询失败**只降级该段字段**（color / board / alight → null），**绝不抛错**。
  */
@@ -87,8 +89,8 @@ async function buildOverviewLegs(pool: Pool, rides: RecommendCard["rides"]): Pro
   const mainCodes = [...mains];
 
   // ② 两条批量查询并行；各自 try/catch 降级
-  const [coordMap, colorMap] = await Promise.all([
-    // ── 站坐标（WGS84；取主码，容忍 `/<平台>` 后缀）──
+  const [byPlatform, colorMap, seqByRoute] = await Promise.all([
+    // ── 站坐标（WGS84；**按完整站台码**保留，供环线多次停靠按站序取点）──
     (async (): Promise<Map<string, Coord>> => {
       const m = new Map<string, Coord>();
       if (!mainCodes.length) return m;
@@ -96,17 +98,22 @@ async function buildOverviewLegs(pool: Pool, rides: RecommendCard["rides"]): Pro
         const res = await pool.query(
           `SELECT code, lat, lng FROM stations
             WHERE lat IS NOT NULL AND lng IS NOT NULL
-              AND (code = ANY($1::text[]) OR regexp_replace(code, '/\\d+$', '') = ANY($1::text[]))`,
+              AND (code = ANY($1::text[]) OR regexp_replace(code, '/\\d+$', '') = ANY($1::text[]))
+            ORDER BY code`,
           [mainCodes],
         );
         for (const row of res.rows as { code: string; lat: number; lng: number }[]) {
-          const main = mainCodeOf(String(row.code));
-          if (m.has(main)) continue; // 同站多台 → 保留首个非空
+          const code = String(row.code);
           const lat = Number(row.lat);
           const lng = Number(row.lng);
           if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
           const gcj = wgs84ToGcj02({ lat, lng }); // ★ 出口一律 GCJ-02
-          m.set(main, { lng: gcj.lng, lat: gcj.lat });
+          /**
+           * ★ 环线：同一主码可能有多个站台（26 路 `T345/1`、`T345/5`）⇒ 必须按
+           * **完整站台码**存。折成主码就把「第几次停靠」的信息丢了，`pickTripPair`
+           * 只能回落全局最近点（实测多绕一整圈）。
+           */
+          m.set(code, { lng: gcj.lng, lat: gcj.lat });
         }
       } catch (e) {
         console.warn(
@@ -137,21 +144,90 @@ async function buildOverviewLegs(pool: Pool, rides: RecommendCard["rides"]): Pro
       }
       return m;
     })(),
+    // ── 本线各方向的站序（供环线「同一主码多次停靠」按 seq 定位站台）──
+    (async (): Promise<Map<string, { dir: string; seq: number; code: string }[]>> => {
+      const m = new Map<string, { dir: string; seq: number; code: string }[]>();
+      if (!routeCodes.length) return m;
+      try {
+        const res = await pool.query(
+          `SELECT r.code AS route, rs.dsat_dir AS dir, rs.seq, rs.station_code AS code
+             FROM route_stations rs
+             JOIN routes r ON r.id = rs.route_id
+            WHERE r.code = ANY($1::text[])
+            ORDER BY r.code, rs.dsat_dir, rs.seq`,
+          [routeCodes],
+        );
+        for (const row of res.rows as { route: string; dir: string; seq: number; code: string }[]) {
+          const arr = m.get(String(row.route)) ?? [];
+          arr.push({ dir: String(row.dir), seq: Number(row.seq), code: String(row.code) });
+          m.set(String(row.route), arr);
+        }
+      } catch (e) {
+        /* 站序缺失 ⇒ `platforms` 为空 ⇒ `pickTripPairLoopMulti` 返回 null ⇒ 回落几何最近点 */
+        console.warn(
+          "[api/nav/detail-body] 站序查询失败（环线多次停靠回落几何最近点）：",
+          (e as Error).message,
+        );
+      }
+      return m;
+    })(),
   ]);
 
   // ③ 组装：与 card.rides 一一对应、同序（index = 下标）
-  const coordOf = (code: string): { code: string; lng: number; lat: number } | null => {
+  /**
+   * 主码 → 该主码在本线路**全部 (dir, seq)** 上的站台候选（按 seq 升序，SQL 已排）。
+   *
+   * 环线（26 路 `T345` 第 26/53 站）靠它把「站序位置」还原成具体站台坐标：
+   * `pickTripPairLoopMulti` 用 `(dir, seq)` 精确取点，而不是拿主码猜一个。
+   * 缺站序 / 缺坐标 ⇒ 空数组 ⇒ 该函数返回 null ⇒ `pickTripPair` 回落全局最近点。
+   */
+  const platformsOf = (route: string, main: string): PlatformCand[] => {
+    const rows = seqByRoute.get(route) ?? [];
+    const out: PlatformCand[] = [];
+    for (const r of rows) {
+      if (mainCodeOf(r.code) !== main) continue;
+      const c = byPlatform.get(r.code);
+      if (!c) continue;
+      out.push({ code: r.code, lng: c.lng, lat: c.lat, dir: r.dir, seq: r.seq });
+    }
+    return out;
+  };
+
+  /**
+   * 单坐标（向后兼容：老响应/老客户端只用它）。
+   * 取「主码下按**站台码字典序**首个」（`byPlatform` 查询已 `ORDER BY code` ⇒ 确定性）。
+   *
+   * ⚠️ **不能**改成 `ORDER BY seq` 取首个 —— 那会稳定地选到环线里**更早那一趟**的站台
+   *   （26 路会选到第 26 站，正是要避开的错解）。正确解由 `platforms` 承担。
+   */
+  const coordOf = (
+    route: string,
+    code: string,
+  ): { code: string; lng: number; lat: number; platforms?: PlatformCand[] } | null => {
     const main = mainCodeOf(code);
-    const c = coordMap.get(main);
-    return c ? { code: main, lng: c.lng, lat: c.lat } : null;
+    let single: Coord | null = null;
+    for (const [k, v] of byPlatform) {
+      if (mainCodeOf(k) === main) {
+        single = v;
+        break;
+      }
+    }
+    if (!single) return null;
+    const platforms = platformsOf(route, main);
+    return {
+      code: main,
+      lng: single.lng,
+      lat: single.lat,
+      ...(platforms.length ? { platforms } : {}),
+    };
   };
   return rides.map((r, i) => ({
     index: i,
     route: r.route,
     kind: r.kind,
     color: colorMap.get(r.route) ?? null,
-    board: coordOf(r.board),
-    alight: coordOf(r.alight),
+    board: coordOf(r.route, r.board),
+    alight: coordOf(r.route, r.alight),
   }));
 }
 

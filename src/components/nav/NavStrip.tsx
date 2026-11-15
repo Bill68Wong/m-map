@@ -53,14 +53,32 @@ export interface StripNav {
 export default function NavStrip({
   strip,
   color,
+  colors = null,
   last,
   nav = null,
   frozen = false,
   nextKind = null,
 }: {
   strip: SegmentStrip;
-  /** 该线路主题色 */
+  /** 该线路主题色（**本段**的颜色；只作 `rail` 基准与兜底） */
   color?: string | null;
+  /**
+   * ★ 2026-11-12（问题 5）：**整张线路色表**（`routes.color` 映射，来自 `NavDetailBody` 的 `colors`）。
+   *
+   * ── 为什么必须传（此前是个真缺陷）────────────────────────────────────
+   *   本组件有两处 `RouteStack` 渲染的**不是本段线路**：
+   *     · `:138` 上车站标签 → `boardRoute`（可能是并行/备选线，≠ `strip.route`）
+   *     · 换乘后标签 → `strip.nextLeg.route`（**一定是下一段**）
+   *   两处旧写法都是 `colorOf={() => rail}` —— 这个闭包**忽略传进来的线路码**，恒返回
+   *   `rail`（= 本段色）⇒ 「换乘后 氹仔线」显示上一段（石排湾）的紫色、
+   *   「换乘后 横琴线」显示上一段（氹仔）的绿色，视觉上正是「错位一位」。
+   *   ⇒ 改为 `colorOf={(c) => colors?.[c] ?? rail}`：**按线路码取色，取不到再回落本段色**
+   *   （`rail` 保留兜底才能让「色表未覆盖该线」时不至于变成透明/无色）。
+   *
+   * ⚠️ 不要改回 `() => rail`；也不要改 `RouteStack` 自己的取色逻辑（`RouteStack.tsx:61`
+   *    `resolve = colorOf ?? (colors ? c=>colors[c] : undefined)` 是对的，错的只是调用方闭包）。
+   */
+  colors?: Record<string, string> | null;
   /** 是否为行程最后一段（决定换乘行是否渲染） */
   last?: boolean;
   /** 导航追踪态（仅当前乘车段传入） */
@@ -135,7 +153,9 @@ export default function NavStrip({
         <span className={`navstrip__seg${segPassed ? " is-passed" : ""}`} />
         <span className="navstrip__dot" />
         <span className="navstrip__label">
-          {k === 0 && <RouteStack codes={[boardRoute]} colorOf={() => rail} />}
+          {/* ★ 2026-11-12（问题 5）：必须按 `boardRoute` 查色表 —— 它可能是并行/备选线（≠ `strip.route`），
+              旧写 `colorOf={() => rail}` 会把它显成**本段**颜色。取不到才回落 `rail`。 */}
+          {k === 0 && <RouteStack codes={[boardRoute]} colorOf={(c) => colors?.[c] ?? rail} />}
           {isNext && <span className="navstrip__badge">下一站</span>}
           {k === lastK ? <b>{s.label}</b> : s.label}
           {isAt && <span className="navstrip__sub">停靠中</span>}
@@ -241,7 +261,11 @@ export default function NavStrip({
         <div className="navstrip__xfer">
           <span className="navstrip__xfer-line">
             换乘后
-            <RouteStack codes={[strip.nextLeg.route]} colorOf={() => rail} />
+            {/* ★ 2026-11-12（问题 5 · 本次主诉）：「换乘后」标签渲染的是 `strip.nextLeg.route`
+                （**下一段**线路），旧写 `colorOf={() => rail}` 恒返回本段色 ⇒ 固定错位一位
+                （石排湾紫 → 氹仔线本应绿却显紫；氹仔绿 → 横琴线本应红却显绿）。
+                ⇒ 按线路码查色表，查不到才回落本段色。 */}
+            <RouteStack codes={[strip.nextLeg.route]} colorOf={(c) => colors?.[c] ?? rail} />
           </span>
           <LrtEtaInline
             lineCode={strip.nextLeg.route}

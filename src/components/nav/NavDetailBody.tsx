@@ -1212,6 +1212,10 @@ export default function NavDetailBody({
             key={`${strip.route}-${strip.board}-${i}`}
             strip={strip}
             color={colorOf(strip.route)}
+            /* ★ 2026-11-12（问题 5）：「换乘后」与上车站标签渲染的不是本段线路，
+               必须传整张色表让 NavStrip 按线路码取色；不传 ⇒ 它会回落 `rail`（本段色）
+               ⇒ 标签色错位一位。`colors` 是本组件既有 prop（`:522`），零新增数据源。 */
+            colors={colors}
             last={i === arr.length - 1}
             nav={
               track && track.phase === "riding" && track.prog && i === track.legIndex

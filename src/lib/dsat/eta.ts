@@ -2,6 +2,7 @@ import { getPool } from "@/lib/db";
 import { getBusPositions } from "@/lib/dsat/client";
 import { findStopIdx } from "@/lib/station-match";
 import { deriveDirInMemory } from "@/lib/recommend/enumerate";
+import { isLoopOf } from "@/lib/dsat/route-index";
 import type { RouteIndex } from "@/lib/recommend/types";
 
 /**
@@ -226,16 +227,21 @@ export async function queryEta(
           : await deriveRouteDir(route, st, dest, dir)
         : dir;
 
-      // 循环线判定：该线路在 DB 只有 dir=0 一套站序（双方向线会有 dir=0/1 两套）
+      /**
+       * 循环线判定：v4.2.0 起以 `routes.is_loop` 为**唯一口径**
+       * （来源 DSAT `routeList[].direction=2`；实测 76 true / 24 false，
+       *  与老口径「方向数 ≤ 1」集合差异 0/0 ⇒ 换列应零行为变化）。
+       * · 内存路径（主链路）：`isLoopOf()` —— `loopOf` 为空（发版初期旧缓存）
+       *   时自动回落老口径，且 `buildRouteIndexFromRows` 已打告警；
+       * · DB 路径：直接读列；该线路不在 `routes`（停运/异常）⇒ false。
+       * ⛔ 不要改回「方向数 ≤ 1」：老口径对「有 shape 无站序」的 36 路靠 dirs=0
+       *   判 true（巧合正确），语义不稳，且这正是本批要替换掉的原因。
+       */
       const isLoop = routeIndex
-        ? (routeIndex.dirsOf.get(route)?.length ?? 0) <= 1
+        ? isLoopOf(routeIndex, route)
         : (
-            await pool.query(
-              `SELECT DISTINCT rs.dsat_dir FROM route_stations rs
-               JOIN routes r ON rs.route_id = r.id WHERE r.code = $1 AND r.kind = 'bus'`,
-              [route],
-            )
-          ).rows.length <= 1;
+            await pool.query(`SELECT is_loop FROM routes WHERE code = $1 AND kind = 'bus'`, [route])
+          ).rows[0]?.is_loop === true;
 
       // 站序 + 站名（该方向）；v0.4.0 起巴士站名带站号前缀（"T358 偉龍/科大醫院"），轻轨不带
       const loadStops = async (d: string): Promise<{ seq: number; code: string; name: string }[]> => {
