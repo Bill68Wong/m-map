@@ -43,7 +43,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { decodePNG, diffBBox } from "./lib/png-decode.mjs";
@@ -87,7 +87,7 @@ function resolvePlaywright() {
   const cands = [
     process.env.PLAYWRIGHT_CORE_PATH,
     // 本机 WorkBuddy 自带的 playwright-core（**仅开发机**，别指望 CI 有）
-    "C:/Users/ASUS/.workbuddy/binaries/node/workspace/node_modules/playwright-core",
+    join(homedir(), ".workbuddy/binaries/node/workspace/node_modules/playwright-core"),
   ].filter(Boolean);
   for (const c of [null, ...cands]) {
     try {

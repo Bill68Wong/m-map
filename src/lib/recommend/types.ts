@@ -367,6 +367,15 @@ export interface RouteIndex {
   nameOf: Map<string, string>;
   /** 邻接对 `mainCode(from)→mainCode(to)` → 拥有该邻接对的线路集合 */
   adjOwners: Map<string, Set<string>>;
+  /**
+   * ★ v4.2.0：`route → is_loop`（`routes.is_loop` 列，来源 DSAT `routeList[].direction=2`）。
+   *
+   * ⚠️ **可选**，两种正当缺失：① 发版初期 Data Cache 仍是旧结构 payload（没有 `routeRows`）；
+   *   ② 单测/探针手工构造的夹具索引。取值**必须**走 `isLoopOf()`（`route-index.ts`），
+   *   它在缺失/空 Map 时回落老口径 `dirsOf.length <= 1`（两者集合实测 0 差异）。
+   *   ⛔ **不要直接写 `loopOf.get(x) ?? false`** —— 那会把 75 条 is_active 循环线静默判成非循环。
+   */
+  loopOf?: Map<string, boolean>;
 }
 
 /** segment_stats 行（读端最小列集） */

@@ -46,6 +46,16 @@ export const BOARD_EQ_ALIGHT_M = 50;
 export const DECIMATE_STEP_M = 15;
 
 /**
+ * ★ 2026-11-15：静默降级告警的**按线路去重**集合。
+ *
+ * 为什么去重：`buildColoredLegs` 每次渲染都会跑，若每条腿都打一行，正常页面会被刷屏
+ * （而刷屏的日志等于没有）。按 `leg.route` 记住「这条线路已经喊过」⇒ 正常情况零噪音，
+ * 真出问题时每条线路只有一行，且含线路码/腿序号/缺的字段，可直接定位。
+ */
+const warnedNoCode = new Set<string>();
+const warnedNoPlat = new Set<string>();
+
+/**
  * ★ 4-B−（需求 4）：候选弧的**可信下限**（相对于「跳数 × 平均站距」的倍率）。
  *
  * 弧长下限由两部分取大：
@@ -99,13 +109,43 @@ export interface OverviewLegInput {
   route: string;
   kind: "bus" | "lrt";
   color: string | null;
-  board: { code: string; lng: number; lat: number } | null;
-  alight: { code: string; lng: number; lat: number } | null;
+  /**
+   * 上车站。`lng/lat` 仍是**单一坐标**（向后兼容：老响应/老客户端只用它）。
+   * `platforms` 为**可选**补充：该主码在本线路全部 (dir, seq) 上的站台候选，
+   * 供环线「同一主码多次停靠」时按站序定位（缺省 ⇒ 行为与改动前逐字节一致）。
+   */
+  board: { code: string; lng: number; lat: number; platforms?: PlatformCand[] } | null;
+  /** 下车站（同上） */
+  alight: { code: string; lng: number; lat: number; platforms?: PlatformCand[] } | null;
 }
 
 /** ★ 4-B−：`/api/route-shapes` 的 `shapes[].stations[]` 元素（本方向站序，主码） */
 export interface RouteStopSeq {
   code: string;
+  seq: number;
+}
+
+/**
+ * ★ 环线多次停靠取点：同一**主码**下的一个站台候选。
+ *
+ * ── 为什么需要（26 路实例）────────────────────────────────────────────
+ *   26 路是环线（76 站、首末同站 `M95/3`）。主码 `T345` 在站序里出现**两次**：
+ *   `T345/5` 第 26 站、`T345/1` 第 53 站。可见「主码 → 一个坐标」不足以表达
+ *   「第几次经过」，而 `pickTripPair` 遇到主码重复就整段回落 `nearestOnPath`
+ *   全局最近点 ⇒ 金峰南岸（seq44）→ T345 会被吸到 seq26 那一趟，只能**环绕一圈**
+ *   （实测彩段 37059m，正确约 7775m）。
+ *
+ *   `seq` 取 `route_stations.seq` 原值（与 `route_shapes.stations[].seq` 同源），
+ *   因此可把「站序位置」反查回「该位置对应的站台坐标」。
+ */
+export interface PlatformCand {
+  /** 完整站台码（如 `T345/1`） */
+  code: string;
+  lng: number;
+  lat: number;
+  /** 该站台所属方向（`dsat_dir`） */
+  dir: string;
+  /** 站序原值（`route_stations.seq`） */
   seq: number;
 }
 
@@ -360,6 +400,51 @@ function mainCodeOf(code: string): string {
   return code.replace(/\/\d+$/, "");
 }
 
+/** ★ 站序判向结果：`null` 语义见 `seqVerdictOf` */
+type SeqVerdict = "same" | "reverse" | "unknown";
+
+/**
+ * ★ 站序判向（唯一性护栏）——**外层选向用，先于几何打分**。
+ *
+ * ── 为什么不能靠几何 ──────────────────────────────────────────────────
+ *   实测 15 条双向线路会选反（1/3/8/18B/1A/25B/26A/51A/71S/MT4/N2 为 0→1；
+ *   10/61/102/17S 为 1→0）。根因不是容差：两个方向**都在** `TOL_M` 内，只是
+ *   「反向折线恰好更贴近两端站点」⇒ `dBoard+dAlight` 更小 ⇒ 反向胜出
+ *   （25B 实例：dir0 = 65.7m 被 dir1 = 19.9m 击败）。放宽容差对它零收益
+ *   （实测 `mismatch` 从 80m 到 240m 恒为 15）。
+ *
+ * ── 判据（唯一性护栏，与 `pickTripPair` 的 `unambiguous` 同源）──────────
+ *   `route_stations(dsat_dir)` 的站序是权威方向口径：
+ *     · 两主码在该 dir 站序里**各只出现一次**且 `idxBoard < idxAlight` ⇒ `"same"`；
+ *     · 各只出现一次但 `idxBoard > idxAlight` ⇒ `"reverse"`；
+ *     · 任一出现 >1 次（环线多次停靠）/ 无 `stations` / 同位置 ⇒ `"unknown"`。
+ *   实测（48 个双向 route×dir）：可判 48、判不出 0 ⇒ 该护栏在本库不损失覆盖面。
+ */
+function seqVerdictOf(
+  stations: RouteStopSeq[] | null | undefined,
+  boardCode: string | undefined,
+  alightCode: string | undefined,
+): SeqVerdict {
+  if (!stations || stations.length < 2 || !boardCode || !alightCode) return "unknown";
+  const b = mainCodeOf(boardCode);
+  const a = mainCodeOf(alightCode);
+  let pb = -1;
+  let pa = -1;
+  for (let i = 0; i < stations.length; i++) {
+    const k = mainCodeOf(stations[i].code);
+    if (k === b) {
+      if (pb >= 0) return "unknown"; // 出现 >1 次 ⇒ 「第几次经过」不可判
+      pb = i;
+    }
+    if (k === a) {
+      if (pa >= 0) return "unknown";
+      pa = i;
+    }
+  }
+  if (pb < 0 || pa < 0 || pb === pa) return "unknown";
+  return pb < pa ? "same" : "reverse";
+}
+
 /**
  * ★ 4-B−：在**同一条 shape** 上，用「站序 + 单跳里程」挑一对 `(iBoard, iAlight)` 趟次。
  *
@@ -390,15 +475,85 @@ function mainCodeOf(code: string): string {
  *   · 两站序位置相同；· 全部候选被判据剔除；· 结果比旧解更长。
  *   **回落永不更差**。
  */
+/** 按 (dir, seq) 取站台坐标；缺任一项 ⇒ `null`（调用方据此跳过该组合） */
+function platformAt(
+  list: PlatformCand[] | undefined,
+  dir: string | null | undefined,
+  seq: number | undefined,
+): { lng: number; lat: number } | null {
+  if (!list?.length || dir == null || seq == null) return null;
+  const hit = list.find((p) => p.dir === dir && p.seq === seq);
+  return hit ? { lng: hit.lng, lat: hit.lat } : null;
+}
+
+/**
+ * ★ 环线「同一主码多次停靠」的趟次枚举（26 路 `T345` 第 26 / 53 站）。
+ *
+ * ── 解决什么 ──────────────────────────────────────────────────────────
+ *   26 路金峰南岸（seq44）→ T345：`T345` 在站序里出现两次。旧行为是「主码重复 ⇒
+ *   整段回落 `nearestOnPath` 全局最近点」，实测吸到 **seq26 那一趟**（shape 索引
+ *   更小）⇒ `iAlight < iBoard` ⇒ 环线只能环绕一整圈（彩段 37059m，正确约 7775m）。
+ *
+ * ── 判据（与 `cutColored` 的环绕分支一一对应）──────────────────────────
+ *   环线只画**索引递增**那条弧（`ia >= ib` 走 `slice(ib, ia+1)`），所以这里也只
+ *   接受 `y.idx > x.idx` 的组合，弧长 = `cum[y] - cum[x]`。取最短弧，且**唯一**。
+ *
+ * ── 严格回落（任一成立返回 null ⇒ 调用方回落旧解）──────────────────────
+ *   · 无 `platforms`（老响应/老客户端）或站台坐标缺失；
+ *   · 该 (dir, seq) 在 shape 上 `tolM` 内无顶点；
+ *   · 没有任何 `y.idx > x.idx` 的组合；
+ *   · 最短弧并列（组合不唯一）⇒ 不猜。
+ */
+function pickTripPairLoopMulti(
+  pts: LL[],
+  board: { lng: number; lat: number; platforms?: PlatformCand[] },
+  alight: { lng: number; lat: number; platforms?: PlatformCand[] },
+  tolM: number,
+  stations: RouteStopSeq[],
+  posB: number[],
+  posA: number[],
+  dir: string | null,
+): { iBoard: number; iAlight: number; seqDir: SeqDir } | null {
+  const cum = cumDistM(pts);
+  const cands: { iBoard: number; iAlight: number; arc: number; seqDir: SeqDir }[] = [];
+  for (const ibPos of posB) {
+    const pB = platformAt(board.platforms, dir, stations[ibPos]?.seq);
+    if (!pB) continue;
+    const tb = nearestTrips(pts, pB, tolM);
+    if (!tb.length) continue;
+    for (const iaPos of posA) {
+      const pA = platformAt(alight.platforms, dir, stations[iaPos]?.seq);
+      if (!pA) continue;
+      const ta = nearestTrips(pts, pA, tolM);
+      if (!ta.length) continue;
+      const seqDir: SeqDir = ibPos < iaPos ? "forward" : "reverse";
+      for (const x of tb) {
+        for (const y of ta) {
+          /* 环线绕行方向 = shape 索引递增；反向那一趟要绕整圈，不是本趟行程 */
+          if (y.idx <= x.idx) continue;
+          cands.push({ iBoard: x.idx, iAlight: y.idx, arc: cum[y.idx] - cum[x.idx], seqDir });
+        }
+      }
+    }
+  }
+  if (!cands.length) return null;
+  cands.sort((a, b) => a.arc - b.arc);
+  const best = cands[0];
+  /** 组合不唯一 ⇒ 不猜（宁可回落旧解，也不产生「随查询顺序变化」的结果） */
+  if (cands.filter((c) => Math.abs(c.arc - best.arc) <= 1e-6).length !== 1) return null;
+  return { iBoard: best.iBoard, iAlight: best.iAlight, seqDir: best.seqDir };
+}
+
 function pickTripPair(
   pts: LL[],
-  board: { lng: number; lat: number; code?: string },
-  alight: { lng: number; lat: number; code?: string },
+  board: { lng: number; lat: number; code?: string; platforms?: PlatformCand[] },
+  alight: { lng: number; lat: number; code?: string; platforms?: PlatformCand[] },
   loop: boolean,
   tolM: number,
   stations: RouteStopSeq[] | null | undefined,
   iBoard0: number,
   iAlight0: number,
+  dir: string | null = null,
 ): { iBoard: number; iAlight: number; seqDir: SeqDir; repicked: boolean } {
   const base = { iBoard: iBoard0, iAlight: iAlight0, seqDir: null as SeqDir, repicked: false };
   if (!stations || stations.length < 2) return base;
@@ -421,10 +576,25 @@ function pickTripPair(
   if (!posB.length || !posA.length) return base;
 
   const unambiguous = posB.length === 1 && posA.length === 1;
+  if (!unambiguous) {
+    /**
+     * ★ 环线多次停靠：board/alight 的主码在站序里各出现多次（26 路 `T345` 第 26/53 站）。
+     *   旧行为 = 整段回落 `nearestOnPath` 全局最近点 ⇒ 可能吸到「要先绕一整圈」的那一趟
+     *   （实测 26 路金峰南岸→T345 彩段 37059m，正确约 7775m）。
+     *   现只在**环线**上枚举（board 位置 × alight 位置 × 各自趟次），取「索引递增
+     *   （沿绕行方向）从 board 到 alight」的最短弧；组合不唯一 / 缺站台坐标 ⇒ 回落旧解。
+     *   ⚠️ 非环线一律 `return base`，与改动前逐字节一致。
+     */
+    if (loop) {
+      const multi = pickTripPairLoopMulti(pts, board, alight, tolM, stations, posB, posA, dir);
+      if (multi) return { ...multi, repicked: true };
+    }
+    return base;
+  }
   const pb = posB[0];
   const pa = posA[0];
-  /** 站码在站序里出现多次 ⇒ 「第几次经过」不可判 ⇒ 直接回落旧解（不冒险） */
-  if (!unambiguous || pb === pa) return base;
+  /** 同一主码上下车（board === alight）⇒ 「第几次经过」不可判 ⇒ 回落旧解（不冒险） */
+  if (pb === pa) return base;
 
   const tb = nearestTrips(pts, board, tolM);
   const ta = nearestTrips(pts, alight, tolM);
@@ -523,10 +693,62 @@ function pickTripPair(
  */
 export function chooseShape(
   shapes: RouteShapeLite[],
-  board: { lng: number; lat: number; code?: string },
-  alight: { lng: number; lat: number; code?: string },
+  board: { lng: number; lat: number; code?: string; platforms?: PlatformCand[] },
+  alight: { lng: number; lat: number; code?: string; platforms?: PlatformCand[] },
   tolM: number = TOL_M,
 ): ChooseShapeResult | null {
+  /**
+   * ★ 站序判向（先于几何打分，2026-11-15）
+   *
+   * 规则：对每个 shape 用它的 `shape.stations`（本 dir 站序，主码、seq 升序、相邻重复已折叠）
+   * 判 `board → alight` 是否与本方向同向（见 `seqVerdictOf`）。
+   *   · **恰有一个 shape 判为同向** ⇒ 直接选它，跳过 `dBoard+dAlight` 打分。
+   *     `iBoard/iAlight` 仍由 `pickTripPair` 算（含站序重选），`cutColored` 原样调用。
+   *   · 没有 / 多个同向 / 全部不可判 ⇒ **完全回落下面的几何打分**（`nb.idx <= na.idx`
+   *     tiebreak 一字未改），逐字节等价于改动前。
+   *
+   * ⚠️ 直选分支**不检查** `dBoard/dAlight > tolM`：站序已证明该 shape 含这两站，
+   *    距离大是「站台点 vs 道路中线」的物理偏差（轻轨横琴 105.4m、石排湾 149.2m），
+   *    不是「方向不含此站」。若在这里拦，轻轨彩段会继续整线灰（那是另一个缺陷）。
+   * ⚠️ `TOL_M` 不动、不新增容差常量：实测放宽容差对 `mismatch` 零收益（恒 15）。
+   */
+  const seqSame: RouteShapeLite[] = [];
+  for (const s of shapes ?? []) {
+    if (seqVerdictOf(s.stations, board.code, alight.code) === "same") seqSame.push(s);
+  }
+  if (seqSame.length === 1) {
+    const shape = seqSame[0];
+    const pts = parsePolyline(shape.polyline);
+    if (pts.length >= 2) {
+      const nb = nearestOnPath(pts, board);
+      const na = nearestOnPath(pts, alight);
+      const loop = isLoop(pts, shape.startStop, shape.endStop);
+      const pair = pickTripPair(
+        pts,
+        board,
+        alight,
+        loop,
+        tolM,
+        shape.stations,
+        nb.idx,
+        na.idx,
+        shape.dir ?? null,
+      );
+      return {
+        shape,
+        dir: shape.dir ?? null,
+        iBoard: pair.iBoard,
+        iAlight: pair.iAlight,
+        dBoard: nb.distM,
+        dAlight: na.distM,
+        pts,
+        loop,
+        seqDir: pair.seqDir,
+        repicked: pair.repicked,
+      };
+    }
+  }
+
   let best: ChooseShapeResult | null = null;
   let bestScore = Infinity;
   for (const shape of shapes ?? []) {
@@ -548,6 +770,7 @@ export function chooseShape(
       shape.stations,
       nb.idx,
       na.idx,
+      shape.dir ?? null,
     );
 
     const candidate: ChooseShapeResult = {
@@ -618,6 +841,50 @@ export function buildColoredLegs(
   const eqM = opts?.boardEqAlightM ?? BOARD_EQ_ALIGHT_M;
   return (legs ?? []).map((leg) => {
     const shapes = shapesByRoute?.[leg.route] ?? [];
+    /**
+     * ★ 2026-11-15：**静默降级告警**（不改行为、不抛错）。
+     *
+     * 站序判向的前置条件是 `board.code` / `alight.code`（`seqVerdictOf` 缺任一即
+     * `"unknown"`）。若调用方只给 `{lng, lat}`，选向修复会**整体静默失效**——
+     * 实测会从 48/0/0 掉回 27/15/6，而所有门禁仍绿（夹具都带 `code`）。
+     * 生产当前安全（`detail-body` 的 `coordOf` 明确返回 `code`），但**新调用方漏传
+     * 无人察觉** ⇒ 必须在入口喊一声，让「修复失效」呈现为可观测告警而不是全绿。
+     */
+    const seqStations = shapes.find((s) => (s.stations?.length ?? 0) >= 2)?.stations ?? null;
+    if (seqStations) {
+      const miss: string[] = [];
+      if (!leg.board?.code) miss.push("board");
+      if (!leg.alight?.code) miss.push("alight");
+      if (miss.length) {
+        if (!warnedNoCode.has(leg.route)) {
+          warnedNoCode.add(leg.route);
+          console.warn(
+            `[route-overview] ${leg.route}#${leg.index} 缺 ${miss.join("+")}.code ⇒ 站序判向不可用，已静默回落几何打分（该腿选向修复失效）`,
+          );
+        }
+      } else {
+        /**
+         * 环线多次停靠（26 路 `T345` 第 26/53 站）需要 `platforms` 才能按 (dir, seq) 取点；
+         * 缺了就回落全局最近点（可能多绕一圈）。这里只告警，不改变回落行为。
+         */
+        const countOf = (code: string) => {
+          const m = mainCodeOf(code);
+          return seqStations.filter((x) => mainCodeOf(x.code) === m).length;
+        };
+        const lackPlat = (o: { platforms?: PlatformCand[] } | null) => !o?.platforms?.length;
+        const multiNoPlat: string[] = [];
+        if (leg.board && countOf(leg.board.code) > 1 && lackPlat(leg.board)) multiNoPlat.push("board");
+        if (leg.alight && countOf(leg.alight.code) > 1 && lackPlat(leg.alight)) multiNoPlat.push("alight");
+        if (multiNoPlat.length) {
+          if (!warnedNoPlat.has(leg.route)) {
+            warnedNoPlat.add(leg.route);
+            console.warn(
+              `[route-overview] ${leg.route}#${leg.index} 环线多次停靠未启用（缺 ${multiNoPlat.join("+")}.platforms）⇒ 回落全局最近点`,
+            );
+          }
+        }
+      }
+    }
     const base = {
       index: leg.index,
       route: leg.route,
@@ -640,23 +907,33 @@ export function buildColoredLegs(
 
     // ③ 选方向
     /**
-     * ★ 4-B− 范围闸门：**只有巴士段吃站序**。
+     * ★ 2026-11-15（负责人裁定 A）：**放开轻轨闸门** —— 轻轨也吃站序判向。
      *
-     * 理由（风险隔离，不是能力缺失）：
-     *   · 用户报告的缺陷域就是巴士段（地图上巴士彩段从对侧站台起画、绕路环一圈）；
-     *   · 轻轨段的 `colored` 另有一套消费者 —— `useRideTracking` 的 `buildLrtLadder`
-     *     （GPS 里程阶梯）、`cutAt`（安全网投影距离）、`youAt`（纵条用户点）、
-     *     自动下车阈值，都按 `colored` 的里程推进。改轻轨彩段 = 动这套推进的基准，
-     *     属于另一个子系统，须独立回归。实测轻轨段确实会变（如 氹仔线
-     *     `LRT-OCH→LRT-JCK` 772m→678m，方向上是变准），但**本轮不顺手改**。
-     *   · 接口对轻轨也下发了 `stations`（有用且无副作用），闸门只在前端这一处；
-     *     将来要放开，删掉这个三元即可（一行、可逆）。
+     * ── 为什么必须放开（不是顺手改）────────────────────────────────────
+     *   原实现在这里对 `kind !== "bus"` 把 `stations` 置 null ⇒ 轻轨只能走几何选向。
+     *   实测 `LRT-横琴线`（105.4m）、`LRT-石排湾线`（149.2m / 83.4m）两方向均超
+     *   `TOL_M=80` ⇒ `chooseShape` 返回 null ⇒ 整条腿 `degraded=true`、`colored===gray`。
+     *   而 `boarding-detect.ts:556` 的 `geomOk = colored.length >= 2 && !legDegraded`
+     *   恒 false ⇒ **轻轨自动上车整段被关掉**（负责人报的「轻轨永远显示等待上车」）。
+     *   ⇒ 不放开这一行，那个问题只是假修。
+     *
+     * ── 代价（已实测，不是推测）────────────────────────────────────────
+     *   轻轨三线的**每个 dir 都能被站序判向直选命中**（`seqSame.length === 1`）
+     *   ⇒ 压根不走几何回落 ⇒ `colored` 与改前**逐点相同**（实测：氹仔 11257.2m/310pt、
+     *     横琴 1621.0m/48pt、石排湾 781.8m/52pt，全部 dir 漂移 0 点/0 米），
+     *   **唯一变化是 `degraded` 由 true → false** —— 这正是放开的目的：让
+     *   `boarding-detect` 的 `geomOk = colored.length >= 2 && !legDegraded` 不再恒 false，
+     *   轻轨自动上车才可能生效。
+     *   ⚠️ **不要**把原因写成「几何打分不吃 stations」：回落路径 `pickTripPair` 是
+     *      **吃** `stations` 的（`pickTripPair(pts, …, shape.stations, …)`）。真正原因是
+     *      「直选命中、没走回落」。若将来某条轻轨两向都不可判、真的落到回落路径，
+     *      里程就可能变，那时必须重新量。
+     *   已跑 `test-lrt-progress`（64）/ `test-boarding-detect`（193）/
+     *   `test-route-overview`（101）三张网，断言一行未改。
+     *
+     * ⚠️ 不要改回三元闸门：改回即重新关掉轻轨自动上车（问题 6 复发）。
      */
-    const pickShapes =
-      leg.kind === "bus"
-        ? shapes
-        : shapes.map((s) => (s.stations ? { ...s, stations: null } : s));
-    const picked = chooseShape(pickShapes, leg.board, leg.alight, tolM);
+    const picked = chooseShape(shapes, leg.board, leg.alight, tolM);
     if (!picked) {
       // 两方向都超容差 → 降级：第一个 shape 整线着色
       const gray = parsePolyline(shapes[0].polyline);

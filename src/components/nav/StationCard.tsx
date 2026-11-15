@@ -57,6 +57,7 @@ import Icon from "@/components/ui/Icon";
 import SetPointActions from "./SetPointActions";
 import { EtaText } from "@/components/RoutePieces";
 import { TqhStationTrips } from "./TqhStationCard";
+import { noVehicleText, type NoVehicleState } from "@/lib/ui/service-text";
 import type { TqhStationEntry, TqhTrip } from "./tqh-model";
 
 export interface StationCardStation {
@@ -96,6 +97,16 @@ interface EtaItem {
   depMs?: number | null;
   /** ★ v2.10.1 轻轨专用：该线实测偏差（秒） */
   biasSec?: number;
+  /**
+   * ★ 2026-11-12（问题 4）：该线**此刻的营运状态**（`serviceStateAt` 五态 / 轻轨 `after_last`）。
+   *
+   * ⚠️ **这是「按可能存在」消费，不是新契约**：`/api/station/eta` 目前**不下发**本字段
+   *   ⇒ 现值恒 `undefined` ⇒ 文案回落到**默认无车文案**（等同改前）。
+   *   为什么不在这里自己算：`serviceStateAt` 需要 `HeadwayIndex`，而 `loadHeadway`
+   *   要 `Pool`（server-only）。客户端拿不到 ⇒ **必须由接口下发**（方案已报 team-lead，
+   *   未自行扩接口）。字段到位后本文件零改动即可生效。
+   */
+  service?: NoVehicleState | null;
 }
 
 interface EtaResponse {
@@ -150,7 +161,7 @@ function lrtEtaText(it: EtaItem, nowMs: number, offsetMs = 0): string {
 
 /**
  * 报站内容（简体）。
- * · 巴士：ok=false→取不到；无车→暂无班次信息；0 站→即将到站；否则「还有 N 站 · 约 M 分」
+ * · 巴士：ok=false→取不到；无车→默认无车文案（见 `service-text.ts`）；0 站→即将到站；否则「还有 N 站 · 约 M 分」
  * · **轻轨**：时刻表制，显示「下一班还有 …」（见 `lrtEtaText`）
  * ★ 站数 N 与「即将到站」由 `<EtaText>` 加粗 + 青花蓝（通勤决策的关键数字，第一眼可见）。
  */
@@ -160,7 +171,17 @@ function etaNode(it: EtaItem, nowMs: number, offsetMs = 0) {
     return <EtaText text={lrtEtaText(it, nowMs, offsetMs)} />;
   }
   if (!it.ok) return <>这条线路暂时取不到报站</>;
-  if (it.stopsAway === null) return <>暂无班次信息</>;
+  /**
+   * ★ 2026-11-12（问题 4）：无车文案改走 `@/lib/ui/service-text` 的**唯一映射**
+   *   （与折叠栏 `detail-fold.ts`、轻轨 `LrtEta.tsx` 共用同一函数）。
+   *
+   * `it.service` 是**可选**字段：`/api/station/eta` 当前不下发 service state ⇒ 现值恒
+   * `undefined` ⇒ 走**默认分支** = **与改前逐字一致**（该字面量只存在于 `service-text.ts`）。
+   * 等接口补上该字段后，这一行**无需再改**（只能靠现有响应里的 `ok` / `kind` / 时刻推出
+   * 状态的都推不出「是否在营运窗口内」——客户端拿不到 `HeadwayIndex`，见 service-text 头注）。
+   * ⚠️ 不要在这里自己按「现在几点」猜营运时间：那会与 `schedule.ts` 的假期/跨午夜判定漂移。
+   */
+  if (it.stopsAway === null) return <>{noVehicleText(it.service ?? null)}</>;
   return (
     <EtaText text={it.stopsAway === 0 ? "即将到站" : `还有 ${it.stopsAway} 站 · 约 ${it.etaMin ?? 0} 分`} />
   );

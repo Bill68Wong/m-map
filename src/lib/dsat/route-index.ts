@@ -37,6 +37,34 @@ export interface StationRow {
 }
 
 /**
+ * ★ v4.2.0：线路行（`routes.is_active` 全量）—— 只取循环线判定所需的两个字段。
+ *
+ * 为什么单独取而不是 JOIN 进站序查询：站序是 119 行（聚合后），JOIN `routes` 会把
+ * 2870 行原始停靠乘出来（每行多一份线路列），传输量翻几倍且没有任何收益。
+ */
+export interface RouteRow {
+  code: string;
+  is_loop: boolean;
+}
+
+/**
+ * ★ v4.2.0：**循环线判定的唯一取值口**。
+ *
+ * 口径切换（v4.2.0）：老口径是「该线站序方向数 ≤ 1」，新口径是 `routes.is_loop`
+ * （DSAT `direction=2` 权威标记，实测 76 true / 24 false，与老口径集合差异 0/0）。
+ *
+ * ⚠️ **空 Map 回落老口径**：发版初期 Data Cache 可能还是旧结构 payload（无 `routeRows`）
+ *   ⇒ `loopOf` 为空。此时回落老口径 ⇒ 行为与改前逐字节一致（安全），并已在
+ *   `buildRouteIndexFromRows` 打了「命中旧缓存」告警。
+ *   ⛔ 不许写成 `loopOf.get(route) ?? false`：那会把 75 条 is_active 循环线判成非循环。
+ */
+export function isLoopOf(idx: RouteIndex, route: string): boolean {
+  const hit = idx.loopOf?.get(route);
+  if (hit !== undefined) return hit;
+  return (idx.dirsOf.get(route)?.length ?? 0) <= 1;
+}
+
+/**
  * ★ v1.0.4：站序索引的**纯构建函数**（零 DB 访问）。
  *
  * 为什么拆出来：线上冷启动 `loadStatics` 实测 2283ms，而 v1.0.2（连接池上限 5→12）
@@ -46,7 +74,11 @@ export interface StationRow {
  * 对策 = 让「取行」住进 Vercel Data Cache（见 `src/lib/recommend/query.ts`），
  * 冷启动直接读缓存 → 完全不碰数据库；索引则每次在内存里重建（成本可忽略）。
  */
-export function buildRouteIndexFromRows(stopsRows: RouteStopRow[], stationRows: StationRow[]): RouteIndex {
+export function buildRouteIndexFromRows(
+  stopsRows: RouteStopRow[],
+  stationRows: StationRow[],
+  routeRows?: RouteRow[],
+): RouteIndex {
   const dirStops = new Map<string, string[]>();
   const seqIdx = new Map<string, Map<string, number[]>>();
   const dirsOf = new Map<string, string[]>();
@@ -96,13 +128,47 @@ export function buildRouteIndexFromRows(stopsRows: RouteStopRow[], stationRows: 
     if (!nameOf.has(main)) nameOf.set(main, s.kind === "bus" ? `${main} ${s.name_tc}` : s.name_tc);
   }
 
-  return { dirStops, seqIdx, dirsOf, nameOf, adjOwners };
+  /**
+   * ★ v4.2.0：循环线口径（`routes.is_loop`）。
+   *
+   * ⚠️ `routeRows === undefined` ⇒ **命中旧缓存**（发版初期 Data Cache 里仍是旧结构 payload，
+   *   没有 `routeRows`）。此时 `loopOf` 保持空 Map，取值由 `isLoopOf()` 回落老口径
+   *   （`dirsOf.length ≤ 1`）⇒ 行为与改前逐字节一致。缓存 60s 内自然刷新。
+   *   ⛔ **不许把 undefined 当空数组处理成「全部 false」** —— 那会把 75 条 is_active
+   *      循环线静默判成非循环（用户侧表现为「循环线开始按去/回程分两套站序」）。
+   */
+  /**
+   * ── 分母为什么是「`routeRows.length`」（当前 99），不是 76 ───────────────
+   *   取数是 `SELECT code, is_loop FROM routes WHERE is_active` ⇒ 分母 = **is_active 条数**
+   *   （当前 99）。而「`is_loop = true` 76 条」是**全表**统计，含已停运的 36 路
+   *   （`is_active = false` 但 `is_loop = true`）⇒ 两个分母不是一回事：
+   *     · 断言写死 76 ⇒ **永远红**（99 ≠ 76）；
+   *     · 断言写「≥ 76」⇒ 真丢 24 条（99 → 75）时**假绿**。
+   *   ⇒ 只比「本函数实际拿到的 `routeRows.length`」，让**取数那行 SQL 决定分母**
+   *     （铁律 44 族：分母必须可验证），不写任何魔数。
+   */
+  const loopOf = new Map<string, boolean>();
+  if (routeRows === undefined) {
+    console.warn(
+      "[route-index] 命中旧缓存（payload 无 routeRows）⇒ is_loop 不可用，本次回落老口径（方向数 ≤ 1）；60s 内自然刷新",
+    );
+  } else {
+    for (const r of routeRows) loopOf.set(r.code, r.is_loop === true);
+    if (loopOf.size !== routeRows.length) {
+      // 重复 code ⇒ size 小于 length；说明上游查询去重失效，必须显式报出两个数
+      console.error(
+        `[route-index] loopOf 构建异常：size=${loopOf.size} ≠ routeRows.length=${routeRows.length}（上游可能有重复 code）`,
+      );
+    }
+  }
+
+  return { dirStops, seqIdx, dirsOf, nameOf, adjOwners, loopOf };
 }
 
 /** 站序索引的原始行查询（**服务端聚合 + 站名单独取**，见下）+ 构建 */
 export async function buildRouteIndex(pool: Pool): Promise<RouteIndex> {
-  const [stopsRows, stationRows] = await queryRouteIndexRows(pool);
-  return buildRouteIndexFromRows(stopsRows, stationRows);
+  const [stopsRows, stationRows, routeRows] = await queryRouteIndexRows(pool);
+  return buildRouteIndexFromRows(stopsRows, stationRows, routeRows);
 }
 
 /**
@@ -120,8 +186,10 @@ export async function buildRouteIndex(pool: Pool): Promise<RouteIndex> {
  *   ⚠️ 实测证明这一步**并没有**让线上 staticMs 变快（2283ms）——因为瓶颈不在传输量，
  *      而在每次冷启动重建连接的固定成本。真正的对策见 `buildRouteIndexFromRows` 注释。
  */
-export async function queryRouteIndexRows(pool: Pool): Promise<[RouteStopRow[], StationRow[]]> {
-  const [stopsRes, stRes] = await Promise.all([
+export async function queryRouteIndexRows(
+  pool: Pool,
+): Promise<[RouteStopRow[], StationRow[], RouteRow[]]> {
+  const [stopsRes, stRes, routeRes] = await Promise.all([
     // ★ v3.6.0：`WHERE r.is_active` —— **停运线路不得进候选**。
     //   何以必须在这里过滤：站序索引是「线路 → 站序 → 逐跳枚举」的唯一原料，
     //   推荐 / 替代线路 / 站牌线路全部从 `dirStops` 派生 ⇒ 一旦停运线路留在索引里，
@@ -142,8 +210,21 @@ export async function queryRouteIndexRows(pool: Pool): Promise<[RouteStopRow[], 
     ),
     // 站名与 kind 只随「站」变化（613 行），没必要在每一行停靠里重复 2870 次
     pool.query(`SELECT code, name_tc, kind FROM stations`),
+    /**
+     * ★ v4.2.0：循环线口径。**必须是独立查询，不能 JOIN 进上面那条站序查询** ——
+     * 站序已聚合到 119 行，JOIN `routes` 会把 2870 行原始停靠乘出来（每行重复线路列），
+     * 传输量翻几倍且零收益。
+     * ⚠️ 与上面两条**共用同一个 `unstable_cache` 外层**（`query.ts#getStaticRows`）⇒
+     *   缓存失效是原子的；**不要**另开一个 `unstable_cache`，否则会出现「站序是新的、
+     *   is_loop 是旧的」的半新半旧状态（比空 Map 更难查）。
+     */
+    pool.query(`SELECT code, is_loop FROM routes WHERE is_active`),
   ]);
-  return [stopsRes.rows as RouteStopRow[], stRes.rows as StationRow[]];
+  return [
+    stopsRes.rows as RouteStopRow[],
+    stRes.rows as StationRow[],
+    routeRes.rows as RouteRow[],
+  ];
 }
 
 /** 带进程内缓存的站序索引（TTL 5 分钟；force=true 绕过） */

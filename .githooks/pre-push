@@ -1,10 +1,16 @@
 #!/bin/sh
 # 推送前门禁（铁律 56 / 58）· 2026-11-05 立
+#                                  2026-11-13 增补：合作者动态检查
 #
-# 作用：推送前强制跑一次审核报告，按结论决定是否放行：
+# 两段串联执行，退出码取最严（BLOCK > CONFIRM > PASS）：
+#   ① check-peer-activity : 远端协作动态（远端 main 是否前进、是否有别人 open PR 且文件重叠）
+#                          —— 需要网络；网络不可达时降级为 PASS 并告警
+#   ② review-push        : 本地文件分类 / 敏感扫描 / 必要性清单 —— 纯离线
+#
+# 放行规则（两段同一语义）：
 #   exit 0 = PASS                          → 放行
-#   exit 2 = CONFIRM（分类不明/大批量）     → 默认拒绝；只有 PUSH_APPROVED=1 才放行
-#   exit 1 = BLOCK（禁止类型/敏感内容）     → 一律拒绝，PUSH_APPROVED 也不放行
+#   exit 2 = CONFIRM（分类不明/大批量/协作未验证） → 默认拒绝；只有 PUSH_APPROVED=1 才放行
+#   exit 1 = BLOCK（禁止类型/敏感内容/主线已前进） → 一律拒绝，PUSH_APPROVED 也不放行
 #
 # PUSH_APPROVED=1 的语义 =「负责人已在对话中看过清单并明确同意」。
 # 它不是万能钥匙：只解锁 CONFIRM，不解锁 BLOCK。
@@ -15,8 +21,34 @@ if ! command -v node >/dev/null 2>&1; then
   exit 1
 fi
 
+# ── ① 合作者动态检查（需要网络）───────────────────────────────────────
+echo ""
+echo "[pre-push] ① 合作者动态检查（远端 main 同步 / 他人 open PR 重叠）"
+node scripts/check-peer-activity.mjs
+peer_code=$?
+echo "[pre-push] ① 结论：exit=$peer_code"
+
+# ── ② 本地推送审核（纯离线）───────────────────────────────────────────
+echo ""
+echo "[pre-push] ② 本地推送审核（文件分类 / 敏感扫描 / 必要性清单）"
 node scripts/review-push.mjs
-code=$?
+review_code=$?
+echo "[pre-push] ② 结论：exit=$review_code"
+
+# ── 取最严：1（BLOCK）> 2（CONFIRM）> 0（PASS）─────────────────────────
+code=0
+if [ "$peer_code" -eq 1 ] || [ "$review_code" -eq 1 ]; then
+  code=1
+elif [ "$peer_code" -eq 2 ] || [ "$review_code" -eq 2 ]; then
+  code=2
+elif [ "$peer_code" -ne 0 ] || [ "$review_code" -ne 0 ]; then
+  # 非 0/1/2 的异常退出码（如脚本缺失 127）一律按 BLOCK 处理（默认方向为失败）
+  echo "[pre-push] 检测到异常退出码（①=$peer_code，②=$review_code）⇒ 按 BLOCK 处理"
+  code=1
+fi
+
+echo ""
+echo "[pre-push] 合并判定：取最严 ⇒ exit=$code（①=$peer_code，②=$review_code）"
 
 case "$code" in
   0)
@@ -35,8 +67,8 @@ case "$code" in
     ;;
   *)
     echo ""
-    echo "[pre-push] BLOCK：存在禁止入库文件或敏感内容 ⇒ 拒绝推送（铁律 56/57）。"
-    echo "[pre-push] 处理：从索引移除或补忽略规则后重新 commit；不得绕过。"
+    echo "[pre-push] BLOCK：存在禁止入库文件/敏感内容，或远端主线已前进/协作状态未验证 ⇒ 拒绝推送（铁律 56/57）。"
+    echo "[pre-push] 处理：按上面两段报告修正后重新推送；不得绕过。"
     exit 1
     ;;
 esac

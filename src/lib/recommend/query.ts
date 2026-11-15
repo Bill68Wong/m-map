@@ -39,6 +39,7 @@ import {
   queryRouteIndexRows,
   type RouteStopRow,
   type StationRow,
+  type RouteRow,
 } from "@/lib/dsat/route-index";
 import { buildLrtPreload, type LrtPreload } from "@/lib/lrt/next-departures";
 import { buildSegmentIndex, type SegmentIndex } from "./segment-lookup";
@@ -117,6 +118,15 @@ const decodeSegRows = (enc: SegRowEncoded[]): SegmentStatRow[] =>
 interface StaticRows {
   routeStops: RouteStopRow[];
   stations: StationRow[];
+  /**
+   * ★ v4.2.0：线路表（`is_active` 全量，只取 `code` / `is_loop`）——循环线口径。
+   *
+   * ⚠️ **可选**：发版初期 Data Cache 里可能仍是**旧结构 payload**（没有这个字段）。
+   *   `buildRouteIndexFromRows` 收到 `undefined` 会回落老口径并告警（见该函数注释），
+   *   所以这里**不要**给默认值 `[]` —— 空数组会被当成「所有线路 is_loop=false」的真值，
+   *   那正是「75 条循环线被判成非循环」的静默错。
+   */
+  routeRows?: RouteRow[];
   /** ★ v3.6.1：**数组编码**形态（消费前必须 `decodeSegRows`，见 loadStaticsUncached） */
   seg: SegRowEncoded[];
   /**
@@ -209,10 +219,11 @@ async function fetchStaticRowsUncached(pool: Pool): Promise<StaticRows> {
       .catch(() => ({ rows: [] as unknown[] })),
   ]);
 
-  const [routeStops, stations] = routeIdxRows;
+  const [routeStops, stations, routeRows] = routeIdxRows;
   return {
     routeStops,
     stations,
+    routeRows,
     seg: encodeSegRows(segRes.rows as unknown as SegmentStatRow[]),
     hopDist: hopDistRes.rows as StaticRows["hopDist"],
     walk: walkRes.rows as unknown as WalkTimeRow[],
@@ -414,7 +425,12 @@ async function loadStaticsUncached(): Promise<RecStatic> {
   const routeColors: Record<string, string> = {};
   for (const r of rows.colors) routeColors[r.code] = r.color;
 
-  const routeIdx = buildRouteIndexFromRows(rows.routeStops, rows.stations);
+  /**
+   * ★ v4.2.0：第三个参数是 `routes.is_loop`（循环线权威口径）。
+   * `rows.routeRows` 在**旧缓存 payload** 上是 `undefined`（字段是后加的）⇒
+   * `buildRouteIndexFromRows` 会回落老口径并告警，**不要**在这里 `?? []` 兜底。
+   */
+  const routeIdx = buildRouteIndexFromRows(rows.routeStops, rows.stations, rows.routeRows);
 
   // ★ v4.1.0：中途总站集合（站名含總站/总站且不在首末位）——纯函数，零额外 DB 往返
   //   判据本体在 `src/lib/rebuild/mid-terminus.ts`（不要在此另写一套）。
