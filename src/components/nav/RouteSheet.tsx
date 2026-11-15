@@ -155,10 +155,20 @@ export interface RouteSheetProps {
     totalDistM: number;
     totalDurationS: number;
     err: string;
+    /**
+     * ★ F3：朝向来源说明（`compass-note.ts#noteOfHeading`）；`null` ⇒ 不加字。
+     *   只做透传 —— 选源与权限都在 `NavShell`（那里才有 `useUserHeading`）。
+     */
+    headingNote?: { text: string; action: "enable" | null } | null;
     onRetry: () => void;
   } | null;
   /** 关闭独立步行视图（回推荐列表空态） */
   onWalkClose?: () => void;
+  /**
+   * ★ F3：步行面板里「点此开启朝向指示」的回调。
+   *   **必须是用户点击触发的同步调用**（iOS 的 `requestPermission()` 要求手势栈）。
+   */
+  onEnableHeading?: () => void;
   /**
    * 把「步行导航」按钮的下沉回调转给 `RouteResultPane`。
    * 放这里而不是让 pane 自己去取上下文：结果面板是纯展示组件，不持有导航状态。
@@ -183,6 +193,7 @@ export default function RouteSheet({
   immersive = false,
   walkOnly = null,
   onWalkClose,
+  onEnableHeading,
   onWalkNav,
 }: RouteSheetProps) {
   // 推荐列表数据（列表 pane 常驻；同一 query + prefs 只自动拉一次）
@@ -764,6 +775,9 @@ export default function RouteSheet({
               totalDistM={walkOnly.totalDistM}
               totalDurationS={walkOnly.totalDurationS}
               err={walkOnly.err}
+              /* ★ F3：朝向来源说明（透传；`null` ⇒ 不加字） */
+              headingNote={walkOnly.headingNote ?? null}
+              onEnableHeading={onEnableHeading}
               onRetry={walkOnly.onRetry}
               onClose={() => onWalkClose?.()}
             />

@@ -145,6 +145,8 @@ import { WALK_BASE_M_PER_MIN, type CatchTier } from "@/lib/recommend/types";
 /** ★ 修复批 #10：剩余步行米数（未跟随态也能算）—— 与步行横幅/地图三线**同一个**投影函数 */
 import { progressOnPath } from "@/lib/walk/follow";
 import { useUserFix } from "./useUserFix";
+import { useUserHeading } from "./useUserHeading";
+import { noteOfHeading } from "./compass-note";
 import { useNavFrame, type FrameBox } from "./useNavFrame";
 /* ★ 步行路径重算的防连点冷却（现成常量，勿新写数字） */
 import { COOLDOWN_WALK_SEC, useCooldown } from "./useCooldown";
@@ -754,6 +756,40 @@ export default function NavShell({
   /** 步行段活跃（**不做上车判定互斥**，只决定「不渲染 track」与「放慢拉车辆帧」；见上方注释） */
   const walkActive = walkSeg !== null;
   /**
+   * ★ F3（2026-11-15）：**蓝点朝向的来源选择**（罗盘 → GPS 行进方向 → 正北）。
+   *
+   * ── 为什么门只开在「步行」────────────────────────────────────────────
+   *   朝向箭头只在**走路**时有用：坐车时它跟着车头转，等于把"车往哪开"画给人看，
+   *   既不提供信息，还让传感器 50~60Hz 白烧电。所以 `enabled = 步行段 || 独立步行面板`。
+   *   ⇒ 非步行态 `resolveHeading` 直接返回 `heading: null`（不画），宿主不必再判。
+   *
+   * ── 权限从哪来（不能自动弹框）─────────────────────────────────────────
+   *   · Android / 桌面：没有 `requestPermission` 这个 API ⇒ 挂监听不要授权
+   *     （`useCompassHeading` 内部自动开始，见其 `grantedInSession` 注释）；
+   *   · iOS：必须借一次**用户手势**。本文件把 `requestHeadingAccess()` 挂在
+   *     「开始导航」(`onStart`) 与「开始步行」(`startWalkOnly`) 两个点击上 ——
+   *     它们本来就是用户为了解决"我要走路"而按的按钮，不需要额外编一个入口；
+   *   · 被拒绝 ⇒ 状态停在 `denied`，**不再申请**，界面上只说明"按正北"。
+   *
+   * ⚠️ 声明位置在 `walkActive` 之后、`startWalkOnly` 之前 —— 后者要用它的 `requestAccess`。
+   */
+  const headingOn = walkActive || !!walkOnly;
+  const headingR = useUserHeading({ enabled: headingOn, fix: userFixR.fix });
+  /**
+   * ⚠️ 把 `requestAccess` 单独取出来用（而不是各处写 `headingR.requestAccess`）：
+   *   ① 它是 `useCallback([])` ⇒ **引用恒定**，放进依赖数组不会引发重建；
+   *   ② 直接写 `headingR.x` 会被 `react-hooks/exhaustive-deps` 判成"依赖整个 headingR"
+   *      （而 `headingR` 每帧都是新对象）⇒ 两个回调每帧重建 ⇒ 下游 effect 全重跑。
+   */
+  const requestHeadingAccess = headingR.requestAccess;
+  /** ★ F3：步行面板那一行小字（罗盘正常时为 `null`，不加噪音） */
+  const headingNote = noteOfHeading({
+    enabled: headingOn,
+    mode: headingR.mode,
+    status: headingR.status,
+    needsGesture: headingR.needsGesture,
+  });
+  /**
    * ★ 步行重算的观测标记（`auto|manual` + 序号）。
    *   声明位置**早于** `endWalk()` / 换段 effect —— 它们都要把标记归零，
    *   否则下一次进入步行段会把上一段的 `manual:N` 原样带出来（观测量失真）。
@@ -1009,6 +1045,12 @@ export default function NavShell({
   const startWalkOnly = useCallback(() => {
     const a = fromPoint ?? walkStart;
     if (!a || !to) return;
+    /**
+     * ★ F3：这是用户"我要走路"的显式点击 ⇒ **手势栈还热着**。
+     *   iOS 的 `requestPermission()` 只能在这个同步栈里调（晚一拍就 reject），
+     *   而它的降级后果只是"没有箭头"，绝不能因此拦住步行面板打开 ⇒ `void` 不等待。
+     */
+    void requestHeadingAccess();
     setWalkOnly({
       from: { lng: a.lng, lat: a.lat },
       to: { lng: to.lng, lat: to.lat },
@@ -1017,7 +1059,9 @@ export default function NavShell({
     setPane("walk");
     setRsOpen(true);
     setSnap("full");
-  }, [fromPoint, walkStart, to]);
+    /* ⚠️ 依赖只写 `requestAccess`（`useCallback([])` ⇒ 稳定），**不要**写整个 `headingR`：
+       它每帧都是新对象 ⇒ 本回调每帧重建 ⇒ 下面所有以它为依赖的 effect 全部重跑。 */
+  }, [fromPoint, walkStart, to, requestHeadingAccess]);
 
   const closeWalkOnly = useCallback(() => {
     /* 只清 OD + 回推荐列表：`pane` 回 `recommend` ⇒ 用户仍在同一个面板上，
@@ -2028,14 +2072,23 @@ export default function NavShell({
   const trackView: RideTrackView = useMemo(
     () => ({
       ...ride,
-      onStart: () => startSession("out"),
+      onStart: () => {
+        /**
+         * ★ F3：「开始导航」本身就是一个用户手势 ⇒ iOS 的方向权限借这一次机会申请。
+         *   顺序上放在 `startSession` 之前：`requestPermission()` 必须发生在**同步栈**里，
+         *   而 `startSession` 内部有一串 setState（不改变同步性，但先调更稳妥）。
+         *   `void` 不等待：申请失败只是没有箭头，绝不能拖慢/拦住导航开始。
+         */
+        void requestHeadingAccess();
+        startSession("out");
+      },
       onStop: endSession,
       onNotBoard: () => {
         resetCatchLatch();
         ride.onNotBoard();
       },
     }),
-    [ride, startSession, endSession, resetCatchLatch],
+    [ride, startSession, endSession, resetCatchLatch, requestHeadingAccess],
   );
 
   /**
@@ -2481,6 +2534,9 @@ export default function NavShell({
           lineStops={detailActive ? lineStops : null}
           /* ★ v3.2.0（需求 7 / AC-80）：蓝点移动插值时长 = 采样间隔；仅 ≤5s 才插值（浏览 10s ⇒ 0） */
           userDotSmoothMs={gpsIntervalMs <= 5_000 ? gpsIntervalMs : 0}
+          /* ★ F3（2026-11-15）：蓝点朝向（0=正北）。取值在 `headingR` 里完成
+             （罗盘 → GPS 行进方向 → 正北），本层只给一个数；`null` ⇒ 不画箭头。 */
+          userHeading={headingR.heading}
           /* ★ 2026-11-05（通琴号 R3/R4）：站点层 + 路径层。
              三者同源（`useTqhLines` 的模块级缓存）⇒ 切板块/点站点 0 请求。
              `tqhSegments` 为 null ⇒ 路径层清空（关站序弹窗时即刻收线，不留残影）。
@@ -2916,10 +2972,14 @@ export default function NavShell({
                 totalDistM: walkOnlyRoute.out.stepsTotalM,
                 totalDurationS: walkOnlyRoute.out.totalDurationS,
                 err: walkOnlyRoute.out.err,
+                /* ★ F3：朝向来源说明（罗盘正常时为 null ⇒ 面板上不多一行字） */
+                headingNote,
                 onRetry: () => walkOnlyRoute.reload("out"),
               }
             : null
         }
+        /* ★ F3：iOS 唯一的方向权限入口 —— 面板里那一行可点文字的回调（真实手势） */
+        onEnableHeading={() => void requestHeadingAccess()}
         onWalkClose={closeWalkOnly}
         onWalkNav={startWalkOnly}
         detent={snap}
