@@ -75,6 +75,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { wgs84ToGcj02 } from "@/lib/amap/coord";
+import { fixHeadingOf, fixSpeedOf } from "@/lib/compass/heading";
 import { geoStateOf, setGeoHook, setUserFixHook, type GeoState } from "./observe-hooks";
 
 /** 用户实时定位（GCJ-02；已由 wgs84ToGcj02 转换） */
@@ -85,6 +86,21 @@ export interface UserFix {
   accuracy: number;
   /** 采样时刻（设备时钟 ms） */
   ts: number;
+  /**
+   * ★ F3（2026-11-15）：GPS **行进方向**（0 = 正北，顺时针；`null` = 系统没给 / 不可信）。
+   *
+   * ⚠️ 这不是"用户面朝哪"，而是"设备在这一瞬间往哪移动"：站着不动时它是噪声，
+   *    系统通常会直接给 `null`。**能不能用由调用方判**（`pickHeadingMode` 要求速度达标），
+   *    本 hook 只做"非法值收敛"，不做业务判断 —— 与 `accuracy` 的分工一致。
+   * ⚠️ 坐标是 GCJ-02，但方向与坐标系无关（只跟经纬度的相对变化有关），无需转换。
+   *
+   * ★ 为什么是**可选**：`NavMap.userFix` 同时也接受乘车态投影点（`RideYouDot`），
+   *   那个点由车辆位置反推，**没有方向也没有速度** ⇒ 把这两个字段设成必填会让它
+   *   被迫编造值。缺省 = 不知道，`fixHeadingOf(undefined)` 正是 `null`。
+   */
+  heading?: number | null;
+  /** ★ F3：速度（m/s；`null` = 系统没给）。用于判"是否真的在走"，是方向可用性的前提。 */
+  speed?: number | null;
 }
 
 export interface UseUserFixResult {
@@ -294,7 +310,19 @@ export function useUserFix(opts: {
     lastCbRef.current = Date.now();
     errCodeRef.current = null;
     const g = wgs84ToGcj02({ lat: c.latitude, lng: c.longitude });
-    const f: UserFix = { lng: g.lng, lat: g.lat, accuracy: accRef.current, ts: lastCbRef.current };
+    /**
+     * ★ F3：`heading` / `speed` **以前被直接丢弃**（只取了经纬度与精度）。
+     *   收敛逻辑放在 `lib/compass/heading.ts`（纯函数、有门禁），这里只取值 ——
+     *   否则"NaN / -1 / 0 各算不算有值"这套口径会散落在每个调用点。
+     */
+    const f: UserFix = {
+      lng: g.lng,
+      lat: g.lat,
+      accuracy: accRef.current,
+      ts: lastCbRef.current,
+      heading: fixHeadingOf(c.heading),
+      speed: fixSpeedOf(c.speed),
+    };
     pendingRef.current = f;
     if (f.ts - lastAcceptRef.current >= intervalRef.current) {
       lastAcceptRef.current = f.ts;

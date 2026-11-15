@@ -158,6 +158,68 @@ export function nextArrowDeg(prevContinuous: number | null, targetDeg: number): 
   return prevContinuous + shortestDeltaDeg(prevContinuous, target);
 }
 
+/* ══════════════ GPS 行进方向（★ F3：罗盘不可用时的第一替补）══════════════ */
+
+/**
+ * 把 `coords.heading` 收敛成「可用 / 不可用」两态。
+ *
+ * 各平台给的东西五花八门（实测 + 规范）：
+ *   · 取不到方向 ⇒ `null`（规范值）；
+ *   · 部分 Android WebView ⇒ `NaN`；
+ *   · 部分机型在静止时 ⇒ `-1` 或负数（不是合法方位角）。
+ * ⚠️ **0 是合法值**（正北行进），不能当「没有」—— 这正是"用 `if (!heading)` 判空"会
+ *    在正北方向恰好失效的原因。
+ */
+export function fixHeadingOf(raw: unknown): number | null {
+  if (typeof raw !== "number" || !Number.isFinite(raw)) return null;
+  if (raw < 0) return null;
+  return normalizeDeg(raw);
+}
+
+/**
+ * 把 `coords.speed` 收敛成 m/s。
+ * 负数物理上不存在（部分实现用 -1 表示未知）⇒ 一律当没有。
+ */
+export function fixSpeedOf(raw: unknown): number | null {
+  if (typeof raw !== "number" || !Number.isFinite(raw)) return null;
+  if (raw < 0) return null;
+  return raw;
+}
+
+/**
+ * ★ F3：**最终画什么**的唯一判定（纯函数 —— hook 与门禁共用）。
+ *
+ * ── 为什么"正北"要返回 `null` 而不是 0 ────────────────────────────────
+ *   计划原文写的是「无传感器 ⇒ 箭头固定朝上」。落地时改成**不画**，原因有两条：
+ *     ① 主流程（导航详情面板）**没有位置**放"按正北显示"这句提示 —— 那时屏幕上
+ *        只有一个恒朝北的锥形，用户会把它读成「我正朝北」；
+ *     ② 本项目已经为同一类错误付过一次代价（P6：把"不在服务范围"说成"线路已收班"）。
+ *        把"不知道朝向"画成一个确定的箭头，是同一个病。
+ *   ⇒ 朝向**不知道就不画**，"按正北朝上"由地图本身（`rotateEnable:false`，恒北向上）
+ *     与步行面板的一行小字承担，不靠一个假箭头。
+ *
+ * 门禁 `scripts/test-compass-fallback.ts` 对这两个分支各有断言。
+ */
+export function resolveHeading(o: {
+  /** 是否处于需要朝向的场景（仅步行段；非步行段一律不画） */
+  enabled: boolean;
+  compassHeading: number | null;
+  quality: HeadingQuality;
+  courseDeg: number | null;
+  speedMps: number | null;
+}): { mode: HeadingMode; heading: number | null } {
+  if (!o.enabled) return { mode: "north", heading: null };
+  const mode = pickHeadingMode({
+    compassHeading: o.compassHeading,
+    quality: o.quality,
+    courseDeg: o.courseDeg,
+    speedMps: o.speedMps,
+  });
+  if (mode === "compass") return { mode, heading: o.compassHeading ?? null };
+  if (mode === "course") return { mode, heading: o.courseDeg ?? null };
+  return { mode: "north", heading: null };
+}
+
 /* ══════════════════════════ 平滑器 ══════════════════════════ */
 
 /** 死区（度）：小于此变化视为噪声，不更新 —— 静置时箭头必须"纹丝不动" */

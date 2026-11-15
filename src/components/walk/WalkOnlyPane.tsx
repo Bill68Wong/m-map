@@ -38,6 +38,14 @@ export interface WalkOnlyPaneProps {
   totalDurationS: number;
   /** `phase === "failed"` 时的可上屏原因 */
   err: string;
+  /**
+   * ★ F3（2026-11-15）：**朝向来源的一句话说明**（`compass-note.ts#noteOfHeading`）。
+   *   `null`/缺省 ⇒ 不渲染（罗盘正常时不该多出一行字）。
+   *   `action === "enable"` ⇒ 渲染成可点按钮，点它才申请方向权限（**必须是用户手势**）。
+   */
+  headingNote?: { text: string; action: "enable" | null } | null;
+  /** 点了「点此开启朝向指示」时调用；缺省 ⇒ 只显示文字（不给出点不动的按钮） */
+  onEnableHeading?: () => void;
   onRetry: () => void;
   onClose: () => void;
 }
@@ -49,6 +57,8 @@ export default function WalkOnlyPane({
   totalDistM,
   totalDurationS,
   err,
+  headingNote = null,
+  onEnableHeading,
   onRetry,
   onClose,
 }: WalkOnlyPaneProps) {
@@ -97,6 +107,27 @@ export default function WalkOnlyPane({
           <Icon name="close" size={20} />
         </button>
       </div>
+
+      {/* ★ F3：朝向来源说明（一句话，不占决策位）。
+          · `action === "enable"` 时渲染成按钮：iOS 必须借一次**用户手势**才能开传感器，
+            所以这里既是说明也是唯一入口 —— **不自动弹框**；
+          · 罗盘正常时不渲染（`headingNote === null`），不加噪音。 */}
+      {headingNote && phase === "ready" && steps.length > 0 ? (
+        headingNote.action === "enable" && onEnableHeading ? (
+          <button
+            type="button"
+            className="walkonly__hint walkonly__hint--tap"
+            data-heading-note="enable"
+            onClick={() => onEnableHeading()}
+          >
+            {headingNote.text}
+          </button>
+        ) : (
+          <p className="walkonly__hint" data-heading-note="info">
+            {headingNote.text}
+          </p>
+        )
+      ) : null}
 
       {phase === "loading" || phase === "idle" ? (
         <p className="t-body t-muted" style={{ padding: "8px 0" }}>

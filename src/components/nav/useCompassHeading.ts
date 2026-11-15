@@ -93,6 +93,29 @@ function orientationCtor(): DeviceOrientationCtor | null {
   return ctor ?? null;
 }
 
+/**
+ * ★ F3：本机**是否必须先有一次用户手势**才能开始收帧。
+ *
+ * 只有 iOS 13+ 的 Safari / 独立模式实现了 `DeviceOrientationEvent.requestPermission`；
+ * Android Chrome / 桌面浏览器没有这个函数 ⇒ 挂监听即可，不需要任何授权。
+ * 界面据此决定要不要出「点此开启」那一行（不出 = 别让用户做无意义的动作）。
+ */
+export function compassNeedsGesture(): boolean {
+  const ctor = orientationCtor();
+  return !!ctor && typeof ctor.requestPermission === "function";
+}
+
+/**
+ * ★ F3：**本次页面会话内**是否已经拿到过方向权限。
+ *
+ * 为什么要有它：`requestPermission()` 在**已授权**时是"静默通过"的（不弹框），
+ * 但 iOS 仍然要求它发生在用户手势里。于是"步行段进入/退出"每次都要再等一次手势，
+ * 提示行就会反复出现 —— 用户看到的是「为什么每次都让我点」。
+ * ⇒ 授权成功一次就记在模块作用域里：之后的自动挂监听不必再等手势；
+ *   刷新页面后归 false（宁可多要一次手势，也不要在没有手势的情况下静默失败）。
+ */
+let grantedInSession = false;
+
 export function useCompassHeading(opts: { enabled: boolean }): UseCompassHeadingResult {
   const { enabled } = opts;
 
@@ -149,8 +172,13 @@ export function useCompassHeading(opts: { enabled: boolean }): UseCompassHeading
           return false;
         }
       } catch {
-        // Safari 在非手势栈 / 非 HTTPS 下会抛 —— 一律按"拒绝"处理，绝不反复弹框
-        setStatus("denied");
+        /**
+         * ★ F3 语义修正：**抛错 ≠ 用户拒绝**。
+         *   Safari 在「非手势栈 / 非 HTTPS / 被策略拦」时会 throw，这几种情况用户
+         *   根本没看到对话框 ⇒ 记成 `denied` 会让「去设置里允许」这类正确动作被永久禁掉。
+         *   ⇒ 记 `needs_permission`（仍可再试一次），只有**明确 `denied`**才判拒绝。
+         */
+        setStatus("needs_permission");
         return false;
       }
     }
@@ -158,10 +186,30 @@ export function useCompassHeading(opts: { enabled: boolean }): UseCompassHeading
     frameSeenRef.current = false;
     smootherRef.current.reset();
     samplesRef.current = [];
+    grantedInSession = true;
     setArmed(true);
     setStatus("listening");
     return true;
   }, []);
+
+  /**
+   * ★ F3：**不需要授权的环境自动开始**（Android / 桌面 / 部分 WebView）。
+   *
+   * 判据只有一条：本机**没有** `requestPermission` 函数 ⇒ 挂监听不会弹任何框 ⇒
+   * 没有"必须等用户手势"的理由。iOS（有该函数）走另一条路：由调用方在真实手势里
+   * 调 `requestAccess()`，或在已授权过本会话后（`grantedInSession`）自动继续。
+   *
+   * ⚠️ 这条 effect **不申请权限**、不产生任何对话框 —— 「权限申请必须发生在用户手势里」
+   *    这条铁律没有被动过。
+   */
+  useEffect(() => {
+    if (!enabled || armed) return;
+    const ctor = orientationCtor();
+    if (!ctor) return;
+    const mustGesture = typeof ctor.requestPermission === "function";
+    if (mustGesture && !grantedInSession) return;
+    void requestAccess();
+  }, [enabled, armed, requestAccess]);
 
   /* ── 监听 + 平滑 + 提交 ─────────────────────────────────────────────── */
   useEffect(() => {
