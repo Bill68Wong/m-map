@@ -12,13 +12,19 @@
  *   · `walk_times` / `transfer_walks` ← **仍读** `timer_events` 等旧表（它们没有 track 版样本）。
  *   ⇒ 不要一刀切成「本路由不读事件表」—— 只有站间时长这一项换了口径。
  *
- * 实现要点：直接 import src/lib/rebuild/* 的共享函数，**不** execFile 调 .ts 脚本。
+ * 实现要点：直接 import 共享函数，**不** execFile 调 .ts 脚本。
  *   原因：① tsx 在 devDependencies，Vercel 生产构建不装；
  *        ② Serverless 只打包被 import 的模块，.ts 脚本文件不会进函数产物。
  *   连库用 src/lib/db 的 getPool()（生产自动指向 DATABASE_URL = Supabase）。
+ *   ★ P7 起**步骤清单搬到 `src/lib/rebuild/run-all.ts`**：本路由与 `npm run db:rebuild`
+ *     共用同一份，避免两处口径漂移（历史上 `sampleFrom` 就漂过一次）。
  *
  * 鉴权：Vercel Cron 请求带 `Authorization: Bearer $CRON_SECRET`。
- *   配了 CRON_SECRET → 必须匹配；未配 → 仅在非 production 放行（本地调试）。
+ *   ★ P7（2026-11-14）改口径：**未配置 `CRON_SECRET` 一律 401**，本地不再放行。
+ *     旧行为是「未配 ⇒ `NODE_ENV !== "production"` 就放行」，后果是一条
+ *     `curl localhost:3000/api/cron/rebuild` 就真跑 8.1s 全量重算、**写生产派生表**，
+ *     且返回 200 让人以为只是"查了一下"。判定逻辑见 `src/lib/security/cron-auth.ts`。
+ *     本地手动重算请用 `npm run db:rebuild -- cloud --allow-prod`（走 db-guard 双确认）。
  *   （middleware 已把本路径加入白名单，不走口令门，见 src/proxy.ts）
  *
  * 安全：重算本身幂等（清表后全量重算）；仍加内存锁避免重叠执行，
@@ -36,13 +42,9 @@
  * 幂等：可重复调用。
  */
 import { NextRequest, NextResponse } from "next/server";
-import { cleanupXborder } from "@/lib/cross-border/store-write";
-import { addDays, macauDate } from "@/lib/cross-border/time";
 import { getPool } from "@/lib/db";
-import { rebuildSegmentStats } from "@/lib/rebuild/segment-stats";
-import { trimSegmentSampleWindow } from "@/lib/rebuild/segment-samples";
-import { rebuildTransferWalks } from "@/lib/rebuild/transfer-walks";
-import { rebuildWalkTimes } from "@/lib/rebuild/walk-times";
+import { runRebuildSteps } from "@/lib/rebuild/run-all";
+import { checkCronAuth } from "@/lib/security/cron-auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -57,46 +59,30 @@ let runningSince = 0;
 const STALE_MS = 5 * 60_000;
 const isLocked = () => runningSince !== 0 && Date.now() - runningSince < STALE_MS;
 
-interface StepResult {
-  name: string;
-  ok: boolean;
-  ms: number;
-  summary: Record<string, unknown>;
-  err?: string;
-}
-
-/** 鉴权：Vercel Cron 带 Bearer CRON_SECRET */
-function authorized(req: NextRequest): boolean {
-  const secret = process.env.CRON_SECRET;
-  if (!secret) {
-    // 未配密钥：仅本地 debug 放行，生产环境拒绝（防公开触发）
-    return process.env.NODE_ENV !== "production";
-  }
-  const auth = req.headers.get("authorization") ?? "";
-  if (auth === `Bearer ${secret}`) return true;
-  // 兼容手动触发（带上 ?key=）
-  return req.nextUrl.searchParams.get("key") === secret;
-}
-
-/** 跑一个重算步骤，吞掉异常转为 ok=false（不中断另一步骤） */
-async function step(name: string, fn: () => Promise<Record<string, unknown>>): Promise<StepResult> {
-  const t0 = Date.now();
-  try {
-    const summary = await fn();
-    return { name, ok: true, ms: Date.now() - t0, summary };
-  } catch (e) {
-    return {
-      name,
-      ok: false,
-      ms: Date.now() - t0,
-      summary: {},
-      err: String(e instanceof Error ? e.message : e).slice(0, 1000),
-    };
-  }
-}
+/**
+ * 「漏配密钥」告警只打一次（每进程）。
+ *
+ * 为什么去重：这个端点会被扫描器/探活反复命中，每次都打 warn 会把真正的告警刷没；
+ * 只打一次又足够让「生产漏配 CRON_SECRET」在日志里留下痕迹 —— 否则 cron 每天
+ * 静默 401、派生数据停在旧值，几周后才发现。
+ */
+let warnedNoSecret = false;
 
 async function handle(req: NextRequest) {
-  if (!authorized(req)) {
+  const auth = checkCronAuth({
+    authorization: req.headers.get("authorization"),
+    key: req.nextUrl.searchParams.get("key"),
+  });
+  if (!auth.ok) {
+    if (auth.reason === "no_secret" && !warnedNoSecret) {
+      warnedNoSecret = true;
+      console.warn(
+        "[cron/rebuild] CRON_SECRET 未配置 ⇒ 本端点一律拒绝（401）。" +
+          "生产请在 Vercel 环境变量里配置，否则每日 cron 会静默失效、派生数据停止更新；" +
+          "本地手动重算请用 `npm run db:rebuild -- cloud --allow-prod`。",
+      );
+    }
+    // 失败原因只进服务端日志：不向调用方透露「没配密钥」还是「密钥不对」。
     return NextResponse.json({ error: "未授权" }, { status: 401 });
   }
   if (isLocked()) {
@@ -106,75 +92,7 @@ async function handle(req: NextRequest) {
   runningSince = Date.now();
   const t0 = Date.now();
   try {
-    const pool = getPool();
-    const results: StepResult[] = [];
-
-    // 顺序执行：各步骤都读 timer_events / segment_samples，串行可避免 DB 连接竞争
-    // ⓪ 滚动窗口：**自动清理已关闭**（2026-09-27 用户要求「保留所有轮」）——
-    //    keepRuns=0 ⇒ trim 只回报现状、**不删除任何行**（timer 本就不删）。
-    //    ⚠️ 若未来需要重新启用窗口（如容量/性能考量），把 0 改回具体轮数即可（如 100）。
-    //    保留此步骤是为了让返回体继续报告剩余轮数（监控用）。
-    results.push(
-      await step("segment_samples_window", async () => {
-        const r = await trimSegmentSampleWindow(pool, 0);
-        return { deleted: r.deleted, remaining: r.remaining, remainingRuns: r.remainingRuns };
-      }),
-    );
-    // ① segment_stats：★ v4.2.0 口径 `sampleFrom="track"`（只吃自动采集，旧手工表不参与）。
-    //    改回 `both` 会让四张旧事件表重新混进来 —— 见文件头 v4.2.0 段落，勿动。
-    results.push(
-      await step("segment_stats", async () => {
-        const r = await rebuildSegmentStats(pool, { sampleFrom: "track" });
-        return {
-          sessions: r.sessions,
-          rides: r.rides,
-          samples: r.samples,
-          written: r.inserted,
-          pairs: r.pairs.length,
-        };
-      }),
-    );
-    results.push(
-      await step("walk_times", async () => {
-        const r = await rebuildWalkTimes(pool);
-        return {
-          scanned: r.scanned,
-          collected: r.collected,
-          valid: r.valid,
-          inserted: r.inserted,
-          totalSamples: r.totalSamples,
-        };
-      }),
-    );
-    // v1.0.0 第三步：换乘步行（alight → wait_start）—— 供自动选线的换乘方案计时
-    results.push(
-      await step("transfer_walks", async () => {
-        const r = await rebuildTransferWalks(pool);
-        return {
-          scanned: r.scanned,
-          collected: r.collected,
-          valid: r.valid,
-          inserted: r.inserted,
-          totalSamples: r.totalSamples,
-        };
-      }),
-    );
-
-    // v3.8.0 第四步：跨境交通两张表的保留窗口清理（`xborder_flights` / `xborder_sailings`）。
-    //   保留 `sched_date >= 澳门当日 - 2`：需求只显示当日，留 2 天是为了排查
-    //   "昨天为什么是空表"。**复用本 cron 槽位**——Hobby 每个 job 每天只能触发一次，
-    //   为此新增一个 cron 只会多一个失败点，零收益（契约 §1.7）。
-    //   ⚠️ 边界用**澳门日期**算，不用 SQL 的 `current_date`：Supabase 会话时区是 UTC，
-    //      在澳门 00:00–08:00 之间 `current_date` 会比澳门日期早一天（详见 store-write.ts）。
-    results.push(
-      await step("xborder_cleanup", async () => {
-        const before = addDays(macauDate(), -2);
-        if (!before) throw new Error("澳门日期计算失败");
-        const r = await cleanupXborder(before, pool);
-        return { before, flights: r.flights, sailings: r.sailings };
-      }),
-    );
-
+    const results = await runRebuildSteps(getPool());
     const allOk = results.every((r) => r.ok);
     return NextResponse.json(
       {
