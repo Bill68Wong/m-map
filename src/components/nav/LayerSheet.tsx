@@ -31,7 +31,7 @@ import { useLayerPrefs } from "@/lib/map/useLayerPrefs";
 
 /** 分组（负责人指定两组与顺序） */
 const GROUPS: { title: string; keys: LayerKey[] }[] = [
-  { title: "公共交通站点", keys: ["bus", "tqh"] },
+  { title: "公共交通站点", keys: ["bus", "tqh", "pier", "airport"] },
   { title: "公共设施", keys: ["toilet"] },
 ];
 
@@ -39,6 +39,8 @@ const GROUPS: { title: string; keys: LayerKey[] }[] = [
 const LABELS: Record<LayerKey, string> = {
   bus: "巴士站点",
   tqh: "通琴号站点",
+  pier: "码头",
+  airport: "机场",
   toilet: "公共厕所",
 };
 
