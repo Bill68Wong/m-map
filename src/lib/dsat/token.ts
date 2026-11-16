@@ -1,11 +1,8 @@
 /**
  * DSAT token 签名（src/lib/dsat/token.ts）
- * 算法来源：官方报站前端 JS 逆向（详见 docs/DSAT巴士接口调研.md）
+ * 算法来源：由官方报站前端的行为观测推导得出（调研记录见 docs/DSAT巴士接口调研.md，该文档不入库、仅本地保留）
  *
- * token = md5(qs)[0:4]  + YYYY
- *       + md5(qs)[4:12] + MMDD
- *       + md5(qs)[12:24]+ HHmm
- *       + md5(qs)[24:32]
+ * 令牌由查询串摘要的分段与当前时间拼接而成（分段位置见下方实现）
  * 总长 44 字符；qs 必须与请求体参数串完全一致（含顺序）；时间为澳门时间 GMT+8
  */
 import { createHash } from "crypto";

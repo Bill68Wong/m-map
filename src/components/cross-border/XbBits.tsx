@@ -68,7 +68,7 @@ export function XbFlag({ children }: { children: ReactNode }) {
   );
 }
 
-/* ── 空态：标题 + 一句解释（三值文案由 `emptyCopy()` 给，不在这里 if）── */
+/* ── 空态：标题 + 一句解释（四值文案由 `emptyCopy()` 给，不在这里 if）── */
 export function XbEmpty({ title, body }: { title: string; body: string }) {
   return (
     <div className="xb-empty">

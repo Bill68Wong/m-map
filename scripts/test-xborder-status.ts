@@ -14,7 +14,7 @@
  *      97% 是字面量 `0`，若靠「数 fixture 里的行」来守白名单，删光白名单也能全绿。
  *      期望值刻意不导出自 `status.ts#TABLES`（那是「拿实现测实现」，断言永远绿）。
  *      我们自己改正则时，漏哪条红哪条 —— 这正是白名单方案的主要价值。
- *   ⑤ **空态三值互斥** + `after=day` 永不返回 `none_remaining_today`。
+ *   ⑤ **空态四值互斥** + `after=day` 永不返回 `none_remaining_today`。
  *
  * 运行：npm run test:xborder-status
  */
@@ -37,6 +37,7 @@ import {
 } from "../src/lib/cross-border/respond";
 import { classify, TERMINAL_KINDS, UNKNOWN_DRIFT_THRESHOLD } from "../src/lib/cross-border/status";
 import type { XbDir } from "../src/lib/cross-border/types";
+import { XB_EMPTY_REASONS } from "../src/lib/cross-border/types";
 // 迁移的枚举清单参与「跨文件同源」断言（只读常量，不连库、不执行 DDL）
 import { FLIGHT_STATUS_KINDS } from "../db/migrate-v3800";
 
@@ -448,9 +449,9 @@ assertEq(
 
 
 /* ══════════════════════════════════════════════════════════════════
- * D. 空态三值互斥 + after=day 的禁忌
+ * D. 空态四值互斥 + after=day 的禁忌
  * ══════════════════════════════════════════════════════════════════ */
-console.log("\nD. 空态三值与 buildListResponse");
+console.log("\nD. 空态四值与 buildListResponse");
 const base = {
   after: "now" as const,
   serverNow: "2026-11-06T23:52:10+08:00",
@@ -493,6 +494,48 @@ assertEq(
   "no_service_today",
   "after=day 且 dayTotal>0 的**不可达分支**不得返回 none_remaining_today（返回 no_service_today 并打 error 日志）",
 );
+
+// ★P4：凭据未配置（AACM_APPCODE 缺失）⇒ 归因 `not_configured`，不再落到 not_yet_collected
+assertEq(
+  resolveEmptyReason({ ...base, itemCount: 0, dayTotal: 0, dataFetchedAt: null, notConfigured: true, scope: "t" }),
+  "not_configured",
+  "未配凭据且从未采到 ⇒ not_configured（不是 not_yet_collected：后者暗示「等一下就会有」）",
+);
+assertEq(
+  resolveEmptyReason({ ...base, itemCount: 0, dayTotal: 0, dataFetchedAt: "s", notConfigured: true, scope: "t" }),
+  "not_configured",
+  "未配凭据且今日 0 行 ⇒ not_configured（曾采到过但已清空，同样不可能自愈）",
+);
+// 对照：未配凭据 ≠ 吞掉「已知事实」。dayTotal>0 说明曾经采到过，按既有口径读
+assertEq(
+  resolveEmptyReason({ ...base, itemCount: 0, dayTotal: 12, dataFetchedAt: "s", notConfigured: true, scope: "t" }),
+  "none_remaining_today",
+  "未配凭据但库里有今日全量 ⇒ 仍说「都走完了」（不许用 not_configured 顶掉已知事实）",
+);
+assertEq(
+  resolveEmptyReason({ ...base, itemCount: 3, dayTotal: 12, dataFetchedAt: "s", notConfigured: true, scope: "t" }),
+  undefined,
+  "未配凭据但有数据 ⇒ 无 emptyReason（照常显示旧表，靠 stale 说明不可更新）",
+);
+// 缺省不传 ⇒ 与改前逐字一致（船侧调用方不传该参数，行为不得变）
+assertEq(
+  resolveEmptyReason({ ...base, itemCount: 0, dayTotal: 0, dataFetchedAt: null, scope: "t" }),
+  "not_yet_collected",
+  "省略 notConfigured ⇒ 行为不变（船侧/旧调用方零影响）",
+);
+assertEq(XB_EMPTY_REASONS.length, 4, "取值表四值（加取值必须同步 emptyCopy 文案 + 本断言，故意要求人工确认）");
+
+const ncResp = buildListResponse({
+  ...base,
+  items: [],
+  dayTotal: 0,
+  dataFetchedAt: null,
+  notConfigured: true,
+  attribution: ATTR,
+});
+assertEq(ncResp.emptyReason, "not_configured", "buildListResponse 透传 notConfigured");
+assertEq(ncResp.ok, true, "未配凭据仍是 ok:true（HTTP 200，不是 5xx —— P4 的核心）");
+assertEq(ncResp.items.length, 0, "未配凭据时 items 仍是空数组（形状不变）");
 
 const withItems = buildListResponse({
   ...base,

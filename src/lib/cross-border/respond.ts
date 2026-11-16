@@ -5,10 +5,18 @@
  * 空态判定放这里而不是路由，是为了能被 `scripts/test-xborder-status.ts` 直接断言
  * （路由文件 import 了 `next/server`，跑不进纯脚本）。
  *
- * ── 空态三值（契约 §2.5，必须能区分"三种空"）────────────────────────────
+ * ── 空态四值（契约 §2.5，必须能区分"四种空"）────────────────────────────
+ *   `not_configured`       `dayTotal === 0` 且本端点**凭据未配置** ⇒ 永远采不到（★P4）
  *   `not_yet_collected`    `dayTotal === 0 && dataFetchedAt === null` ⇒ **我方**还没采到
  *   `no_service_today`     `dayTotal === 0 && dataFetchedAt !== null` ⇒ 采到了，真的没有班次
  *   `none_remaining_today` `dayTotal > 0 && items === 0`（且 `after=now`）⇒ 今天有班，都走完了
+ *
+ * ── `not_configured` 只在"完全没数据"时生效（P4 的关键取舍）──────────────
+ *   `dayTotal > 0` 说明**曾经采到过**（配了凭据的年代，或别的实例采到了）⇒ 那批数据
+ *   该怎么读就怎么读：`after=now` 全走完仍是 `none_remaining_today`，配合 `stale:true`
+ *   告诉用户"不能更新"。若这里让 `not_configured` 抢先生效，会把"今天还剩几班"这个
+ *   **已知事实**替换成"未配置"，丢掉的正是用户要的信息。
+ *   ⇒ 优先级：有数据 > 有当日数据（按 after 判）> 未配置 > 未采集/真没有。
  *
  * ── 三条边界规则（少一条前端就会出现"1 条"和"0 条"文案打架）─────────────
  *   ① `items.length > 0` ⇒ **整个字段缺席**（不是给 null）—— 少一次 `??` 判断，
@@ -26,13 +34,20 @@ export function resolveEmptyReason(args: {
   dayTotal: number;
   after: XbAfter;
   dataFetchedAt: string | null;
+  /**
+   * 本端点数据源凭据是否**未**配置（★P4）。省略/false = 视为已配置，
+   * 既有调用方（船侧）行为逐字节不变。
+   */
+  notConfigured?: boolean;
   /** 仅用于错误日志定位是哪个端点/作用域，不参与判定 */
   scope: string;
 }): XbEmptyReason | undefined {
-  const { itemCount, dayTotal, after, dataFetchedAt, scope } = args;
+  const { itemCount, dayTotal, after, dataFetchedAt, notConfigured, scope } = args;
   if (itemCount > 0) return undefined;
 
   if (dayTotal === 0) {
+    // 没有凭据 ⇒ 永远不会采到，与"还没采到"（等下一轮）是两件事，话术必须不同
+    if (notConfigured) return "not_configured";
     // 从未采到 vs 采到了但没有 —— 这两句话对用户是完全不同的（一个是我们的故障）
     return dataFetchedAt === null ? "not_yet_collected" : "no_service_today";
   }
@@ -57,12 +72,15 @@ export function buildListResponse<T>(args: {
   stale: boolean;
   attribution: XbListResponse<T>["attribution"];
   scope: string;
+  /** 见 `resolveEmptyReason` 同名参数；只影响空态归因，不影响响应形状 */
+  notConfigured?: boolean;
 }): XbListResponse<T> {
   const emptyReason = resolveEmptyReason({
     itemCount: args.items.length,
     dayTotal: args.dayTotal,
     after: args.after,
     dataFetchedAt: args.dataFetchedAt,
+    notConfigured: args.notConfigured,
     scope: args.scope,
   });
   const out: XbListResponse<T> = {
