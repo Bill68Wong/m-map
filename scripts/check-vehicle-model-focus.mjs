@@ -33,7 +33,7 @@
  *   ⚠️ 不用 esbuild：它只是 tsx 的传递依赖（0.28.2），未在 devDependencies 锚定，
  *      依赖树一变门禁就会以「找不到模块」的方式挂掉（幻觉依赖）。
  *
- * ── 反向对照（参考 scripts/check-xborder-ui.tsx 的「真渲染 + 假名字渲染空串」）──
+ * ── 反向对照（参考 `test-vehicle-model-plate.ts` 的「真渲染 + 假名字渲染空串」）──
  *   [B] 把 [A] 的 9 条**区分性断言原样**跑在「旧策略」上，要求**全部变红**。
  *   旧策略逐条对应 QA4 §4 描述的旧实现：打开时不移入焦点、keydown 只装父 document、
  *   只处理 Escape 不拦 Tab、focusin 事后拉回、dispose 不归还焦点。

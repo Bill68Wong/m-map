@@ -95,7 +95,7 @@ function fresh(): Stub {
 const sameAsDefault = (p: LayerPrefs) =>
   LAYER_KEYS.every((k) => p[k] === DEFAULT_LAYER_PREFS[k]) && p.seen === DEFAULT_LAYER_PREFS.seen;
 
-/* ══════════════ ⑤（先跑，压舱石）默认值：4 开 1 关 + 公厕关 ══════════════ */
+/* ══════════════ ⑤（先跑，压舱石）默认值：2 开 1 关 + 公厕关 ══════════════ */
 console.log("\n⑤ 默认值 —— toilet 必须为 false");
 {
   // ⚠️ 这里刻意与**字面量 false** 比较，而不是与 `DEFAULT_LAYER_PREFS.toilet` 自比：
@@ -103,11 +103,13 @@ console.log("\n⑤ 默认值 —— toilet 必须为 false");
   check("DEFAULT_LAYER_PREFS.toilet === false（公厕默认关）", DEFAULT_LAYER_PREFS.toilet === false, `实际 ${DEFAULT_LAYER_PREFS.toilet}`);
   check("DEFAULT_LAYER_PREFS.bus === true", DEFAULT_LAYER_PREFS.bus === true);
   check("DEFAULT_LAYER_PREFS.tqh === true", DEFAULT_LAYER_PREFS.tqh === true);
-  check("DEFAULT_LAYER_PREFS.pier === true", DEFAULT_LAYER_PREFS.pier === true);
-  check("DEFAULT_LAYER_PREFS.airport === true", DEFAULT_LAYER_PREFS.airport === true);
   check("DEFAULT_LAYER_PREFS.seen === false（全新用户）", DEFAULT_LAYER_PREFS.seen === false);
-  check("4 开 1 关（逐个数）", LAYER_KEYS.filter((k) => DEFAULT_LAYER_PREFS[k]).length === 4);
-  check("LAYER_KEYS 恰好 5 个", LAYER_KEYS.length === 5);
+  check("2 开 1 关（逐个数）", LAYER_KEYS.filter((k) => DEFAULT_LAYER_PREFS[k]).length === 2);
+  check("LAYER_KEYS 恰好 3 个", LAYER_KEYS.length === 3);
+  /* ★ 2026-11-16（跨境交通下线）：码头/机场两个图层已随模块删除 ⇒
+     不但不该出现在默认值里，连**键本身**都不许复活（防止有人手抄旧代码加回来）。 */
+  check("DEFAULT_LAYER_PREFS 不再有 pier/airport", !("pier" in DEFAULT_LAYER_PREFS) && !("airport" in DEFAULT_LAYER_PREFS));
+  check("LAYER_KEYS 不再有 pier/airport", !LAYER_KEYS.includes("pier" as never) && !LAYER_KEYS.includes("airport" as never));
 }
 
 /* ══════════════════════════ ① 空存储 → 默认值 ══════════════════════════ */
@@ -139,8 +141,6 @@ console.log("\n② 部分键缺失 → 缺失键取默认");
   check("存了的 bus=false 生效", p.bus === false);
   check("存了的 toilet=true 生效", p.toilet === true);
   check("缺失的 tqh 回落默认 true", p.tqh === true);
-  check("缺失的 pier 回落默认 true", p.pier === true);
-  check("缺失的 airport 回落默认 true", p.airport === true);
   check("seen=true 生效 ⇒ isNewUser=false", p.seen === true && isNewUser(p) === false);
   check("读不写盘", stub.writes.length === 0 && stub.events.length === 0);
 }
@@ -169,10 +169,12 @@ console.log("\n③ 非法 JSON / 非对象 / 非布尔 → 回落");
   const p3 = loadLayerPrefs();
   check("非布尔逐个丢弃 ⇒ bus 回落 true", p3.bus === true);
   check("非布尔逐个丢弃 ⇒ tqh 回落 true", p3.tqh === true);
-  check("非布尔逐个丢弃 ⇒ pier 回落 true", p3.pier === true);
   check("非布尔逐个丢弃 ⇒ toilet 回落 **false**（不是 \"true\" 真值）", p3.toilet === false);
-  check("合法布尔保留 ⇒ airport=true", p3.airport === true);
   check("seen 非布尔 ⇒ false（当作没来过）", p3.seen === false);
+  /* ★ 2026-11-16：老用户 localStorage 里还留着 pier/airport 两个键 ——
+     `sanitize` 只遍历 `LAYER_KEYS`，未知键必须被**丢弃而不是带出来**，
+     否则已下线的图层会跟着偏好在内存里复活。 */
+  check("旧存储里的 pier/airport 被丢弃（不复活已下线图层）", !("pier" in p3) && !("airport" in p3));
 }
 
 /* ══════════════════════════ ④ reset 只复位开关、不动 seen ══════════════════════════ */
@@ -180,15 +182,15 @@ console.log("\n④ reset：开关回默认，`seen` 保留（**不删键**）");
 {
   const stub = fresh();
   install(stub);
-  saveLayerPrefs({ bus: false, tqh: false, pier: false, airport: false, toilet: true, seen: true });
+  saveLayerPrefs({ bus: false, tqh: false, toilet: true, seen: true });
   check("写入后回读一致", (() => {
     const p = loadLayerPrefs();
-    return !p.bus && !p.tqh && !p.pier && !p.airport && p.toilet && p.seen;
+    return !p.bus && !p.tqh && p.toilet && p.seen;
   })());
   check("`must:layers` 事件已派发", stub.events.filter((e) => e === LAYER_PREFS_EVENT).length === 1);
 
   const r = resetLayerPrefs();
-  check("reset 返回值：5 个开关 = 默认值", LAYER_KEYS.every((k) => r[k] === DEFAULT_LAYER_PREFS[k]), JSON.stringify(r));
+  check("reset 返回值：3 个开关 = 默认值", LAYER_KEYS.every((k) => r[k] === DEFAULT_LAYER_PREFS[k]), JSON.stringify(r));
   check("reset 返回值：`seen` 保留为 true（不动 onboarding 状态）", r.seen === true);
   check("reset 后键**仍存在**（不删键）", stub.store.has(LAYER_STORAGE_KEY));
   check("reset 派发了事件（同页订阅者能收到）", stub.events.filter((e) => e === LAYER_PREFS_EVENT).length === 2);
@@ -207,7 +209,7 @@ console.log("\n④-b reset 不得把 `seen=false` 洗成 true（能红：把 see
   check("reset 后 seen **仍为 false**", r.seen === false, `实际 ${r.seen}`);
   check("reset 后读回 seen 仍为 false", loadLayerPrefs().seen === false);
   check("reset 后仍是 isNewUser=true（首次提示不会被 reset 吃掉）", isNewUser(loadLayerPrefs()) === true);
-  check("reset 后开关 = 默认 4 开 1 关", LAYER_KEYS.every((k) => loadLayerPrefs()[k] === DEFAULT_LAYER_PREFS[k]));
+  check("reset 后开关 = 默认 2 开 1 关", LAYER_KEYS.every((k) => loadLayerPrefs()[k] === DEFAULT_LAYER_PREFS[k]));
 }
 
 /* ══════════════════════════ ⑥ markSeen 判重 ══════════════════════════ */
@@ -249,7 +251,7 @@ console.log("\n⑧ localStorage 抛异常（隐私模式 / 配额满）");
   check("写探针失败 ⇒ available=false", isLayerStorageAvailable() === false);
   check("saveLayerPrefs 不抛错", (() => {
     try {
-      saveLayerPrefs({ bus: false, tqh: false, pier: false, airport: false, toilet: true, seen: true });
+      saveLayerPrefs({ bus: false, tqh: false, toilet: true, seen: true });
       return true;
     } catch {
       return false;

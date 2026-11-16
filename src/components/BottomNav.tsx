@@ -52,24 +52,6 @@ const TABS: TabDef[] = [
     match: (p) => p.startsWith("/favorites"),
   },
   {
-    /**
-     * ★ 2026-11-07（跨境交通 · 需求 4）：第 3 个 tab「跨境交通」。
-     * 插在「收藏」与「帮助」之间 —— 数组顺序即视觉顺序（设计稿 §7.5）。
-     * · 图标：`crossBorderIcon` → 选中切 `crossBorderFilledIcon`（同库 3.47.0 的
-     *   `IconWorld` / `IconWorldFilled`），保留本组件「选中切实心」的第二通道；
-     * · 样式零改动：`.bottom-nav__tab` 已是 `flex: 1` ⇒ 三个变四个自动等分
-     *   （我一度想补 `.bottom-nav__icon { display: grid }`，那会压掉既有 `inline-flex`
-     *    并让收藏红点位移，已放弃 —— 见 globals.css 本批分区里的说明）；
-     * · `match` 用 `startsWith`：`/cross-border/[station]` 是本站的子路由，必须一起高亮。
-     */
-    key: "crossBorder",
-    href: "/cross-border",
-    label: "跨境交通",
-    icon: "crossBorderIcon",
-    iconOn: "crossBorderFilledIcon",
-    match: (p) => p.startsWith("/cross-border"),
-  },
-  {
     // ★ v2.10.0：第 3 个 tab「帮助」（`/help`；旧 `/about` 已 308 重定向到此）
     // ★ v3.3.0（AC-109）：图标由「问号圆圈」改「手册」—— 原 `help-circle` 的问号圆点是**零长度段**，
     //   在 `strokeLinecap="butt"` 下不渲染（用户反馈「怪怪的」）；`book/bookFilled` 是同库原生
