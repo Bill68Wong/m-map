@@ -3,10 +3,10 @@
  * 所有对 DSAT 的请求必须经此模块：统一签名、超时、熔断、日限、记账。
  * 任何组件不得绕过本模块直接 fetch DSAT。
  *
- * 接口细节见 docs/DSAT巴士接口调研.md：
- *  - POST {base}/getRouteData.html        线路站点序列
- *  - POST {base}/routestation/bus         实时车辆
- *  - POST {base}/getRouteAndCompanyList.html  全部线路
+ * 接口细节见 docs/DSAT巴士接口调研.md（**该文档不入库，仅本地保留**）：
+ *  - 线路站点序列（POST，路径见下方 dsatPost 调用）
+ *  - 实时车辆（POST，路径见下方）
+ *  - 全部线路（POST，路径见下方）
  */
 import { after } from "next/server";
 import { genToken } from "./token";
@@ -15,7 +15,38 @@ import type { BusLocationsPayload, BusPositionsPayload, RouteDataPayload, DsatRe
 import { guardDsatCall, logDsatCall } from "../risk";
 import { RISK } from "../../config/risk";
 
-const BASE = process.env.DSAT_BASE_URL || "https://bis.dsat.gov.mo:37812/macauweb";
+/**
+ * DSAT 报站基点 —— **只在调用时读取，不在模块顶层求值**。
+ *
+ * ── 为什么必须惰性 ────────────────────────────────────────────────────
+ *   本模块会被 `next build` 在**构建期 import**，而构建期没有运行时环境变量。
+ *   若在顶层 `if (!v) throw`，`next build` 会直接失败 —— 那是把"运行时缺配置"
+ *   升级成"根本构建不出来"。放进函数里，构建期不触发，只有真发请求时才校验。
+ *
+ * ── 为什么缺失即抛，而不是给一个兜底地址 ──────────────────────────────
+ *   `.env.example:128-129` 是本仓库对这件事的**书面契约**：
+ *     · 「基址属内部接入点，**值不入档**」
+ *     · 「代码**只从** `process.env.DSAT_BASE_URL` 读取；**未配置时相关功能会明确报错
+ *        （不静默降级）**」
+ *   旧实现在已入库的源码里写死了那个地址（并作为 `||` 兜底），两者都违反：
+ *   值入了档，且未配置时静默降级成一个"看起来正常"的默认值 —— 出问题时无人知道
+ *   用的到底是不是配置的那个。
+ *   ⇒ 本函数是让代码追上它自己的文档，不是行为变更。
+ *
+ * ── 纪律 ──────────────────────────────────────────────────────────────
+ *   ① 报错**只提变量名**，不回显值；注释里也不写回那个地址（那正是要被拿掉的东西）。
+ *   ② 不缓存、不记忆：每次调用读一次 `process.env`，这样换值（测试、脚本内改 env）
+ *      立刻生效，不会出现"进程早期读到的旧值一直用到死"。
+ *   ③ `trim()`：环境变量带行尾空格（Windows 编辑器/复制粘贴常见）会让 URL 多一个空格，
+ *      表现为"配了却请求不通"，比"没配"更难查。
+ */
+export function dsatBaseUrl(): string {
+  const base = String(process.env.DSAT_BASE_URL ?? "").trim();
+  if (!base) {
+    throw new Error("[dsat] 缺少环境变量 DSAT_BASE_URL（见 .env.example 该变量注释）");
+  }
+  return base;
+}
 
 export type DsatPurpose = "timer_grab" | "poll" | "sync" | "recommend" | "live_pos";
 
@@ -118,7 +149,7 @@ async function dsatPost<T>(
   let parsed: unknown;
 
   try {
-    const res = await fetch(`${BASE}${path}`, {
+    const res = await fetch(`${dsatBaseUrl()}${path}`, {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",

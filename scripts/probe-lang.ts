@@ -1,7 +1,7 @@
 /**
  * 语言参数探针：getRouteData 用不同 lang 值请求，看站名是简体还是繁体
  */
-import { getRouteData } from "../src/lib/dsat/client";
+import { dsatBaseUrl, getRouteData } from "../src/lib/dsat/client";
 
 try {
   process.loadEnvFile();
@@ -17,8 +17,8 @@ async function main() {
   }
   // 直接绕过：手写请求不同 lang 值
   const { genToken } = await import("../src/lib/dsat/token");
-  const BASE =
-    process.env.DSAT_BASE_URL || "https://bis.dsat.gov.mo:37812/macauweb";
+  // 与生产同源：基点只从 env 读（缺失即抛，见 client.ts#dsatBaseUrl），不再自带兜底地址
+  const BASE = dsatBaseUrl();
   for (const lang of ["zh_tw", "zh_hk", "zh", "zh_cn"]) {
     const params = `action=sd&routeName=50&dir=0&lang=${lang}&routeType=0&device=web`;
     const token = genToken(params);

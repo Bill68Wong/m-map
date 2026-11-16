@@ -11,6 +11,11 @@
  *   - `review-push.mjs`        = 推送视角（领先远端的全部提交），出清单 + 分类 + 必要性，exit 0/1/2
  *   两者共用 `scripts/lib/push-guard-rules.mjs` 的同一套规则，禁止各写一份。
  *
+ * 敏感判据（2026-11-16 重构，与 `check-commit-scope.mjs` 同源）：
+ *   **只看本次新增的行**（`git diff -U0` 的 `+` 行）。新增文件的 diff 本身就是全部新增行 ⇒
+ *   等价全文扫描。理由见 `push-guard-rules.mjs` 头部：文件历史上曾有的命中删不掉，
+ *   拿全文判会让 `client.ts` / `probe-lang.ts` 永久无法推送，逼人用 `--no-verify`。
+ *
  * 用法：
  *   node scripts/review-push.mjs                    # 审查「将要推送」的全部提交（对比 origin/main）
  *   node scripts/review-push.mjs --staged           # 审查暂存区（提交前自查）
@@ -23,7 +28,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, statSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, statSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   ALLOW_FILES,
@@ -31,8 +36,10 @@ import {
   ALLOW_PREFIX,
   BLOCK_EXT,
   BLOCK_EXT_ALLOW,
-  SENSITIVE,
   SELF_EXEMPT,
+  MAX_DIFF_BYTES,
+  parseAddedLines,
+  findSensitiveInAddedLines,
 } from "./lib/push-guard-rules.mjs";
 
 /** 大批量阈值：超过就必须人工确认（负责人要求「涉及大批量文件先暂停」） */
@@ -125,15 +132,30 @@ function classify(file) {
   return { cat: "未分类", necessity: "分类不明：需说明是什么、为何必须随本次改动提交", level: "confirm" };
 }
 
-function readIfText(file) {
+/**
+ * 取某文件**本次新增的行**（判据 A，与 `check-commit-scope.mjs` 同一套纯函数）。
+ *
+ * 为什么不再读工作树全文：推送视角要看的是「这批提交相对基线**多写了什么**」，
+ * 而工作树全文里混着历史内容 —— 那正是 `client.ts` / `probe-lang.ts` 被永久卡住的原因。
+ * 顺带修正一处旧错：原来在默认（非 --staged）模式下读的是**工作树**文件，
+ * 而审查对象是 `base...HEAD` 的提交内容，两者可以不一致。
+ *
+ * @returns {{lines: Array<{line:number,text:string}>} | {error: string}}
+ */
+function addedLinesFor(path, opts) {
+  const args = opts.staged
+    ? ["diff", "--cached", "-U0", "--", path]
+    : ["diff", "-U0", `${opts.base}...HEAD`, "--", path];
+  let diffText = "";
   try {
-    if (!existsSync(file)) return "";
-    const st = statSync(file);
-    if (!st.isFile() || st.size > MAX_BYTES) return "";
-    return readFileSync(file, "utf8");
-  } catch {
-    return "";
+    diffText = git(args);
+  } catch (e) {
+    return { error: `无法取到 diff（${e.message}）` };
   }
+  if (Buffer.byteLength(diffText, "utf8") > MAX_DIFF_BYTES) {
+    return { error: `diff 超过 ${Math.round(MAX_DIFF_BYTES / 1024)} KB，拒绝静默跳过` };
+  }
+  return { lines: parseAddedLines(diffText) };
 }
 
 const opts = parseArgs(process.argv.slice(2));
@@ -183,18 +205,24 @@ for (const row of rows) {
         ? "删除：清理本不该入库的文件（正向）"
         : "删除：需说明清理理由，并确认本地副本是否保留";
   } else if (level !== "block") {
-    const text = SELF_EXEMPT.has(row.path) ? null : readIfText(row.path);
-    if (text) {
-      for (const { re, why } of SENSITIVE) {
-        if (re.test(text)) {
-          sensitiveHits.push(`${row.path} —— ${why}`);
+    if (!SELF_EXEMPT.has(row.path)) {
+      const got = addedLinesFor(row.path, opts);
+      if ("error" in got) {
+        // 拿不到 diff ⇒ 不知道这批提交多写了什么 ⇒ 默认方向为失败
+        sensitiveHits.push(`${row.path} —— ${got.error}（无法确认新增内容，按默认失败处理）`);
+        level = "block";
+      } else {
+        const hits = findSensitiveInAddedLines(got.lines);
+        for (const h of hits) {
+          sensitiveHits.push(`${row.path}:${h.line} —— ${h.why}（**本次新增行**）`);
           level = "block";
-          break;
         }
       }
-      if (statSync(row.path).size > MAX_BYTES) {
-        sizeWarn.push(`${row.path} —— ${Math.round(statSync(row.path).size / 1024)} KB`);
-      }
+    }
+    // 体积提示与敏感判据无关，原样保留（只对仍在工作树里的文件）
+    if (existsSync(row.path)) {
+      const size = statSync(row.path).size;
+      if (size > MAX_BYTES) sizeWarn.push(`${row.path} —— ${Math.round(size / 1024)} KB`);
     }
   }
   if (!SELF_EXEMPT.has(row.path)) table.push({ ...row, ...c, level, necessity });
@@ -234,11 +262,18 @@ push("");
 
 push("## 三、敏感内容扫描");
 push("");
-if (sensitiveHits.length === 0) push("✅ 新增/修改文件全部 0 命中（密钥、内部接口、鉴权签名、采集强度、连接串）。");
+push(
+  "判据：**只看本次新增的行**（新增文件 = 全文，因为它的 diff 本身就是全部新增行）。" +
+    "文件里历史遗留的命中已登记在 `scripts/lib/push-guard-rules.mjs` 的 `LEGACY_BASELINE`，不阻断正常修改。",
+);
+push("");
+if (sensitiveHits.length === 0) push("✅ 本次新增行 0 命中（密钥、内部接口、鉴权签名、采集强度、连接串）。");
 else {
-  push("⛔ 以下文件命中敏感特征，**不得推送**：");
+  push("⛔ 以下文件在**本次新增行**里命中敏感特征，**不得推送**：");
   push("");
   for (const h of sensitiveHits) push(`- ${h}`);
+  push("");
+  push("处理：删掉你新写的那几行。**不要把文件加进 SELF_EXEMPT / ALLOW_FILES**（那是把门关掉，不是修门）。");
 }
 push("");
 
