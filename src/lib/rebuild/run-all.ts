@@ -12,17 +12,14 @@
  *   放这里，路由与 CLI 都调它。
  *
  * ── 步骤顺序不能改 ─────────────────────────────────────────────────────
- *   ① 窗口清理（只回报不删）→ ② segment_stats → ③ walk_times → ④ transfer_walks → ⑤ 跨境清理。
+ *   ① 窗口清理（只回报不删）→ ② segment_stats → ③ walk_times → ④ transfer_walks。
  *   ②③④ 都读 `segment_samples` / 事件表，**必须串行**，否则并发抢连接。
- *   ⑤ 与前三步无依赖，放最后只是因为它最不重要（失败也不该拖累前三步的落库）。
  *
  * ── 失败语义 ──────────────────────────────────────────────────────────
  *   单步异常不中断后续步骤：把 `ok=false` + `err` 记进结果，让调用方看到「哪一步坏了」，
  *   而不是整轮抛掉、前面已写入的表也不知道算成功还是失败。
  */
 import type { Pool } from "pg";
-import { cleanupXborder } from "@/lib/cross-border/store-write";
-import { addDays, macauDate } from "@/lib/cross-border/time";
 import { rebuildSegmentStats } from "./segment-stats";
 import { trimSegmentSampleWindow } from "./segment-samples";
 import { rebuildTransferWalks } from "./transfer-walks";
@@ -111,21 +108,6 @@ export async function runRebuildSteps(pool: Pool): Promise<RebuildStepResult[]> 
         inserted: r.inserted,
         totalSamples: r.totalSamples,
       };
-    }),
-  );
-
-  // v3.8.0 第四步：跨境交通两张表的保留窗口清理（`xborder_flights` / `xborder_sailings`）。
-  //   保留 `sched_date >= 澳门当日 - 2`：需求只显示当日，留 2 天是为了排查
-  //   "昨天为什么是空表"。**复用本 cron 槽位**——Hobby 每个 job 每天只能触发一次，
-  //   为此新增一个 cron 只会多一个失败点，零收益（契约 §1.7）。
-  //   ⚠️ 边界用**澳门日期**算，不用 SQL 的 `current_date`：Supabase 会话时区是 UTC，
-  //      在澳门 00:00–08:00 之间 `current_date` 会比澳门日期早一天（详见 store-write.ts）。
-  results.push(
-    await step("xborder_cleanup", async () => {
-      const before = addDays(macauDate(), -2);
-      if (!before) throw new Error("澳门日期计算失败");
-      const r = await cleanupXborder(before, pool);
-      return { before, flights: r.flights, sailings: r.sailings };
     }),
   );
 

@@ -131,12 +131,7 @@ console.log("④ git grep：全 src/ 残留扫描");
   // ★ S-02：门禁侧**独立枚举**的豁免清单（照 check-api-guards.ts ALLOWLIST 形态，逐条打印 文件:行 + 理由）。
   //   为什么不放宽正则：豁免是门禁上唯一的洞，必须「点到具体 文件:行」才可核验；
   //   放宽 pattern 会连带放过将来新加的第 5、第 6 行（本批就是靠这条把既有红「精确收口」而非放绿）。
-  const EXEMPT: { file: string; line: number; reason: string }[] = [
-    { file: "src/app/cross-border/page.tsx", line: 77, reason: "跨境班次「最近五班」切片（air），与 NAV/RECOMMEND 卡片张数常量语义不同" },
-    { file: "src/app/cross-border/page.tsx", line: 78, reason: "跨境班次「最近五班」切片（ferry-PI），语义同上" },
-    { file: "src/app/cross-border/page.tsx", line: 79, reason: "跨境班次「最近五班」切片（ferry-PE），语义同上" },
-    { file: "src/app/cross-border/page.tsx", line: 80, reason: "跨境班次「最近五班」切片（ferry-TP），语义同上" },
-  ];
+  const EXEMPT: { file: string; line: number; reason: string }[] = [];
   const exemptKey = (file: string, line: number) => EXEMPT.find((e) => e.file === file && e.line === line);
 
   // git grep 封装：**只把退出码 1（无命中）当空**；其余退出码（2+ = 出错）一律上抛给判据判红，

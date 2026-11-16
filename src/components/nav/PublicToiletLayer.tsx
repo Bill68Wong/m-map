@@ -10,7 +10,7 @@
  *
  * ── 与既有图层同一形态 ──────────────────────────────────────────────────
  *   受控组件：`map` / `amap` 由 `NavMap` 在 `phase === "ready"` 后传入；卸载时逐个
- *   `map.remove(marker)` 收尾（**不泄漏 AMap marker**，与 `XborderPinLayer` 同纪律）。
+ *   `map.remove(marker)` 收尾（**不泄漏 AMap marker**，与 `TqhStationLayer` 同纪律）。
  *   回调一律走 ref（宿主每次渲染都会新建内联函数，直接进 effect 依赖会全量重建 marker）。
  *
  * ── 懒加载（负责人裁定：静态 JSON、默认关闭、打开才拉）──────────────────

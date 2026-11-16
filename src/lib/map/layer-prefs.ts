@@ -28,17 +28,17 @@
  *      且那边还牵连收藏 schema）。
  */
 
-/** 五个图层开关的键（顺序即 UI 建议顺序：巴士 → 通琴号 → 码头 → 机场 → 公厕） */
-export type LayerKey = "bus" | "tqh" | "pier" | "airport" | "toilet";
+/** 三个图层开关的键（顺序即 UI 建议顺序：巴士 → 通琴号 → 公厕） */
+export type LayerKey = "bus" | "tqh" | "toilet";
 
 /**
  * 偏好（**没有** `version` 字段，版本记在键名里）。
- * `seen` = 是否已被用户动作初始化过；其余 5 个键 = 各图层是否显示。
+ * `seen` = 是否已被用户动作初始化过；其余 3 个键 = 各图层是否显示。
  */
 export type LayerPrefs = Record<LayerKey, boolean> & { seen: boolean };
 
 /** 全部图层键（有序；弹窗渲染、默认值遍历与自测共用，避免各处手写数组漂移） */
-export const LAYER_KEYS: readonly LayerKey[] = ["bus", "tqh", "pier", "airport", "toilet"];
+export const LAYER_KEYS: readonly LayerKey[] = ["bus", "tqh", "toilet"];
 
 /** 存储键（版本在键名里） */
 export const LAYER_STORAGE_KEY = "must.layers.v1";
@@ -47,14 +47,12 @@ export const LAYER_STORAGE_KEY = "must.layers.v1";
 export const LAYER_PREFS_EVENT = "must:layers";
 
 /**
- * 默认值：巴士/通琴号/码头/机场 开，**公厕关**；`seen: false`（= 全新用户）。
+ * 默认值：巴士/通琴号 开，**公厕关**；`seen: false`（= 全新用户）。
  * ⚠️ **只读约定**：消费方不得修改本对象；需要可写副本时用 `loadLayerPrefs()`（内部返回副本）。
  */
 export const DEFAULT_LAYER_PREFS: LayerPrefs = {
   bus: true,
   tqh: true,
-  pier: true,
-  airport: true,
   toilet: false,
   seen: false,
 };
@@ -145,7 +143,7 @@ export function saveLayerPrefs(p: LayerPrefs): void {
 }
 
 /**
- * 恢复默认：把**五个开关**写回默认值（4 开 1 关），**但保留 `seen`**。
+ * 恢复默认：把**三个开关**写回默认值（2 开 1 关），**但保留 `seen`**。
  *
  * ⚠️ 为什么不删键 / 为什么不动 `seen`（负责人 2026-11-10 裁定）：
  *   `seen` 记录的是「**本浏览器有没有打开过图层面板**」，与「五个开关各是什么」是**两件事**。
