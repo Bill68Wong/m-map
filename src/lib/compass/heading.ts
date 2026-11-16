@@ -311,21 +311,35 @@ export function createHeadingSmoother(opts: HeadingSmootherOpts = {}): HeadingSm
 
 /** iOS `webkitCompassAccuracy` 门限（度）：超过即判"精度不足"；负值 = 无效 */
 export const COMPASS_ACC_MAX_DEG = 25;
+/**
+ * 抖动门限（**度**，最近 `COMPASS_JITTER_SAMPLES` 帧的累计摆动量）：
+ * Android（无系统精度字段）用它替代精度字段。
+ *
+ * ⚠️ 单位是"窗口内累计度数"，**不是度/秒**。二者不能混：
+ *   同一物理抖动，50Hz 采样 24 帧只覆盖 0.48s、10Hz 覆盖 2.4s，
+ *   累计量不同。本仓库的判定窗口由**样本数**固定（24 帧，见 `headingJitterDeg` 调用处），
+ *   所以阈值 25 与采样率无关，只与"每帧差 ≈1°"这个量级挂钩。
+ *   真要按物理速率（度/秒）判，得先拿真机标定正常噪声的基线，否则换个机型就失效
+ *   —— 所以 F4 **没有**引入速率口径，只沿用 F1 这一套。
+ */
+export const COMPASS_JITTER_MAX_DEG = 25;
+/** 抖动判定的样本数（与 F1 质量判定的窗口一致，勿单独改） */
+export const COMPASS_JITTER_SAMPLES = 24;
 
 export type HeadingQuality = "ok" | "poor" | "invalid";
 
 /**
  * 判定罗盘质量。
  * @param webkitAccuracy iOS 的 `webkitCompassAccuracy`（度；非 iOS 传 null）
- * @param jitterDeg      `headingJitterDeg` 的结果（仅在没有系统精度字段时才参考）
+ * @param jitterDeg      `headingJitterDeg` 的结果（度；仅在没有系统精度字段时才参考）
+ *                       —— iOS 自己算的精度更可信，我们自算的抖动分不清"手抖"与"磁扰"
  */
 export function headingQualityOf(webkitAccuracy: number | null, jitterDeg: number): HeadingQuality {
   if (typeof webkitAccuracy === "number" && Number.isFinite(webkitAccuracy)) {
     if (webkitAccuracy < 0) return "invalid";
     return webkitAccuracy > COMPASS_ACC_MAX_DEG ? "poor" : "ok";
   }
-  // 无系统精度字段（Android）⇒ 用抖动度替代；阈值 25°/s 见 headingJitterDeg 注释
-  if (jitterDeg > 25) return "poor";
+  if (jitterDeg > COMPASS_JITTER_MAX_DEG) return "poor";
   return "ok";
 }
 
@@ -353,6 +367,23 @@ export function headingJitterDeg(samples: HeadingSample[]): number {
   const net = Math.abs(shortestDeltaDeg(samples[0].deg, samples[samples.length - 1].deg));
   const jitter = path - net;
   return jitter > 0 ? jitter : 0;
+}
+
+/**
+ * **抖动速率**（度/秒）：把 `headingJitterDeg` 的总量按样本实际时间跨度归一化。
+ *
+ * ⚠️ **不参与判定**（F4 明确不用它）：阈值 25 是按"24 帧累计度"标定的，
+ *   换成度/秒需要先拿真机测出各机型正常噪声的基线，否则同一台手机换个浏览器就误判。
+ *   保留本函数只用于**排查与观测**（比如打印日志看某台设备的抖动量级），
+ *   谁要拿它做判定，先补一份真机基线数据。
+ *
+ * @returns 度/秒；样本 < 3 或时间跨度为 0 时返回 0
+ */
+export function headingJitterRateDegPerSec(samples: HeadingSample[]): number {
+  if (samples.length < 3) return 0;
+  const span = samples[samples.length - 1].ts - samples[0].ts;
+  if (!Number.isFinite(span) || span <= 0) return 0;
+  return (headingJitterDeg(samples) * 1000) / span;
 }
 
 /** 朝向来源：罗盘 / GPS 行进方向 / 正北（兜底） */

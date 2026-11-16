@@ -26,8 +26,34 @@ export const NOTE_HEADING_ENABLE = "点此开启朝向指示";
 export const NOTE_HEADING_NORTH = "方向暂时读不到 · 地图按正北朝上";
 /** 罗盘不可信（磁扰 / 精度差）：说明"我们没在骗你" */
 export const NOTE_HEADING_POOR = "方向读数不稳 · 先按正北显示";
+/**
+ * ★ F4：磁扰确认后给一个**可执行的动作**（不是含糊的"信号不好"）。
+ * 「画 8 字」是磁力计的标准校准手势 —— 用户做完读数通常就恢复了，
+ * 这比让他去猜"是不是我手机坏了"有用。
+ * 每会话只出一次（见 `takeCalibrateTicket`）：磁扰会持续存在，反复提示等于噪音。
+ */
+export const NOTE_HEADING_CALIBRATE = "方向受磁场干扰 · 拿手机在空中画几个「8」字可恢复";
 /** 用行进方向代替朝向：必须说清它是"往哪走"而不是"朝哪看" */
 export const NOTE_HEADING_COURSE = "方向跟随行进方向 · 停下后按正北";
+
+/**
+ * 校准提示的"每会话一次"票据。
+ *
+ * 为什么不用 `sessionStorage`：这个仓库的观测钩子一律走模块态（同 `grantedInSession`），
+ * 刷新页面即重置；而 sessionStorage 在移动端 Safari 的隐私模式下会抛异常，
+ * 用模块变量就不必再包一层 try/catch。
+ *
+ * ⚠️ 调用方必须记住"本轮已处理"（见 `useUserHeading` 的 `calibrateConsumedRef`），
+ *   否则 StrictMode 下的双跑会把这张票白白花掉。
+ */
+let calibrateTicked = false;
+
+/** @returns 本次是否**领到**了"可以提示一次校准"的许可（每会话只有第一次为 `true`） */
+export function takeCalibrateTicket(): boolean {
+  if (calibrateTicked) return false;
+  calibrateTicked = true;
+  return true;
+}
 
 export interface HeadingNote {
   text: string;
@@ -45,8 +71,10 @@ export interface HeadingNote {
  *   ⇒ 判据必须是「**箭头现在在用什么**」优先，而不是「传感器状态如何」：
  *     ① 罗盘在给方向 ⇒ 不需要解释；
  *     ② iOS 还没试过权限 ⇒ 先给可点入口（此时没有比"去点一下"更有用的话）；
- *     ③ 正在用行进方向 ⇒ 必须解释（它是"往哪走"不是"朝哪看"）；
- *     ④ 其余（没有方向 / 质量差）⇒ 说明为什么没画。
+ *     ③ ★F4 磁扰已确认 ⇒ **优先说校准**（它比"现在用的是行进方向"更接近用户能做的事），
+ *        且此时箭头即便还在（走 course 分支）也说得通：校准完就恢复真朝向；
+ *     ④ 正在用行进方向 ⇒ 必须解释（它是"往哪走"不是"朝哪看"）；
+ *     ⑤ 其余（没有方向 / 质量差）⇒ 说明为什么没画。
  */
 export function noteOfHeading(o: {
   /** 是否处于需要朝向的场景（步行段） */
@@ -55,6 +83,8 @@ export function noteOfHeading(o: {
   status: CompassStatus;
   /** 本机是否必须先有一次手势（iOS） */
   needsGesture: boolean;
+  /** ★ F4：本轮确认了磁扰，且本会话还有一次"提示校准"的额度 */
+  calibrate?: boolean;
 }): HeadingNote | null {
   if (!o.enabled) return null;
 
@@ -66,12 +96,15 @@ export function noteOfHeading(o: {
     return { text: NOTE_HEADING_ENABLE, action: "enable" };
   }
 
-  // ③ 正在用行进方向 ⇒ 说明它是什么（否则用户拐弯时会发现箭头不跟人走）
+  // ③ 磁扰确认 ⇒ 给可执行的动作（比下面两句更接近"你能做点什么"）
+  if (o.calibrate) return { text: NOTE_HEADING_CALIBRATE, action: null };
+
+  // ④ 正在用行进方向 ⇒ 说明它是什么（否则用户拐弯时会发现箭头不跟人走）
   if (o.mode === "course") return { text: NOTE_HEADING_COURSE, action: null };
 
-  // ④ 罗盘在收帧但质量不足 ⇒ 正在用正北兜底，说清楚
+  // ⑤ 罗盘在收帧但质量不足 ⇒ 正在用正北兜底，说清楚
   if (o.status === "poor") return { text: NOTE_HEADING_POOR, action: null };
 
-  // ⑤ 其余（拒绝 / 无传感器 / 还没出首帧）⇒ 说明为什么不画
+  // ⑥ 其余（拒绝 / 无传感器 / 还没出首帧）⇒ 说明为什么不画
   return { text: NOTE_HEADING_NORTH, action: null };
 }
