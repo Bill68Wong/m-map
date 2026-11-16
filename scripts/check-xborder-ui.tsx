@@ -13,7 +13,7 @@
  *      按 `statusKind` 置灰会让抵澳板灰成一片 —— 而"抵澳板灰着"看起来跟"今晚没航班"一样。
  *      ⇒ 断言「同一 `statusKind` + `isTerminal=false` ⇒ 不置灰」。
  *
- *   ③ **空态说错话**：三值 `emptyReason` 必须三句不同的话；若混成一句，
+ *   ③ **空态说错话**：四值 `emptyReason` 必须四句不同的话；若混成一句，
  *      "我们没采到"会被说成"今天没有船"。
  *      ⇒ 断言三句互不相同、且都不含归因错误词表。
  *
@@ -43,6 +43,10 @@ import {
 } from "../src/components/cross-border/xb-view";
 import XbTable, { tableSpec } from "../src/components/cross-border/XbTable";
 import { XbStale } from "../src/components/cross-border/XbBits";
+/* 空态取值表从类型模块**现读**（不在这里复制一份）：
+   新增取值会自动纳入下面的遍历断言，漏写文案立刻红 —— 这是 P4 加
+   `not_configured` 时踩到的洞（if 链无穷尽性检查，漏分支会静默落进兜底话术）。 */
+import { XB_EMPTY_REASONS } from "../src/lib/cross-border/types";
 
 let pass = 0;
 let fail = 0;
@@ -434,14 +438,18 @@ assertEq(PIER_NAME.TP, "氹仔碼頭", "反向对照：PIER_NAME 是官方专名
 assertEq(PIER_NAME.PE, "外港碼頭", "反向对照：PIER_NAME.PE 保持繁体");
 
 /* ══════════════════════════════════════════════════════════════════════
- * [6] 空态三值 = 三句不同的话，且无归因错误词
+ * [6] 空态四值 = 四句不同的话，且无归因错误词（取值表读 XB_EMPTY_REASONS，防漏文案）
  * ══════════════════════════════════════════════════════════════════════ */
-console.log("\n[6] 空态三值文案");
-const REASONS = ["none_remaining_today", "no_service_today", "not_yet_collected"] as const;
+console.log("\n[6] 空态四值文案");
+/* 取值表读 `XB_EMPTY_REASONS`：本数组加一项 ⇒ 断言自动多跑一项。
+   `assertEq(new Set(titles).size, REASONS.length, ...)` 才是真正的锁：
+   若 `emptyCopy` 漏了新分支，新取值会落进兜底 return、标题与 `not_yet_collected` 重复
+   ⇒ 唯一性断言红（不是"多一条断言"这种软约束）。 */
+const REASONS = XB_EMPTY_REASONS;
 const BANNED = ["暂无数据", "系統", "系统", "加载失败", "未知", "N/A", "--"];
 for (const kind of ["airport", "ferry"] as const) {
   const titles = REASONS.map((r) => emptyCopy(r, kind, "dep").title);
-  assertEq(new Set(titles).size, 3, `${kind}：三值三句不同的话`);
+  assertEq(new Set(titles).size, REASONS.length, `${kind}：${REASONS.length} 值 ${REASONS.length} 句不同的话`);
   for (const r of REASONS) {
     const { title, body } = emptyCopy(r, kind, "dep");
     const text = title + body;
@@ -450,6 +458,12 @@ for (const kind of ["airport", "ferry"] as const) {
   }
 }
 assert(emptyCopy("not_yet_collected", "ferry", "dep").body.includes("不是没有"), "「未采集」必须说清不是我方故障≠没有班次");
+/* ★P4：未配置话术的三条硬约束（见 xb-view.ts#emptyCopy 该分支注释）：
+   ① 不许劝用户"稍后重试"（等下去也不会好）；② 不许说"失败/系统"（没东西出错，BANNED 已覆盖）；
+   ③ 必须明确否掉"今天没有班次"（空表 + 空话术 = 用户以为飞不了）。 */
+const ncCopy = emptyCopy("not_configured", "airport", "dep");
+assert(!/稍后重试|重试/.test(ncCopy.title + ncCopy.body), "「未配置」不得劝用户重试（重试解决不了缺配置）");
+assert(ncCopy.body.includes("不代表今天没有班次"), "「未配置」必须明确否掉「今天没有班次」");
 
 /* ══════════════════════════════════════════════════════════════════════
  * [7] 列模板（四个界面各自的列数与列头）
