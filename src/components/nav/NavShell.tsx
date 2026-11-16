@@ -168,9 +168,12 @@ import type { RecommendCard } from "@/lib/recommend/types";
 import type { NavPoint } from "@/lib/nav/types";
 /** ★ 2026-11-06（#5a）：站序接口响应类型（纯 type，无 pg 依赖） */
 import type { RouteStopsOk, RouteStopsResp } from "@/lib/line/line-shared";
+import XborderCard from "@/components/map/XborderCard";
+import { xbPinById } from "@/components/map/xborder-pins";
 /* ★ M4（需求 2/3/5/6）：图层偏好 + 图层面板 + 公厕弹窗 */
 import { useLayerPrefs } from "@/lib/map/useLayerPrefs";
 import { toiletDisplayName, type PublicToilet } from "@/lib/map/public-toilets";
+import type { XbPinKind } from "@/components/map/xborder-pins";
 import LayerSheet from "./LayerSheet";
 import PublicToiletCard from "./PublicToiletCard";
 
@@ -242,6 +245,13 @@ export default function NavShell({
   const [from, setFrom] = useState<NavPoint | null>(initialFrom);
   const [to, setTo] = useState<NavPoint | null>(initialTo);
   const [station, setStation] = useState<StationCardStation | null>(null);
+  /**
+   * ★ 需求 7：跨境地标小窗的选中组（机场 / 码头）。
+   * `null` = 没开；`[id]` = 单点；`[idA, idB]` = 聚合点两行。
+   * 与 `station` / `tqhStation` **互斥**：三者共用 `.nav-card-overlay`，
+   * 同一时刻只应有一张卡（点地标时由 `onXborderPinClick` 顺手清掉另两个）。
+   */
+  const [xbPinIds, setXbPinIds] = useState<string[] | null>(null);
 
   /** 底层舞台（带 initialTo 时直接进「半屏可出发」= 与旧版一致） */
   /**
@@ -2016,6 +2026,8 @@ export default function NavShell({
   const onMapClick = useCallback(() => {
     setStation(null);
     setTqhStation(null);
+    /* ★ 需求 7：点地图空白处也收起地标卡（与另两张卡同一口径） */
+    setXbPinIds(null);
     /* ★ M4（需求 6）：点地图空白处关图层面板。
        ⚠️ 刻意**不 return、不 stopPropagation** —— 上面三条清卡行为必须照常执行；
        面板只是个浮层，关它不该改变"点地图 = 收起所有卡片"的既有语义。 */
@@ -2144,6 +2156,16 @@ export default function NavShell({
    * 默认 `ok: true` ⇒ 首帧不闪提示；拿到真实 zoom 前也不该吓用户。
    */
   const [mapZoom, setMapZoom] = useState<{ ok: boolean; zoom: number }>({ ok: true, zoom: 0 });
+  /**
+   * ★ M4（需求 6）：码头 / 机场分开控制 —— 必须 `useMemo`：
+   *   这个 Set 进 `XborderPinLayer` 的 effect 依赖，每次渲染新建会全量重建 marker。
+   */
+  const xborderKinds = useMemo(() => {
+    const s = new Set<XbPinKind>();
+    if (layers.prefs.pier) s.add("pier");
+    if (layers.prefs.airport) s.add("airport");
+    return s;
+  }, [layers.prefs.pier, layers.prefs.airport]);
   const pickedCode = rv.picked?.code ?? null;
   const pickedDir = rv.picked?.dir ?? null;
 
@@ -2417,7 +2439,16 @@ export default function NavShell({
           onLocate={onLocate}
           onStationClick={onStationClick}
           onMapClick={onMapClick}
-          /* ★ M4（需求 2/3）：巴士站点 / 公共厕所图层开关（默认 2 开 1 关，来自图层偏好） */
+          /**
+           * ★ 需求 7：跨境地标圆点。
+           *   · `!navActive`：**导航 / 步行态不画** —— 那时地图要装路线与转向，
+           *     地标属于"看地图找机场"的场景，混进导航只会增加误点；
+           *   · 点地标时先清掉另两张卡：三者共用 `.nav-card-overlay`，不清就是两张卡叠着。
+           */
+          showXborderPins={!navActive}
+          /* ★ M4（需求 6）：码头 / 机场分别由图层开关控制（聚合本身仍在全量地标上算） */
+          xborderKinds={xborderKinds}
+          /* ★ M4（需求 2/3）：巴士站点 / 公共厕所图层开关（默认 4 开 1 关，来自图层偏好） */
           showBusStations={layers.prefs.bus}
           /**
            * ★ 需求 3（负责人原话：「只在首页地图显示，导航时隐藏」）：
@@ -2440,8 +2471,15 @@ export default function NavShell({
             /* 与另两张卡同一口径：先清同类卡，三者共用 `.nav-card-overlay` */
             setStation(null);
             setTqhStation(null);
+            setXbPinIds(null);
             rv.closeVehicle();
             setToilet(t);
+          }}
+          onXborderPinClick={(ids) => {
+            setStation(null);
+            setTqhStation(null);
+            rv.closeVehicle();
+            setXbPinIds(ids);
           }}
           /* ★ v2.10.0：路线查看模式 + 实时车辆；★ 2026-09-23：detail pane 打开时让位给总览 */
           routeLine={detailActive ? null : rv.picked}
@@ -2603,9 +2641,9 @@ export default function NavShell({
 
       {/* ★ 卡片浮层（车卡/站卡）—— 挂在 wrap **之外**，`.nav-card-overlay`（fixed z90）
           ⇒ 面板打开时点地图带上的车/站，卡片不被面板（z70）压住。 */}
-      {(station || rv.selected || tqhStation || toilet) && (
+      {(station || rv.selected || tqhStation || xbPinIds || toilet) && (
         <div className="nav-card-overlay">
-          {/* ★ M4（需求 3）：公厕卡 —— 与另两张共用同一个 `.nav-card-overlay`（z90）。
+          {/* ★ M4（需求 3）：公厕卡 —— 与另三张共用同一个 `.nav-card-overlay`（z90）。
               点 pin 时上面几个状态已被清空 ⇒ 实际同屏只有它一张。 */}
           {toilet && (
             <PublicToiletCard
@@ -2620,6 +2658,30 @@ export default function NavShell({
               onSetTo={() => {
                 setTo(toiletToNavPoint(toilet));
                 setToilet(null);
+                setStage("panel");
+              }}
+            />
+          )}
+          {/* ★ 需求 7：跨境地标卡（机场/码头；聚合点为两行链接）。
+              放在最前：点地标时上面三个状态已被清空，实际同屏只有它一张。 */}
+          {xbPinIds && (
+            <XborderCard
+              ids={xbPinIds}
+              onClose={() => setXbPinIds(null)}
+              /* ★ M4（需求 4）：逐条设施设点 —— 每条用**自己**的坐标（`xbPinById`） */
+              navActive={navActive}
+              onSetFrom={(id) => {
+                const pin = xbPinById(id);
+                if (!pin) return;
+                setFrom({ kind: "place", label: pin.name, lng: pin.lng, lat: pin.lat });
+                setXbPinIds(null);
+                setStage("panel");
+              }}
+              onSetTo={(id) => {
+                const pin = xbPinById(id);
+                if (!pin) return;
+                setTo({ kind: "place", label: pin.name, lng: pin.lng, lat: pin.lat });
+                setXbPinIds(null);
                 setStage("panel");
               }}
             />
