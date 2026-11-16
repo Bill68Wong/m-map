@@ -6,7 +6,9 @@
  * ── 职责 ──────────────────────────────────────────────────────────────
  *   `deviceorientation(absolute)` / iOS `webkitCompassHeading`
  *     → 倾斜补偿求"用户面朝方向"（`lib/compass/heading.ts`）
- *     → 环形低通平滑 → 以 ≤30fps 提交给 React（供地图箭头旋转）。
+ *     → 环形低通平滑
+ *     → ★F4 磁扰检测（`lib/compass/disturbance.ts`：持续性 + GPS 佐证 ⇒ strong / mild）
+ *     → 以 ≤30fps 提交给 React（供地图箭头旋转）。
  *
  * ── 三条必须做对的事 ──────────────────────────────────────────────────
  *   ① **权限必须在用户手势的同步栈内申请**：iOS 13+ 的
@@ -32,12 +34,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   createHeadingSmoother,
   headingFromOrientation,
-  headingJitterDeg,
-  headingQualityOf,
   screenAngleDeg,
   type HeadingQuality,
-  type HeadingSample,
 } from "@/lib/compass/heading";
+import { createDisturbanceDetector, type DisturbLevel } from "@/lib/compass/disturbance";
 
 /** 通道状态（供 UI 决定是否显示"按正北显示"之类的提示） */
 export type CompassStatus =
@@ -51,9 +51,14 @@ export type CompassStatus =
 export interface UseCompassHeadingResult {
   /** 平滑后的朝向（0 = 北，顺时针）；无可用朝向时 null */
   heading: number | null;
-  /** 质量判定（`ok` 之外都不可用于画箭头） */
+  /** 质量判定（`ok` 之外都不可用于画箭头）—— 已含 ★F4 的磁扰持续性判定 */
   quality: HeadingQuality;
   status: CompassStatus;
+  /**
+   * ★ F4：磁扰等级（`none` / `mild` 保留箭头，`strong` 降级 + 提示校准）。
+   * 与 `quality` 同源：`strong ⇒ poor`、`mild ⇒ ok`，UI 只需读一个。
+   */
+  disturbance: DisturbLevel;
   /**
    * 申请权限并开始收帧。**必须在用户手势的同步栈内调用**。
    * @returns 是否成功开启（false ⇒ 调用方走降级链，不要重试）
@@ -65,12 +70,12 @@ export interface UseCompassHeadingResult {
 
 /** 无帧看门狗的等待时长（ms）：授权后这么久还没任何帧 ⇒ 判本机无传感器 */
 const NO_FRAME_TIMEOUT_MS = 3_000;
-/** 质量样本窗口（ms） */
-const QUALITY_WINDOW_MS = 1_000;
 /** 提交阈值（度）：小于此变化不触发 React 更新 */
 const COMMIT_EPS_DEG = 0.5;
-/** 质量样本上限（10Hz × 1s，够判离散度且不会无限增长） */
-const SAMPLE_MAX = 24;
+/**
+ * ★ F4：质量 / 磁扰的样本窗口与阈值都搬进了 `lib/compass/disturbance.ts`
+ *   （那边要按"持续时长"判定，还要 GPS 佐证，本文件只负责把每帧喂给它）。
+ */
 
 /**
  * iOS 专有字段（TS 的 `DeviceOrientationEvent` 不含）。
@@ -116,25 +121,42 @@ export function compassNeedsGesture(): boolean {
  */
 let grantedInSession = false;
 
-export function useCompassHeading(opts: { enabled: boolean }): UseCompassHeadingResult {
+/** ★ F4：GPS 佐证所需的两个量（由合成层 `useUserHeading` 提供，本 hook 不自己取定位） */
+export interface CompassFusion {
+  courseDeg: number | null;
+  speedMps: number | null;
+}
+
+export function useCompassHeading(opts: {
+  enabled: boolean;
+  /** 可选：GPS 行进方向与速度（仅用于磁扰判定时的佐证，不参与选源） */
+  fusion?: CompassFusion | null;
+}): UseCompassHeadingResult {
   const { enabled } = opts;
 
   const [heading, setHeading] = useState<number | null>(null);
   const [quality, setQuality] = useState<HeadingQuality>("invalid");
   const [status, setStatus] = useState<CompassStatus>("idle");
+  const [disturbance, setDisturbance] = useState<DisturbLevel>("none");
 
   /** 是否已获授权并进入收帧态（`enabled` 之外的第二道门） */
   const [armed, setArmed] = useState(false);
 
   const smootherRef = useRef(createHeadingSmoother());
-  const samplesRef = useRef<HeadingSample[]>([]);
+  const detectorRef = useRef(createDisturbanceDetector());
   const pendingRef = useRef<number | null>(null);
   const rafRef = useRef<number | null>(null);
   const lastCommitRef = useRef<number | null>(null);
   const frameSeenRef = useRef(false);
   const screenAngleRef = useRef(0);
   const qualityRef = useRef<HeadingQuality>("invalid");
+  const levelRef = useRef<DisturbLevel>("none");
   const noFrameTimerRef = useRef<number | null>(null);
+  /** GPS 佐证的输入：每帧都可能变，但**不能**进 effect 依赖（否则每帧重挂监听） */
+  const fusionRef = useRef<CompassFusion | null>(opts.fusion ?? null);
+  useEffect(() => {
+    fusionRef.current = opts.fusion ?? null;
+  });
 
   /** 清掉"无帧看门狗" */
   const clearNoFrameTimer = useCallback(() => {
@@ -150,7 +172,9 @@ export function useCompassHeading(opts: { enabled: boolean }): UseCompassHeading
     setHeading(null);
     setStatus((s) => (s === "denied" || s === "unsupported" || s === "needs_permission" ? s : "idle"));
     smootherRef.current.reset();
-    samplesRef.current = [];
+    detectorRef.current.reset();
+    levelRef.current = "none";
+    setDisturbance("none");
     lastCommitRef.current = null;
     frameSeenRef.current = false;
     clearNoFrameTimer();
@@ -185,7 +209,9 @@ export function useCompassHeading(opts: { enabled: boolean }): UseCompassHeading
     screenAngleRef.current = screenAngleDeg();
     frameSeenRef.current = false;
     smootherRef.current.reset();
-    samplesRef.current = [];
+    detectorRef.current.reset();
+    levelRef.current = "none";
+    setDisturbance("none");
     grantedInSession = true;
     setArmed(true);
     setStatus("listening");
@@ -252,23 +278,34 @@ export function useCompassHeading(opts: { enabled: boolean }): UseCompassHeading
         clearNoFrameTimer();
       }
 
-      // 质量：iOS 用系统精度字段；Android 用 1s 窗口离散度
-      const now = ts;
-      const buf = samplesRef.current;
-      buf.push({ deg: raw, ts: now });
-      while (buf.length > SAMPLE_MAX) buf.shift();
-      const recent = buf.filter((s) => now - s.ts <= QUALITY_WINDOW_MS);
-      const q = headingQualityOf(
-        typeof we.webkitCompassAccuracy === "number" ? we.webkitCompassAccuracy : null,
-        headingJitterDeg(recent),
-      );
-      if (q !== qualityRef.current) {
-        qualityRef.current = q;
-        setQuality(q);
-        setStatus(q === "ok" ? "listening" : "poor");
+      /**
+       * 顺序不能反：**先平滑，再判磁扰**。
+       * 磁扰检测里的 GPS 佐证要拿"已经压过噪声"的朝向去比行进方向 ——
+       * 拿原始帧去比，等于用噪声当证据，佐证会随抖动随机成立/不成立。
+       */
+      const sm = smootherRef.current.push(raw, ts);
+      const fusion = fusionRef.current;
+      const st = detectorRef.current.push({
+        deg: raw,
+        smoothed: sm,
+        ts,
+        accuracyDeg: typeof we.webkitCompassAccuracy === "number" ? we.webkitCompassAccuracy : null,
+        courseDeg: fusion?.courseDeg ?? null,
+        speedMps: fusion?.speedMps ?? null,
+      });
+
+      if (st.quality !== qualityRef.current) {
+        qualityRef.current = st.quality;
+        setQuality(st.quality);
+        setStatus(st.quality === "ok" ? "listening" : "poor");
+      }
+      /** ★ F4：只在**等级变化**时提交（每帧 setState 会让整棵导航树重渲染） */
+      if (st.level !== levelRef.current) {
+        levelRef.current = st.level;
+        setDisturbance(st.level);
       }
 
-      commit(smootherRef.current.push(raw, ts));
+      commit(sm);
     };
 
     /** 屏幕旋转变化 ⇒ 更新缓存角度并清平滑（避免横竖屏切换时箭头先偏一下再回来） */
@@ -326,8 +363,10 @@ export function useCompassHeading(opts: { enabled: boolean }): UseCompassHeading
     setArmed(false);
     setHeading(null);
     setQuality("invalid");
+    setDisturbance("none");
     smootherRef.current.reset();
-    samplesRef.current = [];
+    detectorRef.current.reset();
+    levelRef.current = "none";
     lastCommitRef.current = null;
     frameSeenRef.current = false;
   }, [enabled]);
@@ -348,5 +387,5 @@ export function useCompassHeading(opts: { enabled: boolean }): UseCompassHeading
     [],
   );
 
-  return { heading, quality, status, requestAccess, stop };
+  return { heading, quality, status, disturbance, requestAccess, stop };
 }

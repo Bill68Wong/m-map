@@ -782,12 +782,14 @@ export default function NavShell({
    *      （而 `headingR` 每帧都是新对象）⇒ 两个回调每帧重建 ⇒ 下游 effect 全重跑。
    */
   const requestHeadingAccess = headingR.requestAccess;
-  /** ★ F3：步行面板那一行小字（罗盘正常时为 `null`，不加噪音） */
+  /** ★ F3/F4：步行面板那一行小字（罗盘正常时为 `null`，不加噪音） */
   const headingNote = noteOfHeading({
     enabled: headingOn,
     mode: headingR.mode,
     status: headingR.status,
     needsGesture: headingR.needsGesture,
+    /* ★ F4：磁扰确认时改说「画 8 字校准」（每会话只出一次，票据在 useUserHeading 里领） */
+    calibrate: headingR.calibrateHint,
   });
   /**
    * ★ 步行重算的观测标记（`auto|manual` + 序号）。
