@@ -41,7 +41,7 @@ export default function XborderCard({ ids, onClose, navActive = false, onSetFrom
   if (!pins.length) return null;
 
   const isCluster = pins.length > 1;
-  const title = isCluster ? pins.map((p) => p.name).join(" · ") : pins[0].name;
+  const title = isCluster ? pins.map((p) => p.name).join(" - ") : pins[0].name;
   const sub = isCluster ? "两个地点相邻，分别查看班次" : pins[0].sub;
 
   return (

@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 42" width="32" height="42" role="img" aria-label="终点地图钉（单色）">
-  <title>M Map · 终点地图钉（单色版）</title>
+  <title>M Map - 终点地图钉（单色版）</title>
   <!-- 单色版：跟随 currentColor（灰色态 / 印刷 / 主题切换）。
        白点用 evenodd 真镂空（而非叠一个白圆）⇒ 放在任何底色上都成立。 -->
   <path fill="currentColor" fill-rule="evenodd"

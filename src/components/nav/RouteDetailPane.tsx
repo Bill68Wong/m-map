@@ -20,7 +20,7 @@ import { snapshotOfCard, routeSegsOfCard } from "@/lib/favorites/snapshot";
 import type { FavoriteEndpoint } from "@/lib/favorites/types";
 import type { RecommendCard } from "@/lib/recommend/types";
 import type { DetailBody, FoldState } from "./useDetailBody";
-import type { RideTrackView } from "./useRideTracking";
+import type { RidePhase, RideTrackView } from "./useRideTracking";
 
 export interface RouteDetailPaneProps {
   card: RecommendCard;
@@ -75,6 +75,18 @@ export interface RouteDetailPaneProps {
   liveStrips?: import("@/lib/recommend/types").SegmentStrip[] | null;
   /** ★ 2026-11-03（批 1）：最近一次重算失败形态（`"403:forbidden"` 等）；`null` = 无失败 */
   liveRemainFail?: string | null;
+  /**
+   * ★ R1 阶段1（2026-11-13）：**导航内唯一时钟**（由宿主 `RouteSheet` 的单个 tick 提供）。
+   *   传了它 ⇒ `NavDetailBody` **不再自走 15s 定时器**，两个渲染位（详情头 / peek 摘要）
+   *   因此读同一个「现在」。缺省 `null` ⇒ 保持旧行为（自走 15s，供收藏页薄壳用）。
+   */
+  nowMs?: number | null;
+  /** ★ R1 阶段1：乘车相位（独立于 `track` —— 步行段 `track` 为 `null`） */
+  ridePhase?: RidePhase | null;
+  /** ★ R1 阶段1：末段步行实时剩余分钟；`null` = 无几何 ⇒ 不覆盖显示 */
+  walkInLiveMin?: number | null;
+  /** ★ R1 阶段2：`off` / `boarding` 的实时总剩余分钟；`null` = 不可用 ⇒ 不覆盖显示 */
+  preRideLiveMin?: number | null;
 }
 
 export default function RouteDetailPane({
@@ -99,6 +111,11 @@ export default function RouteDetailPane({
   liveRemain = null,
   liveStrips = null,
   liveRemainFail = null,
+  /* ★ R1 阶段1（2026-11-13）：唯一时钟 + 末段步行实时值（原样透传给 NavDetailBody） */
+  nowMs = null,
+  ridePhase = null,
+  walkInLiveMin = null,
+  preRideLiveMin = null,
 }: RouteDetailPaneProps) {
   /** 收藏数据（纯函数在客户端现算：指纹 / 快照 / 流程图结构） */
   const favData = useMemo(() => {
@@ -156,6 +173,11 @@ export default function RouteDetailPane({
           liveRemain={liveRemain}
           liveStrips={liveStrips}
           liveRemainFail={liveRemainFail}
+          /* ★ R1 阶段1：唯一时钟 + 末段步行实时值（三处消费，同源） */
+          nowMs={nowMs}
+          ridePhase={ridePhase}
+          walkInLiveMin={walkInLiveMin}
+          preRideLiveMin={preRideLiveMin}
         />
       )}
     </div>

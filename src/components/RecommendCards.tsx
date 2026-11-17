@@ -69,7 +69,7 @@ export default function RecommendCards({
         <p className="h-title">暂时没有可用的班次</p>
         <p className="t-body t-muted" style={{ marginTop: 6, lineHeight: 1.7 }}>
           现在这个时段，能到这个方向的线路大多已收班，或暂时查不到车。
-          {reasons.length > 0 && <>（{reasons.join("・")}）</>}
+          {reasons.length > 0 && <>（{reasons.join(" - ")}）</>}
         </p>
         <p className="t-label t-muted" style={{ marginTop: 8, lineHeight: 1.6 }}>
           建议：稍后再试，或改用其他交通方式。轻轨服务时间约 06:30–23:30。

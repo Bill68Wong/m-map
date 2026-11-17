@@ -29,7 +29,7 @@ export function XbSource({ attribution }: { attribution: XbAttribution }) {
       <div>
         <span>
           {attribution.text}
-          {" · "}
+          {" - "}
           <span className="nw">{`取得日期 ${attribution.acquiredOn}`}</span>
         </span>
       </div>

@@ -191,7 +191,7 @@ export default function LineClient({ initial }: LineClientProps) {
             {chipLabelOf(code, kind)}
           </span>
           <span className="lp-head__sub">
-            {dirText} · 共 {stops.length} 站
+            {dirText} - 共 {stops.length} 站
           </span>
         </div>
         {canRev && (

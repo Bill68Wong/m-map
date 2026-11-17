@@ -125,7 +125,7 @@ export function clockTextOf(first: string | null, last: string | null): string |
   const parts: string[] = [];
   if (first) parts.push(`首班 ${first}`);
   if (last) parts.push(`末班 ${last}`);
-  return parts.length ? parts.join(" · ") : null;
+  return parts.length ? parts.join(" - ") : null;
 }
 
 /** 时刻行：无车文案的**下一行**，中性 muted 小字（复用既有 `t-label t-muted`，不新造样式） */
@@ -349,7 +349,9 @@ export default function LrtEta({
         <p className="t-body t-muted">获取中…</p>
       ) : !data.ok ? (
         <p className="t-body t-muted" style={{ lineHeight: 1.7 }}>
-          轻轨时刻暂不可用 · {data.error}
+          轻轨时刻暂不可用
+          <br />
+          {data.error}
         </p>
       ) : data.state !== "running" ? (
         <>
@@ -383,9 +385,10 @@ export default function LrtEta({
               precise ? (
                 <>
                   <span className="eta-big__lead">现正到达</span>
-                  <span className="eta-big__sep" style={held ? { visibility: "hidden" } : undefined}>
-                    ·
-                  </span>
+                  {/* R6：原来「现正到达」与数字之间的中点已删；间隔由 `.eta-big__sep` 的
+                      `margin: 0 var(--space-1)`（globals.css:1291）承担。
+                      元素本身必须保留 —— `held` 时靠 `visibility:hidden` 占位，删掉会跳宽。 */}
+                  <span className="eta-big__sep" style={held ? { visibility: "hidden" } : undefined} />
                   <span
                     className="eta-big__num"
                     style={held ? { visibility: "hidden" } : undefined}
@@ -408,7 +411,7 @@ export default function LrtEta({
             style={{ textAlign: "center", lineHeight: 1.5, marginTop: 2 }}
           >
             {/* ★ v3.3.0（AC-103）：方向文案统一为「{終點}方向」（改前为「往{終點}」） */}
-            {data.directionName ? `${data.directionName}方向 · ` : ""}
+            {data.directionName ? `${data.directionName}方向 - ` : ""}
             {nxtDep.clock} 开出
           </p>
           {/* 再下一班 */}
@@ -418,7 +421,7 @@ export default function LrtEta({
               style={{ textAlign: "center", lineHeight: 1.5, marginTop: 4 }}
             >
               再下一班{" "}
-              {Math.max(0, Math.floor((sndDep.depMs - nowMs) / 60_000))} 分钟 · {sndDep.clock}
+              {Math.max(0, Math.floor((sndDep.depMs - nowMs) / 60_000))} 分钟 - {sndDep.clock}
             </p>
           )}
         </div>
@@ -426,7 +429,7 @@ export default function LrtEta({
 
       {data?.ok && data.serverNow && (
         <p className="t-label t-muted" style={{ marginTop: 8 }}>
-          更新于 {fmtTime(data.serverNow)} · 时刻表来源 澳門輕軌
+          更新于 {fmtTime(data.serverNow)} - 时刻表来源 澳門輕軌
         </p>
       )}
       {/* ★ v3.2.0（AC-66 · 合规备注）：完整句 · 小字 · 不换行（站台卡；紧凑处见 `LrtEtaInline` 的「推算」角标） */}
@@ -553,7 +556,7 @@ export function LrtEtaInline({
     return (
       <span className="rc-neighbor" key={d.depMs}>
         <span className="rc-neighbor__when">
-          {label} ·{" "}
+          {label} -{" "}
           {gone ? (
             "已发车"
           ) : d.secPrecise ? (
@@ -589,7 +592,7 @@ export function LrtEtaInline({
           precise0 ? (
             <>
               <span className="rc-live__lead">现正到达</span>
-              {" · "}
+              {" - "}
               <span
                 className="rc-live__time"
                 style={held ? { visibility: "hidden" } : undefined}
@@ -612,7 +615,7 @@ export function LrtEtaInline({
       </span>
       <span className="rc-live__sub">
         {/* ★ v3.3.0（AC-103）：方向文案统一为「{終點}方向」；空值整段省略（不留 `·`） */}
-        {directionName ? `${directionName.endsWith("方向") ? directionName : `${directionName}方向`} · ` : ""}
+        {directionName ? `${directionName.endsWith("方向") ? directionName : `${directionName}方向`} - ` : ""}
         {nxt.clock} 开出
       </span>
       {/* ★ 2026-09-27（用户需求 2/4）：邻班区 —— 推荐卡=展开；导航=默认折叠、点击展开 */}

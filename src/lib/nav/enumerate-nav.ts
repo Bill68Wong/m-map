@@ -83,13 +83,43 @@ const MAX_VARIANTS_PER_SEG = 4;
 /** 整链方案上限 */
 const MAX_CHAIN_COMBOS = 12;
 
-/** 该 `board→alight` 上所有能顺向解出站序的线路 */
-function routesServing(routeIdx: RouteIndex, board: string, alight: string): string[] {
+/**
+ * 该 `board→alight` 上所有能**顺向**解出站序的线路（本库线码，顺序 = 索引遍历顺序）。
+ *
+ * ★ R2（2026-11-17）：从本文件的私有函数改为**导出**（供 `nav/map-stations` 的反查补漏用）。
+ *   ⛔ **不要再写第二份**：这个谓词的语义（同方向 + `from` 在 `to` 之前 + 逐跳可解）只允许
+ *   存在一处，复制出去必然漂移。
+ *
+ * ── 两个可选参数（都可缺省，缺省时行为与本函数原先逐字相同）────────────────
+ * @param memo    **请求内**记忆（`board|alight → 结果`）。同一次导航里多个方案常共用同一段
+ *                （实测 `M172→T403` 的 5 个方案里 4 个同段）⇒ 命中即零成本。
+ *                值是「索引的纯函数」，所以缓存它不引入任何随请求变化的状态。
+ * @param（无）   倒排来自 `routeIdx.stopOwners`（见下）
+ *
+ * ── 两个索引的问题（性能，不影响结果）──────────────────────────────────
+ *   · 有 `stopOwners`（`buildRouteIndexFromRows` 现在都会建）⇒ 只扫「经过上车站的线」，
+ *     实测 42~96 µs/次（每站线路数均值 5.82 / 中位 5 / max 39）；
+ *   · 无（手工夹具索引）或该站查不到 ⇒ **回落全库扫描**，372~446 µs/次。
+ *     ⚠️ 两条路径**结果逐字一致**，`scripts/test-parallel-pick.ts` 有常驻等价断言
+ *        （不靠一次性探针）。**不许**把「查不到」当空集合 —— 那会让反查静默返回 0 条。
+ */
+export function routesServing(
+  routeIdx: RouteIndex,
+  board: string,
+  alight: string,
+  memo?: Map<string, string[]>,
+): string[] {
+  const key = `${board}|${alight}`;
+  const hit = memo?.get(key);
+  if (hit) return hit;
+  const owners = routeIdx.stopOwners?.get(mainCodeOf(board));
+  const pool: Iterable<string> = owners ?? routeIdx.dirsOf.keys();
   const out: string[] = [];
-  for (const route of routeIdx.dirsOf.keys()) {
+  for (const route of pool) {
     const seg = segmentsOf(routeIdx, route, board, alight);
     if (seg && seg.segs.length) out.push(route);
   }
+  memo?.set(key, out);
   return out;
 }
 

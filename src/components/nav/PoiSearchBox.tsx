@@ -182,7 +182,7 @@ export default function PoiSearchBox({
       pick(top);
       return;
     }
-    setErr("这条地点暂时确认不到坐标 · 换个说法试试");
+    setErr("这条地点暂时确认不到坐标 - 换个说法试试");
   }
 
   const results = resp?.results ?? [];
@@ -273,7 +273,7 @@ export default function PoiSearchBox({
             </button>
           ))}
           {!loading && !results.length && !pending.length && (
-            <p className="nav-sbox__hint t-muted">{hint ?? (err || "找不到这个地点 · 试试换个说法")}</p>
+            <p className="nav-sbox__hint t-muted">{hint ?? (err || "找不到这个地点 - 试试换个说法")}</p>
           )}
           {!!results.length && hint && <p className="nav-sbox__hint t-muted">{hint}</p>}
         </div>

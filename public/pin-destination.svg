@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 42" width="32" height="42" role="img" aria-label="终点地图钉">
-  <title>M Map · 终点地图钉（重做版）</title>
+  <title>M Map - 终点地图钉（重做版）</title>
   <!-- ============================================================
        终点地图钉 · 重做（替换 `.nav-map__destpin` 的「歪扭」CSS 水滴）
        为什么旧版歪：

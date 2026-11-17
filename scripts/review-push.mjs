@@ -105,12 +105,37 @@ const HARD_DENY = [
   { re: /\.tsbuildinfo$/i, why: "TypeScript 增量缓存" },
   { re: /\.(pem|key|crt|p12|pfx)$/i, why: "密钥/证书" },
   { re: /^data\/tracking\/(?!README\.md$)/i, why: "采集原始帧（体量大，只留本地）" },
-  { re: /\.(jpg|jpeg|png|webp|gif|svg|pdf|zip|gz)$/i, allow: /^docs\/brand-export\//i, why: "二进制资产（非品牌导出目录不入库）" },
+  {
+    re: /\.(jpg|jpeg|png|webp|gif|svg|pdf|zip|gz)$/i,
+    allow: /^docs\/brand-export\//i,
+    // ★ 2026-11-17 修假阳性。本条的意图是「**不要新增**二进制大件」，
+    //   不是「不许改已经上线的资产」。原实现按扩展名一刀切，把 `public/` 下 9 个
+    //   早已被 `origin/main` 跟踪、Next.js 运行时正在用的 SVG 判成「禁止入库」，
+    //   逼得 R6「中点清零」那 1 行改动连续多个周期卡在工作区提交不进去。
+    //   ⇒ 改为只对**本次新增**（status=A）生效。
+    //
+    //   为什么判 `status === "M"` 而不是 `status !== "A"`：删除（D）必须继续命中本条。
+    //   下面的 isDelete 分支依赖「catBefore === 禁止入库」才能给出
+    //   「删除：清理本不该入库的文件（正向）」且 level=ok；
+    //   若把 D 一并豁免，删掉垃圾文件会从 ok 退化成 confirm —— 那是反向收紧，
+    //   等于用一个假阳性换来另一个卡点。
+    modifyExempt: true,
+    why: "新增二进制资产（既有文件的修改不受限）",
+  },
 ];
 
-/** 分类 + 必要性说明；返回 { cat, necessity, level } */
-function classify(file) {
-  const deny = HARD_DENY.find((r) => r.re.test(file) && !(r.allow && r.allow.test(file)));
+/**
+ * 分类 + 必要性说明；返回 { cat, necessity, level }
+ *
+ * @param file   仓库相对路径
+ * @param status git name-status 的状态码（A=新增 M=修改 D=删除）
+ *   少数判据需要区分状态：带 `modifyExempt` 的条目（如二进制资产）**只对新增生效** ——
+ *   已存在于基线的同类文件被改动时不再按「禁止入库」处理。理由见 HARD_DENY 内该条注释。
+ */
+function classify(file, status) {
+  const deny = HARD_DENY.find(
+    (r) => r.re.test(file) && !(r.allow && r.allow.test(file)) && !(r.modifyExempt && status === "M"),
+  );
   if (deny) return { cat: "禁止入库", necessity: deny.why, level: "block" };
 
   const ext = BLOCK_EXT_ALLOW.has(file) ? null : BLOCK_EXT.find((e) => file.toLowerCase().endsWith(e));
@@ -188,7 +213,7 @@ const sensitiveHits = [];
 const table = [];
 
 for (const row of rows) {
-  const c = classify(row.path);
+  const c = classify(row.path, row.status);
   const isDelete = row.status === "D";
   let level = c.level;
   let necessity = c.necessity;

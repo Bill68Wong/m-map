@@ -78,12 +78,31 @@ export function buildRouteIndexFromRows(
   stopsRows: RouteStopRow[],
   stationRows: StationRow[],
   routeRows?: RouteRow[],
+  /**
+   * ★ R2（2026-11-17）：`route|mainFrom|mainTo → 沿线里程（米）`。
+   *
+   * **可选**，缺失时 `RouteIndex.hopMeters` 保持空 Map ⇒ `nav/parallel-pick` 的
+   * 并行线补漏整体降级（一条都不新增），**不会**退化成用别的口径硬算。
+   * 生产由 `recommend/query.ts` 传入**同一份** `rows.hopDist`（与 `SegmentIndex.hopMeters` 同源，
+   * 不另查库、不产生第二份真相）。
+   */
+  hopMeters?: ReadonlyMap<string, number>,
 ): RouteIndex {
   const dirStops = new Map<string, string[]>();
   const seqIdx = new Map<string, Map<string, number[]>>();
   const dirsOf = new Map<string, string[]>();
   const nameOf = new Map<string, string>();
   const adjOwners = new Map<string, Set<string>>();
+  /**
+   * ★ R2：站主码 → 经过该站的线路集合（反查用倒排）。
+   *
+   * 与 `adjOwners` 的区别（**别互相替代**）：
+   *   · `adjOwners` 的键是「**相邻**两站」`main→main`，只能查「谁跑这一跳」；
+   *   · `stopOwners` 的键是「**单站**」，用于在反查 `board→alight` 前把 99 条线收窄到
+   *     「经过上车站的那几条」——因为 board→alight 常常隔多跳，`adjOwners` 的键对不上。
+   * 实测：站数 472，每站线路数均值 5.82 / 中位 5 / max 39。
+   */
+  const stopOwners = new Map<string, Set<string>>();
 
   for (const r of stopsRows) {
     const key = `${r.route}|${r.dsat_dir}`;
@@ -108,6 +127,17 @@ export function buildRouteIndexFromRows(
       const adj = `${mainCodeOf(stops[i - 1])}→${mainCodeOf(stops[i])}`;
       if (!adjOwners.has(adj)) adjOwners.set(adj, new Set());
       adjOwners.get(adj)!.add(r.route);
+    }
+
+    // ★ R2：站 → 线路倒排（与上面同一次遍历，不额外读库）
+    for (const s of stops) {
+      const main = mainCodeOf(s);
+      let set = stopOwners.get(main);
+      if (!set) {
+        set = new Set();
+        stopOwners.set(main, set);
+      }
+      set.add(r.route);
     }
   }
 
@@ -162,7 +192,7 @@ export function buildRouteIndexFromRows(
     }
   }
 
-  return { dirStops, seqIdx, dirsOf, nameOf, adjOwners, loopOf };
+  return { dirStops, seqIdx, dirsOf, nameOf, adjOwners, loopOf, stopOwners, hopMeters: new Map(hopMeters ?? []) };
 }
 
 /** 站序索引的原始行查询（**服务端聚合 + 站名单独取**，见下）+ 构建 */

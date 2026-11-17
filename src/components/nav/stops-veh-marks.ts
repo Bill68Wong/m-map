@@ -183,7 +183,7 @@ function coreOf(v: VehicleLite, stopMains: string[], lastIdx: number): MarkCore 
 function labelOf(v: VehicleLite, toEndStops: number): string {
   const company = v.company ? companyLabel(normalizeCompany(v.company)) : "";
   const tail = toEndStops <= 0 ? "已到终点" : `还有 ${toEndStops} 站`;
-  return [v.plate, company, tail].filter(Boolean).join(" · ");
+  return [v.plate, company, tail].filter(Boolean).join(" - ");
 }
 
 /** `a` 是否应该顶掉 `b`（见文件头「多车策略」） */

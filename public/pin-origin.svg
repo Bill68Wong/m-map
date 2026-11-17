@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 42" width="32" height="42" role="img" aria-label="起点地图钉">
-  <title>M Map · 起点地图钉</title>
+  <title>M Map - 起点地图钉</title>
   <!-- ============================================================
        起点地图钉（★ v3.1.1 真机反馈 #4 新增）
        背景：此前「起点」是 18px 绿圆点（.nav-map__originpin），而「终点」是地图钉且被误用砖红

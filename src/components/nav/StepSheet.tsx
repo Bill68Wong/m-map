@@ -206,7 +206,7 @@ export default function StepSheet({
   return (
     <section
       className="step-sheet"
-      aria-label={`规划路线 · ${STEP_LABEL[step]}`}
+      aria-label={`规划路线 - ${STEP_LABEL[step]}`}
       data-snap={snapState}
       data-dragging={dragging ? "on" : undefined}
       style={

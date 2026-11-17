@@ -33,10 +33,14 @@ import { macauClock } from "@/components/RoutePieces";
 import {
   ARRIVE_OVERDUE_TEXT,
   REMAIN_ARRIVED_TEXT,
+  remainLiveOf,
   remainOf,
   remainServedOf,
   remainTotalMinOf,
+  remainWalkOnlyOf,
 } from "@/lib/nav/remaining-view";
+/** ★ R1 阶段2（2026-11-13）：时钟判据的唯一实现（纯函数，可测） */
+import { tickPlanOf } from "@/lib/nav/remain-tick";
 import BottomSheet from "./BottomSheet";
 import NavAlarmOverlay from "./NavAlarmOverlay";
 import NavTrackBar from "./NavTrackBar";
@@ -47,7 +51,7 @@ import { useRecommend, type PrefMode } from "./useRecommend";
 import { COOLDOWN_RECOMMEND_SEC, useCooldown } from "./useCooldown";
 import { useSnapSheet } from "./useSnapSheet";
 import type { DetailBody, FoldState } from "./useDetailBody";
-import type { RideTrackView } from "./useRideTracking";
+import type { RidePhase, RideTrackView } from "./useRideTracking";
 import { DETENTS, detentIndex, type Detent } from "./sheet-detents";
 import { lineNameOf } from "@/lib/route-label";
 import type { FavoriteEndpoint } from "@/lib/favorites/types";
@@ -58,6 +62,27 @@ export interface RouteSheetDetail {
   degraded: boolean;
   destLabel: string;
   phase: "idle" | "loading" | "ready" | "failed";
+  /**
+   * ★ R1 阶段1（2026-11-13）：**乘车相位**（`off` / `boarding` / `riding` / `done`）。
+   *   为什么不用 `track.phase`：宿主在步行段把 `track` 置 `null`
+   *   （`NavShell` 的 `track: walkActive ? null : trackView`），而「末段步行」只在
+   *   步行段活跃时出现 ⇒ 从 `track` 取相位恰好取不到。
+   */
+  ridePhase?: RidePhase | null;
+  /**
+   * ★ R1 阶段1：**末段步行实时剩余分钟**（`walkRemainMinOf` 产物）。
+   *   `null` = 无末段几何 / 判不出来 ⇒ **不覆盖**显示（回落原口径）。
+   *   ⚠️ 消费方有两处且必须同源：本文件的 `peekRemain` 与 `NavDetailBody` 的 `remain`。
+   */
+  walkInLiveMin?: number | null;
+  /**
+   * ★ R1 阶段2（2026-11-13）：**`off` / `boarding` 的实时总剩余分钟**
+   *   （`NavShell` 用 `remain-parts.ts` 那份清单算出来的）。
+   *   `null` = 不可用 ⇒ **不覆盖**显示（回落 `card.arriveAt` 递减）。
+   *   ⚠️ 与 `walkInLiveMin` 一样，消费方两处必须同源：本文件的 `peekRemain` 与
+   *   `NavDetailBody` 的 `remain`。
+   */
+  preRideLiveMin?: number | null;
   body: DetailBody | null;
   /** 该详情当前在途车辆数（观测钩子 `data-live` 用） */
   vehicles: number;
@@ -205,6 +230,17 @@ export default function RouteSheet({
 
   /* ── ★ 本批：详情吸底操作条（`.nav-actions` 移出滚动容器 → 挂面板根）所需派生值 ── */
   const dTrack = detail?.track ?? null;
+  /**
+   * ★ R1 阶段1（2026-11-13）：末段步行两项**先取成原始值**。
+   *   为什么要先取：时钟 effect 若直接读 `detail?.xxx`，lint 要求把整个 `detail`
+   *   放进依赖 —— 而 `detail` 是宿主每次渲染新建的对象字面量，进依赖会让 effect
+   *   **每渲染都重启定时器**（`nowMs` 永远等不到第二拍）。取原始值才能按值稳定。
+   */
+  const dRidePhase = detail?.ridePhase ?? null;
+  const dWalkInLiveMin = detail?.walkInLiveMin ?? null;
+  const dPreRideLiveMin = detail?.preRideLiveMin ?? null;
+  /** 详情对象是否存在（取成布尔，供时钟 effect 使用 —— 理由同上） */
+  const hasDetail = !!detail;
   const dStrips = detail?.body?.strips ?? null;
   const dLegIdx = dTrack?.legIndex ?? 0;
   const dLegRide = detail?.card.rides[dLegIdx] ?? null;
@@ -294,9 +330,41 @@ export default function RouteSheet({
      * ⚠️ 与拖动的关系：`detent` 是**落定档位**，拖动过程中不变 ⇒ 本 effect 不会因拖动重启。
      *   拖动期是否 tick 沿用上述条件，与改动前**完全一致**（改动前 `riding` 也照 tick）——
      *   即本收窄对拖动**零增量**。
+     *
+     * ══════════════════════════════════════════════════════════════════════
+     * ★ R1 阶段1（2026-11-13，team-lead 裁决）：**本组件成为导航内唯一时钟**
+     * ──────────────────────────────────────────────────────────────────────
+     *   病根：改前 `NavDetailBody` 自己跑一个 **15s** 定时器（`etaTick`），本组件另跑
+     *   **1s**（且 `done` 非 peek 档不跑）。两个渲染位读同一个 `card.arriveAt` 却各自
+     *   取「现在」⇒ 详情头每 15s 跳一格、peek 冻住 —— 「详情头实时、peek 冻住」。
+     *   ⇒ 现在 `nowMs` 由**本组件唯一提供**并下传（`NavDetailBody` 收到后不再自走定时器）。
+     *
+     *   周期按「谁真的需要多快」分两档，**不是一律 1s**（一律 1s 会让 boarding 期
+     *   1 秒重渲染一遍未 memo 的整棵子树，这是原先收窄门控要避免的浪费）：
+     *     · **1s**：`riding`（新鲜度秒数）/ `peek`（摘要可见）/ **`done` 且末段步行还剩 ≥1 分**
+     *       （负责人要的「下车后也实时」）；
+     *     · **15s**：`off` / `boarding` 且详情可见 —— 与改前 `NavDetailBody` 的心跳同频，
+     *       覆盖「阶段2 之前这些相位仍是 `arriveAt` 递减」的现状，**不引入新行为**。
+     *
+     *   `done` 且末段步行**已走完**（< `ARRIVED_BELOW_MIN`，取整即 0 分）⇒ **完全停 tick**：
+     *   此时屏上只剩「即将到达」，继续每秒重算纯属耗电。
      */
-    const needTick = dTrack?.phase === "riding" || detent === "peek";
-    if (!needTick) return;
+    /**
+     * ★ R1 阶段2（2026-11-13）：判据**搬到纯函数** `tickPlanOf`（`src/lib/nav/remain-tick.ts`）。
+     *   为什么必须搬：这段逻辑同时决定「详情头与 peek 的『现在』是否更新 / 多久更新 /
+     *   已到站还浪不浪费电」，散在 effect 里**只能真机盯屏**才验得了；
+     *   抽出去之后「走完 ⇒ 停」「又走动 ⇒ 恢复」「阈值抖动」三态都能进脚本。
+     *   ⚠️ 这里**不再自己算周期**，也不许再内联第二份判据。
+     */
+    const plan = tickPlanOf({
+      detailVisible: pane === "detail" && hasDetail,
+      peek: detent === "peek",
+      ridePhase: dRidePhase ?? dTrack?.phase ?? null,
+      walkInLiveMin: dWalkInLiveMin,
+      preRideLiveMin: dPreRideLiveMin,
+    });
+    if (!plan.tick) return;
+    const periodMs = plan.periodMs;
     /**
      * ★ 进入 tick 条件时**立即校准一次**（不能等 1s 后的首拍）。
      *
@@ -305,11 +373,12 @@ export default function RouteSheet({
      * **过时的、偏大**的剩余（例如实际剩 3 分却显示 12 分），1 秒后才跳回正确值。
      * 这种「先显示错值再跳」比晚 1 秒更新更糟 —— 正是「用户不信这个数字」的来源。
      * 同理：进入 `riding` 的瞬间校准，`freshSec` 才不会先闪一个陈旧岁数。
+     * （`done` 停 tick 之后再恢复同理 —— 恢复时也走这一行。）
      */
     setNowMs(Date.now());
-    const t = window.setInterval(() => setNowMs(Date.now()), 1000);
+    const t = window.setInterval(() => setNowMs(Date.now()), periodMs);
     return () => window.clearInterval(t);
-  }, [dTrack?.phase, detent]);
+  }, [dTrack?.phase, detent, pane, hasDetail, dRidePhase, dWalkInLiveMin, dPreRideLiveMin]);
   const dFreshSec =
     dTrack && dTrack.lastVehicleTs > 0
       ? Math.max(0, Math.floor((nowMs - dTrack.lastVehicleTs) / 1000))
@@ -322,9 +391,30 @@ export default function RouteSheet({
    *   两个渲染位**。只改一处会立刻出现「面板收起到 peek 后，数字又变回规划时的静态值」——
    *   本项目已踩过这种「两个真相」缺陷（`RefreshButton` / `useCooldown` 头注都在讲同一件事）。
    *   ⇒ 同一个派生函数、同一 `nowMs`、同一数据来源（服务端 → 回落 `card.arriveAt`）。
+   *
+   * ── ★ R1 阶段1（2026-11-13）新增第一档：`done` ⇒ 末段步行实时剩余 ──────────
+   *   分支顺序**有意如此**（最先判 `done`）：`done` 时 `liveRemain` 必为 `null`
+   *   ——`useNavRemaining` 的 `enabled = phase === "riding"`（`:172`），离开 riding 即清空
+   *   （`:283-296`）。若不先判 `done`，就会落到 `remainOf(card.arriveAt)` 这条**规划快照**
+   *   兜底上，正是负责人报的「下车瞬间剩余时间突变」。
+   *   两处（本函数 / `NavDetailBody` 的 `remain`）**必须调同一个 `remainWalkOnlyOf`**，
+   *   否则详情头与 peek 会各说一个数。
    */
   const peekRemain = useMemo(() => {
     if (!detail) return null;
+    if (dRidePhase === "done" && dWalkInLiveMin !== null) {
+      return remainWalkOnlyOf({ walkRemainMin: dWalkInLiveMin, arriveAtMs: detail.card.arriveAt });
+    }
+    /**
+     * ★ R1 阶段2（2026-11-13）：`off` / `boarding` ⇒ **实时总剩余**（`remain-parts.ts` 清单算出的值）。
+     *   必须排在 `liveRemain` 之前：这两个相位 `liveRemain` 必为 `null`
+     *   （`useNavRemaining.ts:172` 的 `enabled = phase === "riding"`），
+     *   若先判 `lr` 就会落到 `remainOf(card.arriveAt)` 的**规划快照按时间递减**上——
+     *   那正是「走了 10 分钟数字不减、到 0 时人还在路上」的老问题。
+     */
+    if ((dRidePhase === "off" || dRidePhase === "boarding") && dPreRideLiveMin !== null) {
+      return remainLiveOf({ remainMin: dPreRideLiveMin, arriveAtMs: detail.card.arriveAt });
+    }
     const lr = detail.liveRemain;
     if (!lr) return remainOf(detail.card.arriveAt, nowMs);
     return remainServedOf({
@@ -335,7 +425,7 @@ export default function RouteSheet({
       nowMs: nowMs + lr.clockOffsetMs,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [detail?.card.arriveAt, detail?.liveRemain, nowMs]);
+  }, [detail?.card.arriveAt, detail?.liveRemain, dRidePhase, dWalkInLiveMin, dPreRideLiveMin, nowMs]);
 
   /** 详情吸底操作条（挂面板根 `.route-sheet__actions-slot`） */
   const detailActions: ReactNode =
@@ -343,6 +433,10 @@ export default function RouteSheet({
       <NavTrackBar
         phase={dTrack.phase}
         routeLabel={dRouteLabel}
+        /* ★ R4（2026-11-17）：轻轨态主题色标签需要**线路码原文**（`LRT-氹仔线`）与整张色表；
+           `dRouteLabel` 只是展示名（`氹仔線`），查不到色。两者职责不同，缺一不可。 */
+        routeCode={dLegRide?.route ?? null}
+        colors={colors}
         boardLabel={dLegRide?.boardLabel ?? dFirst?.boardLabel ?? ""}
         alightLabel={
           (dTrackStops.length ? dTrackStops[dTrackStops.length - 1].label : "") ||
@@ -663,7 +757,7 @@ export default function RouteSheet({
                   {walkOnly.phase === "failed"
                     ? "步行路线暂时取不到"
                     : walkOnly.phase === "ready"
-                      ? "距离很近 · 无需步行"
+                      ? "距离很近 - 无需步行"
                       : "正在获取步行路线…"}
                 </span>
               )}
@@ -757,6 +851,17 @@ export default function RouteSheet({
               liveRemain={detail.liveRemain ?? null}
               liveStrips={detail.liveStrips ?? null}
               liveRemainFail={detail.liveRemainFail ?? null}
+              /**
+               * ★ R1 阶段1（2026-11-13）：**时钟 + 末段步行实时值**。
+               *   `nowMs` 是**本组件那唯一一个 tick 的产物**，往下传给详情头 ——
+               *   详情头**不再自走 15s 定时器**（否则详情头与 peek 各有一个「现在」，
+               *   同一个 `card.arriveAt` 会算出两个数，正是「详情头实时、peek 冻住」的病根）。
+               *   `ridePhase` 独立于 `track`：`track` 在步行段被宿主置 `null`。
+               */
+              nowMs={nowMs}
+              ridePhase={detail.ridePhase ?? null}
+              walkInLiveMin={detail.walkInLiveMin ?? null}
+              preRideLiveMin={detail.preRideLiveMin ?? null}
             />
           )}
         </div>
@@ -832,7 +937,7 @@ const PREF_OPTS: { value: PrefMode; label: string; icon: ReactNode }[] = [
 const PREF_HINT: Record<PrefMode, ReactNode> = {
   balanced: (
     <>
-      排序依据：<b>用时</b> · 换乘 · 步行
+      排序依据：<b>用时</b> - 换乘 - 步行
     </>
   ),
   fewer_transfers: (

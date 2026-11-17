@@ -37,6 +37,7 @@ import {
   buildLrtLadder,
   LRT_ACC_MAX_M,
   LRT_H_MIN_M,
+  LRT_STOP_R_M,
   LRT_TOL_M,
   type LrtAdvanceInput,
   type LrtLadder,
@@ -135,7 +136,7 @@ const EXPECTED_CASE_COUNT = 12;
  *   任何 `if` 把某条断言静默跳过、或某组提前 return，都会让计数变少 ⇒ 红。
  *   ⚠️ 改断言时同步改这里（它就是这层网的触发点，不是装饰）。
  */
-const EXPECTED_CHECK_COUNT = 64;
+const EXPECTED_CHECK_COUNT = 87;
 
 const CASES: CaseDef[] = [
   /* ── G0 几何前置 ── */
@@ -405,6 +406,216 @@ ok(executed === CASES.length, "★ 44c-② 全部用例均被执行（无提前�
  * `EXPECTED_CHECK_COUNT` 是**总断言数（含本条自身）** ⇒ 比较时 `+1`
  * （`ok()` 是先判后自增，本条执行时它自己还没被计入）。
  */
+
+/* ══════════════════════════════════════════════════════════════════════════
+   ★ R5/R4（2026-11-17）：停靠态（`kind:"at"`）+ 停站半径 + 窗口计数 + 末站双条件
+   ──────────────────────────────────────────────────────────────────────────
+   背景（team-lead 逐行核过的根因）：
+     · `makeProgress` 恒返回 `atIdx:null` ⇒ `alight-detect` 的 `atIdx===lastIdx`、
+       `alarm` 的 `now` 分支、站条四态全部拿不到停靠态（=「轻轨没有到站判定」）；
+     · 旧的「已过站 = dNow > ladder[i] + H」在停站期间永不成立（`H ≥ 60`）
+       ⇒ 必须等出站再跑 60m，这就是「20 秒+」的机制性原因。
+   本节断言停站判定**在停站当下**成立，且两个方向都不许误报。
+
+   ⚠️ 用小间距几何（10m 顶点）才能构造「距站 10m / 25m / 40m」这类里程差：
+      旧 `PATH` 的顶点间距是 100m，`dNow` 只能取到 100 的整数倍。
+   ══════════════════════════════════════════════════════════════════════════ */
+console.log("\n[★ R5/R4 停靠态 · 停站半径 · 窗口计数 · 末站双条件]");
+{
+  /** 10m 一个顶点、全长 2400m 的直线（`dNow` 可精确到 10m） */
+  const FINE = straight(240, 10);
+  /** 站取顶点 0/20/40/60/80 ⇒ 里程 0/200/400/600/800，站距 200m ⇒ H=60、stopR=min(30,80)=30 */
+  const fineStops = [0, 20, 40, 60, 80].map((v) => ({ lng: FINE[v][0], lat: FINE[v][1] }));
+  const FINE_LADDER = buildLrtLadder(FINE, fineStops);
+  const at = (m: number): FixLite => {
+    const p = ll(0, m);
+    return { lng: p[0], lat: p[1], accuracy: 10, ts: 0 };
+  };
+  const base = (o: Partial<LrtAdvanceInput>): LrtAdvanceInput => ({
+    prevPassedIdx: 1,
+    prevComputed: 0,
+    prevDist: 400,
+    prevTs: 1_000,
+    badStreak: 0,
+    ladder: FINE_LADDER,
+    fix: null,
+    ...o,
+  });
+
+  /* ── R5-a 停站即刻可测：距 2 号站 10m ⇒ 第 1 帧就出 `kind:"at"` ── */
+  {
+    const f = at(410);
+    const r = advanceLrt(base({ fix: { ...f, ts: 2_500 } }));
+    ok(r.progress.kind === "at", "R5-a 停站即刻：距站 10m ⇒ 首帧即 kind=at（不等出站 60m）", `kind=${r.progress.kind}`);
+    ok(r.atIdx === 2 && r.progress.atIdx === 2, "R5-a 停靠站下标 = 2（`atIdx` 与 progress 同源）", `atIdx=${String(r.atIdx)}`);
+    ok(r.passedIdx === 1, "R5-a 停在 2 号站 ⇒ 只算「0..1 已驶过」，2 号站本身不算驶过", `passedIdx=${r.passedIdx}`);
+    ok(r.progress.nextIdx === 3, "R5-a 停靠态仍给 `nextIdx=3`（站条四态要同时拿到「在站」与「下一站」）", `nextIdx=${String(r.progress.nextIdx)}`);
+    /* 反例：同一帧不许既报停靠又报「已过本站」 */
+    ok(r.computed < 2, "R5-a 反例：`computed` 仍 <2（停靠不靠「越过 H」得出）", `computed=${r.computed}`);
+  }
+
+  /* ── R5-b 停站半径外不误报：距站 40m（> stopR=30）⇒ 不是停靠态 ── */
+  {
+    const f = at(440);
+    const r = advanceLrt(base({ fix: { ...f, ts: 2_500 } }));
+    ok(r.progress.kind !== "at", "R5-b 距站 40m（> `LRT_STOP_R_M`=30）⇒ 不得判停靠", `kind=${r.progress.kind}`);
+    ok(r.atIdx === null && r.progress.atIdx === null, "R5-b 反例：`atIdx` 必须为 null（半径外不误报）", `atIdx=${String(r.atIdx)}`);
+  }
+
+  /* ── R5-c 自适应半径：末两站间距 40m 时 stopR=min(30, 0.4×40=16) ⇒ 18m 处不判停靠 ── */
+  {
+    const SHORT = straight(24, 20); // 顶点间距 20m、全长 480m
+    /** 站取 0 / 10 / 12 号顶点 ⇒ 里程 0 / 200 / 240（末两站间距 40m） */
+    const st2 = [0, 10, 12].map((v) => ({ lng: SHORT[v][0], lat: SHORT[v][1] }));
+    const L2 = buildLrtLadder(SHORT, st2);
+    const p = ll(0, 218); // 距 1 号站 18m、距 2 号站 22m ⇒ 都 > 16
+    const r = advanceLrt({
+      prevPassedIdx: 0, prevComputed: 0, prevDist: 200, prevTs: 1_000, badStreak: 0,
+      ladder: L2, fix: { lng: p[0], lat: p[1], accuracy: 10, ts: 2_500 },
+    });
+    ok(
+      r.atIdx === null,
+      "R5-c 站距短（40m）⇒ stopR 压到 16m，距站 18m 不判停靠（不会把两站并成一站）",
+      `atIdx=${String(r.atIdx)} ladder=${JSON.stringify(L2.ladder)}`,
+    );
+    /** 反向：同一点在默认 30m 半径下会判停靠（证明拦住它的是自适应半径，不是点位太远）→ 用站距 200m 的 FINE_LADDER 复算 */
+    const p2 = ll(0, 218);
+    const rWide = advanceLrt({
+      prevPassedIdx: 0, prevComputed: 0, prevDist: 200, prevTs: 1_000, badStreak: 0,
+      ladder: FINE_LADDER, fix: { lng: p2[0], lat: p2[1], accuracy: 10, ts: 2_500 },
+    });
+    ok(rWide.atIdx === 1, "R5-c 反例：站距 200m（stopR=30）时同一点会判停靠 ⇒ 差异来自自适应半径", `atIdx=${String(rWide.atIdx)}`);
+  }
+
+  /* ── R5-d 窗口计数（`T,F,T` 交替也能 arm）+ 旧连续判据的反例 ── */
+  {
+    const f = at(270); // > ladder[1]+H = 260 ⇒ computed=1
+    const win = advanceLrt(base({ fix: { ...f, ts: 2_500 }, prevPassedIdx: 0, prevDist: 250, prevComputed: 0, recentComputed: [1, 0] }));
+    ok(win.passedIdx === 1, "R5-d 窗口 `[1,0]`+本帧 1 ⇒ 命中 2/3 即 arm（交替抖动也能推进）", `passedIdx=${win.passedIdx} computed=${win.computed}`);
+    const old = advanceLrt(base({ fix: { ...f, ts: 2_500 }, prevPassedIdx: 0, prevDist: 250, prevComputed: 0 }));
+    ok(old.passedIdx === 0, "R5-d 反例（= 旧连续判据）：`recentComputed` 缺省且 1≠prevComputed(0) ⇒ 不 arm", `passedIdx=${old.passedIdx}`);
+    ok(win.recentComputed.length === 3 && win.recentComputed[2] === win.computed, "R5-d 输出窗口截到最近 3 个且末位是本帧 computed", JSON.stringify(win.recentComputed));
+  }
+
+  /* ── R5-e 末站缺口不提前报（石排湾 dir=1 真值 149.2m）── */
+  {
+    const STOPS3 = [0, 12, 24].map((v) => ({ lng: PATH[v][0], lat: PATH[v][1] })); // 里程 0/1200/2400
+    const L3 = buildLrtLadder(PATH, STOPS3);
+    /** 站台在折线末顶点**东侧 149.2m**（模拟石排湾 dir=1 的实测缺口） */
+    const endFar: LL = [ll(0, 2400)[0] + 149.2 / M_PER_DEG_LNG, ll(0, 2400)[1]];
+    const L3far: LrtLadder = { ...L3, endStop: endFar };
+    const atEnd = ll(0, 2400);
+    const rFar = advanceLrt({
+      prevPassedIdx: 1, prevComputed: 1, prevDist: 2300, prevTs: 1_000, badStreak: 0,
+      ladder: L3far, fix: { lng: atEnd[0], lat: atEnd[1], accuracy: 10, ts: 13_000 },
+    });
+    ok(rFar.atIdx !== 2, "R5-e 折线到底但站台在 149.2m 外 ⇒ 不得报「已到末站」（石排湾真值）", `atIdx=${String(rFar.atIdx)}`);
+    ok(rFar.distNow >= 2400 - 1e-6, "R5-e 对照：本帧 `dNow` 确实已达折线末顶点（说明拦住它的是第二条件，不是没走到）", `dNow=${rFar.distNow.toFixed(1)}`);
+    const rNull = advanceLrt({
+      prevPassedIdx: 1, prevComputed: 1, prevDist: 2300, prevTs: 1_000, badStreak: 0,
+      ladder: { ...L3, endStop: null }, fix: { lng: atEnd[0], lat: atEnd[1], accuracy: 10, ts: 13_000 },
+    });
+    ok(rNull.atIdx === 2, "R5-e 反例：`endStop=null`（末站缺坐标）⇒ 退化为只判折线到底，仍报末站（不判死）", `atIdx=${String(rNull.atIdx)}`);
+  }
+
+  /* ── R5-f 不会永不 arm：从末顶点前 200m 匀速开到站台，贴 arm 帧号 ── */
+  {
+    const STOPS3 = [0, 12, 24].map((v) => ({ lng: PATH[v][0], lat: PATH[v][1] }));
+    const end100: LL = [ll(0, 2400)[0] + 100 / M_PER_DEG_LNG, ll(0, 2400)[1]];
+    const L = buildLrtLadder(PATH, STOPS3);
+    const ladder100: LrtLadder = { ...L, endStop: end100 };
+    /** 每帧 1.5s、每帧 50m（≈120km/h 太夸张，改 6s/帧 100m ⇒ 60km/h，仍不过 80 门）；末帧开到站台 */
+    const traj: { m: number; offM: number; ts: number }[] = [
+      { m: 2200, offM: 0, ts: 1_000 },
+      { m: 2300, offM: 0, ts: 7_000 },
+      { m: 2400, offM: 0, ts: 13_000 },
+      { m: 2400, offM: 100, ts: 19_000 },
+    ];
+    let st = { passedIdx: 1, computed: 1, dist: 2100, ts: 0, badStreak: 0, atIdx: null as number | null, recent: [] as number[] };
+    let armedAt = -1;
+    for (let k = 0; k < traj.length; k++) {
+      const f = traj[k];
+      const p = ll(f.offM, f.m);
+      const r = advanceLrt({
+        prevPassedIdx: st.passedIdx, prevComputed: st.computed, prevDist: st.dist, prevTs: st.ts,
+        badStreak: st.badStreak, prevAtIdx: st.atIdx, recentComputed: st.recent,
+        ladder: ladder100, fix: { lng: p[0], lat: p[1], accuracy: 10, ts: f.ts },
+      });
+      st = { passedIdx: r.passedIdx, computed: r.computed, dist: r.distNow, ts: r.ts, badStreak: r.badStreak, atIdx: r.atIdx, recent: r.recentComputed };
+      if (armedAt < 0 && r.atIdx === 2) armedAt = k;
+    }
+    ok(armedAt === 3, "R5-f 合成轨迹（2200→2300→2400→站台）第 4 帧（index 3）arm：末站双条件不会让它永不 arm", `armFrame=${armedAt} atIdx=${String(st.atIdx)}`);
+  }
+
+  /* ── R5-g 防跳站不变量：一帧从 1 跳到 4 号站 ⇒ 最多认到 2 ── */
+  {
+    const f = at(800); // 4 号站里程
+    const r = advanceLrt(base({ fix: { ...f, ts: 2_500 }, prevPassedIdx: 1, prevComputed: 1 }));
+    ok(r.atIdx === null, "R5-g 从 `prevPassedIdx=1` 一帧跳到 4 号站 ⇒ **不认停靠**（只允许 prev 或 prev+1）", `atIdx=${String(r.atIdx)}`);
+    ok(r.passedIdx <= 2, "R5-g 同时 `passedIdx` 也不得连跳（≤ prev+1 = 2）", `passedIdx=${r.passedIdx}`);
+  }
+
+
+  /* ── R5-i ★ 索引空间契约：`ladder` 的索引空间必须与传进来的站序**等长** ──
+   *
+   * 为什么必须显式断言（这是本轮最容易漏、且坏了以后**症状与修复前完全一样**的一条）：
+   *   `alarm === "now"` 需要 `prog.atIdx === alightIdx`，而
+   *   `alightIdx = stopMains.length - 1`（useRideTracking），`atIdx` 来自 ladder 索引空间。
+   *   ⇒ 整条链路依赖隐式等式「ladder 索引空间 == stopMains 索引空间」。
+   *   若哪天 `buildLrtLadder` 开始**删行**（而不是置 NaN + valid=false），索引就会整体前移，
+   *   `atIdx` 永远等不到 `alightIdx` —— **不报「已到站」，而既有断言一条都不会红**。
+   *   ⇒ 本节把「无效站只置 NaN、**不删行**」与「末站 `atIdx === 外部站序长度-1`」钉死。
+   *
+   * ⚠️ 锚**必须取外部站序**（`st3.length - 1`），不得写成 `ladder.length - 1`：
+   *   后者在「删行」变异下 `ladder.length` 与 `atIdx` 一起缩，等式两边同变 ⇒ 恒真、抓不住。
+   *   （断言体见本节 `ok(...)`；这里写清是为了防止下一个人"顺手修正"回弱形态。）
+   */
+  {
+    /** 3 站：中间那站偏离路径 300m（> LRT_TOL_M=120 ⇒ invalid），首末正常 */
+    const midFar = { lng: ll(300, 400)[0], lat: ll(300, 400)[1] };
+    const st3 = [
+      { lng: PATH[0][0], lat: PATH[0][1] },
+      midFar,
+      { lng: PATH[8][0], lat: PATH[8][1] },
+    ];
+    const L3b = buildLrtLadder(PATH, st3);
+    ok(
+      L3b.ladder.length === st3.length,
+      "R5-i 索引空间：无效站**置 NaN 且保留行**，`ladder.length` 必须 == 站序长度（删行会让 atIdx 整体前移）",
+      `ladder.length=${L3b.ladder.length} stops=${st3.length} valid=${JSON.stringify(L3b.valid)}`,
+    );
+    ok(
+      L3b.valid[0] === true && L3b.valid[1] === false && L3b.valid[2] === true && Number.isNaN(L3b.ladder[1]),
+      "R5-i 反例：中间那站必须 valid=false 且 ladder 为 NaN（不是被删掉、也不是被置 0）",
+      `valid=${JSON.stringify(L3b.valid)} ladder=${JSON.stringify(L3b.ladder)}`,
+    );
+    /** 末站定位：`atIdx` 必须等于 `ladder.length - 1`（= alightIdx 的可达性前提） */
+    const pEnd = ll(0, 800);
+    const rEnd = advanceLrt({
+      prevPassedIdx: 1, prevComputed: 1, prevDist: 780, prevTs: 1_000, badStreak: 0, // 20m/1.5s≈48km/h（不过 80 速度门）
+      ladder: L3b, fix: { lng: pEnd[0], lat: pEnd[1], accuracy: 10, ts: 2_500 },
+    });
+    /**
+     * ★ 锚必须取**外部站序长度** `st3.length - 1`，不能取 `ladder.length - 1`：
+     *   后者是恒真的（删行后 length 与 atIdx 一起缩，等式两边同变），挡不住索引漂移。
+     *   用外部锚才能在「删行/filter」变异下真的红。
+     */
+    ok(
+      rEnd.progress.atIdx === st3.length - 1,
+      "R5-i 末站 `atIdx === 站序长度-1`（= `alightIdx` 能对上，`alarm` 才可能到 now）；锚取外部站序而非 ladder 自身长度",
+      `atIdx=${String(rEnd.progress.atIdx)} 站序末位=${st3.length - 1} ladder.length=${L3b.ladder.length}`,
+    );
+  }
+
+  /* ── R5-h 常量守恒（本轮不许改动旧阈值）── */
+  ok(
+    LRT_TOL_M === 120 && LRT_ACC_MAX_M === 100 && LRT_H_MIN_M === 60,
+    "R5-h 三个旧阈值一个都没改（120 / 100 / 60）",
+    `${LRT_TOL_M}/${LRT_ACC_MAX_M}/${LRT_H_MIN_M}`,
+  );
+  ok(LRT_STOP_R_M === 30, "R5-h 新增停站半径为 30（取值依据见常量注释）", String(LRT_STOP_R_M));
+}
+
 ok(
   checks + 1 === EXPECTED_CHECK_COUNT,
   "★ 44c-③ 断言执行数 == 枚举数（防某条被 if 静默跳过）",

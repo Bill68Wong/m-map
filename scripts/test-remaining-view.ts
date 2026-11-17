@@ -27,6 +27,8 @@ import {
   remainOf,
   remainServedOf,
   remainTotalMinOf,
+  remainWalkOnlyOf,
+  walkRemainMinOf,
 } from "../src/lib/nav/remaining-view";
 import {
   progressOf,
@@ -36,9 +38,27 @@ import {
   type TrackProgress,
   type TrackVehicle,
 } from "../src/lib/nav/track";
+/**
+ * ★ R1 阶段2（2026-11-13）：直接 import **线上那一份**分量清单与时钟判据。
+ *   ⚠️ 刻意**不在本文件复刻**清单顺序 —— 复刻就等于测副本（本项目已有前科）。
+ */
+import { preRideRemainMinOf, remainPartsOf } from "../src/lib/nav/remain-parts";
+import { tickPlanOf } from "../src/lib/nav/remain-tick";
+import { progressOnPath } from "../src/lib/walk/follow";
+import type { RecommendCard, RideLegView } from "../src/lib/recommend/types";
 
 let failed = 0;
+/**
+ * ★ 实际执行的断言条数（末尾与 `EXPECTED` 对账：少跑/漏跑即红）。
+ *
+ * 为什么必须有：R1 报的「新增 51 条断言（24+22+5）」属于**开发者自报**，
+ * qa 无法从输出独立核对 ⇒ 此前只能"承不认这个数"。有了计数器 + 预期常量，
+ * 「跑了几条」变成输出的一个事实，删断言会立刻红。
+ * 参照实现：`scripts/test-parallel-pick.ts` 的 `EXPECTED = 44`。
+ */
+let compared = 0;
 const ok = (cond: boolean, name: string, detail = ""): void => {
+  compared++;
   if (cond) console.log(`  PASS  ${name}${detail ? " — " + detail : ""}`);
   else {
     failed++;
@@ -700,9 +720,420 @@ console.log("── ⑥ 信息行两数（纯函数层：真实 progressOf × �
   }
 }
 
+/* ══════════════════════════════════════════════════════════════════════
+   ⑦ walkRemainMinOf / remainWalkOnlyOf —— 步行段「按已走路程比例」折算（R1 阶段1）
+   ──────────────────────────────────────────────────────────────────────
+   负责人口径：「步行也要仿照**区间进度模型按照已走路程的比例**实时更新剩余用时
+   （**不是**实时调高德 API）」。
+
+   为什么不用「剩余米 ÷ 步速」：`card.walkIn.minutes` 是高德**逐步 `duration` 累加**，
+   含过街等待 / 起步等固定开销；`总米 ÷ 84` 只是几何折算。两者不等价 ——
+   下面「变异断言」用 30 米剩 6 分钟的构造把差额钉出来。
+   ══════════════════════════════════════════════════════════════════════ */
+console.log("── ⑦ walkRemainMinOf（步行段按比例折算）──");
+{
+  /* ── 契约型：6 类边界必须显式成立（不抛错、不出 NaN、不出负数、不超上限）── */
+  ok(walkRemainMinOf(500, 1000, 10) === 5, "正常比例：走了一半 ⇒ 5 分（10×0.5）", String(walkRemainMinOf(500, 1000, 10)));
+  ok(
+    walkRemainMinOf(1200, 1000, 10) === 10,
+    "remainM > totalM（还没走 / 定不到位）⇒ totalMin（**不是** 12）",
+    String(walkRemainMinOf(1200, 1000, 10)),
+  );
+  ok(walkRemainMinOf(0, 1000, 10) === 0, "remainM = 0（走完了）⇒ 0", String(walkRemainMinOf(0, 1000, 10)));
+  ok(walkRemainMinOf(500, 0, 10) === 0, "totalM = 0（无几何 / 退化）⇒ 0，不做除法", String(walkRemainMinOf(500, 0, 10)));
+  ok(walkRemainMinOf(500, 1000, 0) === 0, "totalMin = 0（无规划分钟）⇒ 0", String(walkRemainMinOf(500, 1000, 0)));
+  ok(walkRemainMinOf(Number.NaN, 1000, 10) === 0, "remainM = NaN ⇒ 0（不出 NaN）", String(walkRemainMinOf(Number.NaN, 1000, 10)));
+  ok(walkRemainMinOf(500, Number.NaN, 10) === 0, "totalM = NaN ⇒ 0", String(walkRemainMinOf(500, Number.NaN, 10)));
+  ok(walkRemainMinOf(500, 1000, Number.NaN) === 0, "totalMin = NaN ⇒ 0", String(walkRemainMinOf(500, 1000, Number.NaN)));
+  ok(
+    walkRemainMinOf(Number.POSITIVE_INFINITY, 1000, 10) === 0,
+    "remainM = Infinity（投影异常）⇒ 0，不返回 Infinity",
+    String(walkRemainMinOf(Number.POSITIVE_INFINITY, 1000, 10)),
+  );
+  ok(walkRemainMinOf(-50, 1000, 10) === 0, "remainM 负数 ⇒ 0（不为负）", String(walkRemainMinOf(-50, 1000, 10)));
+  ok(walkRemainMinOf(500, 1000, -3) === 0, "totalMin 负数 ⇒ 0（不为负）", String(walkRemainMinOf(500, 1000, -3)));
+  ok(
+    walkRemainMinOf(1000, 1000, 10) === 10,
+    "remainM === totalM（一步没走）⇒ totalMin",
+    String(walkRemainMinOf(1000, 1000, 10)),
+  );
+
+  /* 不变量：单调不减 + 落在 [0, totalMin] */
+  {
+    const TOTAL_M = 1000;
+    const TOTAL_MIN = 6;
+    const samples = [0, 1, 100, 250, 500, 750, 999, 1000, 1200];
+    const vals = samples.map((m) => walkRemainMinOf(m, TOTAL_M, TOTAL_MIN));
+    const inRange = vals.every((v) => v >= 0 && v <= TOTAL_MIN + 1e-9);
+    let monotone = true;
+    for (let i = 1; i < vals.length; i++) if (vals[i]! < vals[i - 1]! - 1e-9) monotone = false;
+    ok(inRange, "不变量：任意输入 ⇒ 结果落在 [0, totalMin]", vals.map((v) => v.toFixed(2)).join(","));
+    ok(monotone, "不变量：随剩余米数**单调不减**（走得越少、剩余越多）", vals.map((v) => v.toFixed(2)).join(","));
+  }
+
+  /**
+   * 变异断言：证明「比例口径」与「剩余米 ÷ 步速」**确实不是一个东西**。
+   * 构造：末段共 1000 米 / 规划 6 分；只剩 30 米。
+   *   · 比例口径 ⇒ 6 × 0.03 = 0.18 分 ≈ 11 秒
+   *   · 米/步速   ⇒ 30 ÷ 84 = 0.357 分 ≈ 21 秒
+   * ⇒ 差 0.18 分。若有人把实现换成「÷84」，上面 `500/1000/10 === 5` 那条仍会过
+   *   （匀速段两者恰好接近），**只有这一条**能把它抓出来 —— 所以它必须留。
+   */
+  {
+    const byRatio = walkRemainMinOf(30, 1000, 6);
+    const bySpeed = 30 / 84; // 只在本断言内复刻，**不改** catch-up-live.ts
+    ok(
+      Math.abs(byRatio - 0.18) < 1e-9 && Math.abs(bySpeed - byRatio) > 0.1,
+      "[变异] 「剩余米÷步速」与「规划时长×比例」在末段差 >0.1 分（口径不可互换）",
+      `比例=${byRatio.toFixed(3)} 米/速=${bySpeed.toFixed(3)} Δ=${Math.abs(bySpeed - byRatio).toFixed(3)}`,
+    );
+  }
+
+  /* ── remainWalkOnlyOf：`done` 相位的剩余视图 ── */
+  const WA = T0 + 27 * MIN;
+  const w5 = remainWalkOnlyOf({ walkRemainMin: 5.7, arriveAtMs: WA });
+  ok(Math.abs(w5.totalMin - 5.7) < 1e-9, "done 视图：总剩余 = 步行实时值（5.7）", w5.totalMin.toFixed(3));
+  ok(w5.arriveAtMs === WA, "done 视图：到达时刻锚**原样透传**（不参与计算）", String(w5.arriveAtMs));
+  ok(w5.overdue === false, "done 视图：不据不可信的规划锚报「预计已过」（否则与「还剩 5.7 分」自相矛盾）");
+  ok(w5.arrived === false, "done 视图：剩 5.7 分 ⇒ 未到");
+  ok(
+    remainWalkOnlyOf({ walkRemainMin: 0.4, arriveAtMs: WA }).arrived === true,
+    "done 视图：剩 0.4 分 ⇒ 取整为 0 ⇒ 切「即将到达」",
+  );
+  ok(
+    remainWalkOnlyOf({ walkRemainMin: -2, arriveAtMs: WA }).totalMin === 0 &&
+      remainWalkOnlyOf({ walkRemainMin: -2, arriveAtMs: WA }).arrived === true,
+    "done 视图：负值 ⇒ clamp 0 且 arrived（不出现「-2 分」）",
+  );
+  ok(
+    remainWalkOnlyOf({ walkRemainMin: Number.NaN, arriveAtMs: WA }).totalMin === 0,
+    "done 视图：NaN ⇒ 0（不出 NaN）",
+  );
+  /**
+   * ★ 过渡连续性（数值证据，非"应该平滑"）：
+   *   `riding` 最后一帧（车刚到下车站）服务端重算 `remainingMin` = 6.0（= 末段步行静态值）；
+   *   切 `done` 第一帧时末段已走 5% ⇒ `walkRemainMinOf(950, 1000, 6)` = 5.7。
+   *   ⇒ 差 **0.3 分（18 秒）**，方向为下降，且恰好等于「走掉的 5%」。
+   *   对照组（旧口径 `remainOf(card.arriveAt)`）：规划 27 分、实际耗时 31 分到站 ⇒
+   *   `max(0, 27 − 31)` = **0** ⇒ 屏上从 6.0 直落「即将到达」，跳 **6.0 分**。
+   */
+  {
+    const ridingLast = 6.0; // 服务端 remainingMin（= walkIn.minutes）
+    const doneFirst = walkRemainMinOf(950, 1000, 6);
+    ok(
+      Math.abs(doneFirst - 5.7) < 1e-9 && Math.abs(ridingLast - doneFirst - 0.3) < 1e-9,
+      "过渡连续性：riding 末帧 6.0 → done 首帧 5.7（差 0.3 分 = 18 秒 = 走掉的 5%）",
+      `Δ=${(ridingLast - doneFirst).toFixed(3)} 分`,
+    );
+    const oldDone = remainOf(T0 + 27 * MIN, T0 + 31 * MIN).totalMin; // 旧口径：规划 27 分 / 实际 31 分
+    ok(
+      oldDone === 0 && Math.abs(ridingLast - oldDone) >= 5.9,
+      "[变异] 旧口径（回落 card.arriveAt）在同场景跳 ≥5.9 分（证明换口径确有必要）",
+      `旧=${oldDone.toFixed(1)} 新=${doneFirst.toFixed(1)}`,
+    );
+  }
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════
+   ⑧ tickPlanOf —— 时钟该不该开（R1 阶段2 · 纯函数三态）
+   ──────────────────────────────────────────────────────────────────────
+   主张：`done` 且末段步行**已走完** ⇒ 停；**又走动** ⇒ 恢复；阈值附近抖动 ⇒
+   每次切换都有确定结果（无滞后状态，不会锁死）。三者都不需要真机就能验。
+   之前这段判断散在 `RouteSheet` 的 effect 里，只能靠盯屏。
+   ══════════════════════════════════════════════════════════════════════ */
+console.log("── ⑧ tickPlanOf（时钟开不开 / 多快）──");
+{
+  const base = { detailVisible: true, peek: false, ridePhase: "done" as const };
+  const p = (patch: Partial<Parameters<typeof tickPlanOf>[0]>) =>
+    tickPlanOf({ ...base, walkInLiveMin: null, preRideLiveMin: null, ...patch });
+
+  const hidden = tickPlanOf({
+    detailVisible: false, peek: false, ridePhase: "riding", walkInLiveMin: null, preRideLiveMin: null,
+  });
+  ok(hidden.tick === false && hidden.periodMs === 0, "面板不可见 ⇒ 不开钟（两个渲染位都看不到）", hidden.skippedBy ?? "");
+
+  ok(
+    p({ walkInLiveMin: 0.4 }).tick === false && p({ walkInLiveMin: 0.4 }).skippedBy === "walkTailSettled",
+    "① 走完：done + 末段 0.4 分（取整 0）⇒ 停钟",
+    JSON.stringify(p({ walkInLiveMin: 0.4 })),
+  );
+  ok(
+    p({ walkInLiveMin: 0.9 }).tick === true && p({ walkInLiveMin: 0.9 }).periodMs === 1000,
+    "② 又走动：同一状态机下末段回到 0.9 分 ⇒ 自动恢复 1s（无锁存，所以不会卡在停）",
+    JSON.stringify(p({ walkInLiveMin: 0.9 })),
+  );
+  /**
+   * ③ 阈值抖动：GPS 噪声让 remainM 在边界来回跨 ⇒ 每次都必须是**确定**结果。
+   *    判据是 `num < ARRIVED_BELOW_MIN`（严格小于），所以 0.5 本身算「还活着」。
+   */
+  const sweep = [0.2, 0.4999, 0.5, 0.5001, 1.5].map((v) => ({ v, tick: p({ walkInLiveMin: v }).tick }));
+  ok(
+    sweep[0]!.tick === false && sweep[1]!.tick === false && sweep[2]!.tick === true && sweep[3]!.tick === true && sweep[4]!.tick === true,
+    "③ 抖动扫描 0.2/0.4999/0.5/0.5001/1.5 ⇒ 只有 <0.5 停钟（阈值严格小于，0.5 算活）",
+    sweep.map((s) => `${s.v}:${s.tick ? "开" : "停"}`).join(" "),
+  );
+  ok(
+    p({ walkInLiveMin: 0.49 }).tick === false && p({ walkInLiveMin: 0.51 }).tick === true &&
+      p({ walkInLiveMin: 0.49 }).tick === false,
+    "③b 来回跨阈值（0.49→0.51→0.49）每次都跟输入走（无滞后 ⇒ 不会单向锁死）",
+  );
+
+  ok(
+    p({ ridePhase: "riding", walkInLiveMin: null }).periodMs === 1000,
+    "riding ⇒ 1s（新鲜度秒数 + 服务端 12s 重算之间的插值）",
+  );
+  ok(
+    p({ ridePhase: "off", preRideLiveMin: null }).periodMs === 15_000,
+    "off 且无实时值（走静态回落）⇒ 15s，不空转 1s",
+  );
+  ok(
+    p({ ridePhase: "off", preRideLiveMin: 12.3 }).periodMs === 1000,
+    "off 且**有**实时总剩余 ⇒ 1s（否则「实时」名不副实）",
+  );
+  ok(
+    p({ ridePhase: "boarding", preRideLiveMin: 8.1 }).periodMs === 1000,
+    "boarding 且有实时总剩余 ⇒ 1s",
+  );
+  ok(p({ peek: true, detailVisible: false, walkInLiveMin: null }).periodMs === 1000, "peek 档 ⇒ 1s（摘要可见）");
+  {
+    const a = p({ walkInLiveMin: 2.5 });
+    const b = p({ walkInLiveMin: 2.5 });
+    ok(a.tick === b.tick && a.periodMs === b.periodMs, "纯函数：同一输入两次调用同结果（无副作用）");
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   ⑨ preRideRemainMinOf —— `off`/`boarding` 实时总剩余（R1 阶段2）
+   ──────────────────────────────────────────────────────────────────────
+   清单**不在本文件复刻**：直接调 `src/lib/nav/remain-parts.ts` 里那份
+   （与 `remaining.ts` 共用同一个 `remainPartsOf`）。
+   合成卡（与 `scripts/test-remaining.ts` 的 `mkTwoLegCard` 同构）：
+     walkOut 3 · ride B1 8（候车 3）· transfer 2（其 waitMin 3）· ride B2 8（候车 3）· walkIn 2
+   ══════════════════════════════════════════════════════════════════════ */
+console.log("── ⑨ preRideRemainMinOf（off/boarding：清单共用 + 唯一回落点）──");
+{
+  const mkRide = (route: string, minutes: number, waitMin: number): RideLegView => ({
+    route, kind: "bus", board: "A1", alight: "A3",
+    boardLabel: "A1", alightLabel: "A3",
+    minutes, hops: 2, levels: [2, 2], waitMin, liveText: "", tier: 3, tierText: "", tierHint: "",
+  });
+  const CARD: RecommendCard = {
+    planId: 990001,
+    summary: "synthetic-r1-stage2",
+    fromSlug: "home",
+    toSlug: "school",
+    totalMin: 29,
+    arriveAt: T0 + 29 * MIN,
+    walkOut: { minutes: 3, toLabel: "A1", level: 1, estimated: false, samples: 8, distanceM: 210 },
+    walkIn: { minutes: 2, toLabel: "學校", level: 1, estimated: false, samples: 8, distanceM: 140 },
+    rides: [mkRide("B1", 8, 3), mkRide("B2", 8, 3)],
+    transfers: [{ at: "A3", atLabel: "A3", minutes: 2, estimated: false, sameField: false, waitMin: 3, slackMin: 1 }],
+    hints: [],
+    crossBorder: false,
+  };
+  const sum = (legIndex: number, walkOut: number, waitLive: number | null, walkIn: number | null) =>
+    preRideRemainMinOf({ card: CARD, legIndex, nowMs: T0, walkOutRemainMin: walkOut, waitLiveMin: waitLive, walkInRemainMin: walkIn });
+  const near = (a: number, b: number) => Math.abs(a - b) < 1e-9;
+
+  /** 起步瞬间（leg 0 候车还没发生）：3 + [3 + 8 + 2 + 3 + 8 + 2] = 29 */
+  ok(near(sum(0, 3, 3, 2), 29), "起步：walkOut 3 + 候车 3 + 乘 8 + 换乘 2 + 候车 3 + 乘 8 + 末段 2 = 29", String(sum(0, 3, 3, 2)));
+
+  /* 【唯一回落点】—— lead 点名要单独测的那条 */
+  ok(
+    near(sum(0, 3, null, 2), 29),
+    "回落：实时到站分钟为 null ⇒ 用 rides[0].waitMin（3）⇒ 与实时值同值 29",
+    String(sum(0, 3, null, 2)),
+  );
+  ok(
+    near(sum(0, 3, 1.2, 2), 27.2),
+    "对照：实时值 1.2 ⇒ 27.2（与上一条同值时 29 不同，证明**回落分支真的被走到**、不是恰好同值）",
+    String(sum(0, 3, 1.2, 2)),
+  );
+  ok(near(sum(0, 3, 0, 2), 26), "车已到（实时 0）⇒ 候车项归零 ⇒ 26", String(sum(0, 3, 0, 2)));
+  ok(near(sum(0, 3, 3, 0.5), 27.5), "末段步行实时 0.5 覆盖静态 2 ⇒ 27.5（未走末段时即 29−1.5）", String(sum(0, 3, 3, 0.5)));
+  ok(near(sum(0, 3, 3, null), 29), "末段无几何（null）⇒ 回落 walkIn.minutes 静态 2 ⇒ 29", String(sum(0, 3, 3, null)));
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   ⑩ 连续性（阶段 2 的验收核心）—— 三组相位切换，差必须能被「走掉/等掉」解释
+   ══════════════════════════════════════════════════════════════════════ */
+console.log("── ⑩ 相位切换连续性（off→boarding / boarding→riding / riding→换乘→riding）──");
+{
+  const mkRide = (route: string, minutes: number, waitMin: number): RideLegView => ({
+    route, kind: "bus", board: "A1", alight: "A3",
+    boardLabel: "A1", alightLabel: "A3",
+    minutes, hops: 2, levels: [2, 2], waitMin, liveText: "", tier: 3, tierText: "", tierHint: "",
+  });
+  const CARD: RecommendCard = {
+    planId: 990002, summary: "synthetic-continuity", fromSlug: "home", toSlug: "school",
+    totalMin: 29, arriveAt: T0 + 29 * MIN,
+    walkOut: { minutes: 3, toLabel: "A1", level: 1, estimated: false, samples: 8, distanceM: 210 },
+    walkIn: { minutes: 2, toLabel: "學校", level: 1, estimated: false, samples: 8, distanceM: 140 },
+    rides: [mkRide("B1", 8, 3), mkRide("B2", 8, 3)],
+    transfers: [{ at: "A3", atLabel: "A3", minutes: 2, estimated: false, sameField: false, waitMin: 3, slackMin: 1 }],
+    hints: [], crossBorder: false,
+  };
+  /** riding 口径（服务端同形）：当前腿用实时剩余，候车/换乘视为已发生 */
+  const riding = (legIndex: number, curRideMin: number) =>
+    remainPartsOf({
+      card: CARD, legIndex, nowMs: T0, curTransferMin: null, curWaitMin: null,
+      curRideMin, waitMinAt: (_i, r) => ({ minutes: r.waitMin, source: "kept" }), walkInMin: 2,
+    }).totalMinutesRaw;
+  const pre = (legIndex: number, walkOut: number, waitLive: number | null) =>
+    preRideRemainMinOf({ card: CARD, legIndex, nowMs: T0, walkOutRemainMin: walkOut, waitLiveMin: waitLive, walkInRemainMin: 2 });
+  const near = (a: number, b: number) => Math.abs(a - b) < 1e-9;
+
+  /* ① off → boarding：**唯一变化是首段步行走了 10%** */
+  {
+    const offFrame = pre(0, 3, 3); // 还没开始走
+    const boardingFrame = pre(0, 2.7, 3); // 走了 10%（3 × 10% = 0.3 分）
+    ok(
+      near(offFrame - boardingFrame, 0.3) && near(offFrame - boardingFrame, 3 * 0.1),
+      "① off→boarding：Δ = 0.3 分 = 首段步行的 10%（公式没变，只是路程走了）",
+      `off=${offFrame} boarding=${boardingFrame} Δ=${(offFrame - boardingFrame).toFixed(3)}`,
+    );
+    ok(near(pre(0, 3, 3) - pre(0, 3, 3), 0), "①b 同 nowMs 同输入 ⇒ Δ = 0（相位切换本身不引入时间）");
+  }
+
+  /* ② boarding → riding：走完首段、候车结算为 0 ⇒ 差 0 */
+  {
+    const boardLast = pre(0, 0, 0); // 已到站台、车已到
+    const rideFirst = riding(0, 8); // 刚上车，本段还有 8 分
+    ok(
+      near(boardLast, rideFirst) && near(boardLast, 23),
+      "② boarding→riding：Δ = 0（首段与候车都结算为 0，两侧同为 23）",
+      `boarding末帧=${boardLast} riding首帧=${rideFirst}`,
+    );
+    const unsettled = pre(0, 0, 1.2); // 报站还没归零，候车还剩 1.2
+    ok(
+      near(unsettled - rideFirst, 1.2),
+      "②b 若上车时实时到站仍剩 1.2 分 ⇒ Δ = 1.2（= 这一帧尚未结算的候车，可解释）",
+      `Δ=${(unsettled - rideFirst).toFixed(3)}`,
+    );
+  }
+
+  /* ③ riding →（换乘）→ riding：换腿瞬间必须无缝 */
+  {
+    const leg0Last = riding(0, 0); // 本段坐完
+    const leg1BoardFirst = pre(1, 0, 3); // 换腿后处于 boarding：当前腿之前的换乘步行与候车**都还没发生**
+    ok(
+      near(leg0Last, leg1BoardFirst) && near(leg0Last, 15),
+      "③ riding→(换乘)→riding：Δ = 0（换乘步行 2 + 候车 3 由「下游项」变「当前项」，总数不变）",
+      `leg0末帧=${leg0Last} leg1首帧=${leg1BoardFirst}`,
+    );
+    const leg1BoardLast = pre(1, 0, 0); // 换乘走完、车到（但**换乘步行没有实时几何**）
+    const leg1RideFirst = riding(1, 8);
+    /**
+     * ⚠️ 这条**刻意不写成 Δ=0**：`card.transfers[i]` 只有 `minutes`，没有折线 ⇒
+     *   换乘步行无法按比例衰减（KI-7，见 `remain-parts.ts` 头注「已知边界 ①」）。
+     *   后果是那 2 分钟**不会在走的过程中递减**，而是在「上车那一帧」整段移出。
+     *   ⇒ 断言的是「差 = 换乘步行静态值」这个**已知且可解释**的量，而不是假装连续。
+     *   **这是刻意选择，不是没做完**：整段计入 = 剩余偏多（最坏迟到）；
+     *   不计 = 剩余偏少（用户去赶，可能闯红灯）⇒ 方向定死在**保守侧**。
+     *   （把 `curTransferMin` 直接去掉也试过：那样 boarding 期会**少算**还没走的那段，
+     *     上车瞬间再往回补，方向相反但同样是台阶，且会让站台上的剩余偏短 ⇒ 更差。）
+     */
+    ok(
+      near(leg1BoardLast - leg1RideFirst, 2) &&
+        near(leg1BoardLast - leg1RideFirst, CARD.transfers![0]!.minutes),
+      "③b [KI-7 · 刻意选择，不是没做完] leg1 boarding→riding：Δ = 2 分 = 换乘步行静态值（无几何 ⇒ 不能按比例衰减，整段在登车帧移出；方向定在**保守侧**：宁多显示，不用户去赶）",
+      `boarding末帧=${leg1BoardLast} riding首帧=${leg1RideFirst} Δ=${(leg1BoardLast - leg1RideFirst).toFixed(3)}`,
+    );
+  }
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════
+   ⑪ 末段「低精度回升」—— 把**刻意不加单调钳**这个决定钉住（R1 阶段2）
+   ──────────────────────────────────────────────────────────────────────
+   现象：`progressOnPath` 在 `accuracy > WALK_ACC_MAX_M(150)` 时**返回全程米数**
+   （保守侧：当作还没开始走）。落在剩余时间上就是「走了 600 米、剩 2.4 分，
+   精度一掉回 6.0 分」——数字回升。
+   裁定（team-lead）：**不加单调钳**。理由 ① 首段同构，只给末段加钳会造成新的不对称；
+   ② 长期精度不恢复时钳会让数字**卡住不动**，那比「显示多了几分钟」更像 bug；
+   ③ 方向安全：GPS 不可信时宁可显示更长，不要假装快到了。
+   ⇒ 本节把「回升」写成**断言**（而不是让它成为没人管的默认值）：
+     低精度输入必须**恰好**等于按全程米数折算的值。
+   ══════════════════════════════════════════════════════════════════════ */
+console.log("── ⑪ 低精度回升（刻意不加单调钳，用断言钉住）──");
+{
+  /** 正东向 1000 米直线，每 10 米一个顶点（与服务端下发形态一致） */
+  const DEG_PER_M = 1 / 103_140;
+  const L0 = 113.55;
+  const LAT0 = 22.15;
+  const at = (m: number): [number, number] => [L0 + m * DEG_PER_M, LAT0];
+  const TOTAL = 1000;
+  const polyline: [number, number][] = [];
+  const cumM: number[] = [];
+  for (let d = 0; d <= TOTAL; d += 10) {
+    polyline.push(at(d));
+    cumM.push(d);
+  }
+  const STEP = {
+    idx: 0,
+    turn: "straight" as const,
+    text: "直行",
+    distM: TOTAL,
+    cumStartM: 0,
+    polyline,
+    cumM,
+  };
+  const steps = [STEP];
+  const fixAt = (m: number, accuracy: number) => ({ lng: at(m)[0], lat: at(m)[1], accuracy });
+  const remainOf = (m: number, accuracy: number) =>
+    progressOnPath(steps, TOTAL, fixAt(m, accuracy), null).remainM;
+
+  ok(Math.abs(remainOf(0, 20) - 1000) < 1, "高精度·起点 ⇒ 剩余 1000 米", String(remainOf(0, 20).toFixed(2)));
+  ok(
+    Math.abs(remainOf(600, 20) - 400) < 2,
+    "高精度·走到 600 米 ⇒ 剩余 400 米 ⇒ 折算 2.4 分（6 × 400/1000）",
+    `remainM=${remainOf(600, 20).toFixed(2)} ⇒ ${walkRemainMinOf(remainOf(600, 20), TOTAL, 6).toFixed(3)} 分`,
+  );
+
+  /**
+   * ★ 本节的守护点：精度掉到 999m（> 150 门限）⇒ `progressOnPath` 走「冻结并返回全程」，
+   *   `walkRemainMinOf` 于是得到 **totalMin**（6.0），**大于**高精度时的 2.4。
+   *   若有人给末段加单调钳，这一条立刻红 —— 那正是我们想要的（钳是被明确否决的方案）。
+   */
+  const lowAcc = remainOf(600, 999);
+  const lowAccMin = walkRemainMinOf(lowAcc, TOTAL, 6);
+  ok(
+    Math.abs(lowAcc - TOTAL) < 1e-6,
+    "低精度（accuracy 999 > 150 门限）⇒ remainM 回到**全程** 1000（`progressOnPath` 既有保守语义）",
+    String(lowAcc.toFixed(2)),
+  );
+  ok(
+    Math.abs(lowAccMin - 6) < 1e-9,
+    "低精度 ⇒ 末段剩余分钟 = 6.0 = 全程（**允许回升**；不加单调钳是 team-lead 裁定）",
+    String(lowAccMin.toFixed(3)),
+  );
+  ok(
+    lowAccMin > walkRemainMinOf(remainOf(600, 20), TOTAL, 6),
+    "断言「回升确实发生」：6.0 > 2.4（若将来有人加钳，此条必红 ⇒ 强制重新裁决）",
+    `${lowAccMin.toFixed(3)} > ${walkRemainMinOf(remainOf(600, 20), TOTAL, 6).toFixed(3)}`,
+  );
+}
+
+
+// ───────────────────────────── 条数对账 ─────────────────────────────
+/**
+ * 预期断言条数。**改断言必须同步这个数**；`compared !== EXPECTED` 即红。
+ *
+ * 它守的是「断言有没有被悄悄删掉/跳过」：以往只有结尾的「✅ 全通过」，
+ * 把某条断言整段删掉也照样全绿。代价是每加一条断言要 +1，这正是我们要的摩擦。
+ */
+const EXPECTED = 165;
+
+console.log("");
+if (compared !== EXPECTED) {
+  failed++;
+  console.log(`  FAIL  比对条数与预期不符：实际=${compared} / 预期=${EXPECTED}（有断言被删或漏跑）`);
+}
+
 console.log(
   failed === 0
-    ? "\n✅ 全通过（客户端兜底 / 服务端基准 / 两路恒等 / 渲染口径 / 变异自检 / 纯函数两数）"
-    : `\n❌ ${failed} 项失败`,
+    ? `\n✅ 全通过（比对 ${compared} 条 / 预期 ${EXPECTED} 条；客户端兜底 / 服务端基准 / 两路恒等 / 渲染口径 / 变异自检 / 纯函数两数 / 步行比例折算 / 时钟判据 / 起步实时 / 相位连续性 / 低精度回升）`
+    : `\n❌ ${failed} 项失败（比对 ${compared} 条 / 预期 ${EXPECTED} 条）`,
 );
 process.exit(failed === 0 ? 0 : 1);

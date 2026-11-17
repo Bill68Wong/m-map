@@ -23,18 +23,18 @@ import type { CompassStatus } from "./useCompassHeading";
 /** iOS 等需要一次手势的机型：给一个可点的入口（不是一个弹窗） */
 export const NOTE_HEADING_ENABLE = "点此开启朝向指示";
 /** 没传感器 / 用户拒绝：不解释技术细节，只说实话 + 地图本来是正的 */
-export const NOTE_HEADING_NORTH = "方向暂时读不到 · 地图按正北朝上";
+export const NOTE_HEADING_NORTH = "方向暂时读不到 - 地图按正北朝上";
 /** 罗盘不可信（磁扰 / 精度差）：说明"我们没在骗你" */
-export const NOTE_HEADING_POOR = "方向读数不稳 · 先按正北显示";
+export const NOTE_HEADING_POOR = "方向读数不稳 - 先按正北显示";
 /**
  * ★ F4：磁扰确认后给一个**可执行的动作**（不是含糊的"信号不好"）。
  * 「画 8 字」是磁力计的标准校准手势 —— 用户做完读数通常就恢复了，
  * 这比让他去猜"是不是我手机坏了"有用。
  * 每会话只出一次（见 `takeCalibrateTicket`）：磁扰会持续存在，反复提示等于噪音。
  */
-export const NOTE_HEADING_CALIBRATE = "方向受磁场干扰 · 拿手机在空中画几个「8」字可恢复";
+export const NOTE_HEADING_CALIBRATE = "方向受磁场干扰 - 拿手机在空中画几个「8」字可恢复";
 /** 用行进方向代替朝向：必须说清它是"往哪走"而不是"朝哪看" */
-export const NOTE_HEADING_COURSE = "方向跟随行进方向 · 停下后按正北";
+export const NOTE_HEADING_COURSE = "方向跟随行进方向 - 停下后按正北";
 
 /**
  * 校准提示的"每会话一次"票据。

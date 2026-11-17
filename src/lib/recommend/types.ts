@@ -376,6 +376,33 @@ export interface RouteIndex {
    *   ⛔ **不要直接写 `loopOf.get(x) ?? false`** —— 那会把 75 条 is_active 循环线静默判成非循环。
    */
   loopOf?: Map<string, boolean>;
+  /**
+   * ★ R2（2026-11-17）：`站主码 → 经过该站的线路集合`（倒排）。
+   *
+   * 用途：**反查「同方向、同 上车站→下车站」的全部线路**（`enumerate-nav#routesServing`）。
+   * 全库扫描是 `dirsOf.keys()`（99 条线 × `segmentsOf`），实测 372~446 µs/次；
+   * 走倒排只需扫「经过上车站的线」（实测均值 5.82 条、中位 5、max 39）⇒ 42~96 µs/次，
+   * 4/4 逐字一致（`scripts/test-parallel-pick.ts` 有常驻等价断言，不靠一次性探针）。
+   *
+   * ⚠️ **可选**：手工构造的夹具索引没有它 ⇒ `routesServing` 回落全库扫描，
+   *   行为逐字不变。**不许**把缺失当空集合（那会让反查永远返回 0 条）。
+   */
+  stopOwners?: Map<string, Set<string>>;
+  /**
+   * ★ R2（2026-11-17）：`route|mainFrom|mainTo → 沿线里程（米）`（相邻跳）。
+   *
+   * 来源 `route_station_mileage`（构建时已做「站序单调贪心」消歧，见
+   * `scripts/build-station-mileage.ts`），由 `buildRouteIndexFromRows` 的**第 4 参**注入；
+   * 生产在 `query.ts` 里与 `SegmentIndex.hopMeters` **共用同一份 `rows.hopDist`**（单一源，不另查库）。
+   *
+   * 为什么必须用它而不是「把站点投影到 `route_shapes` 折线」：环线会跨圈误配，
+   * 实测 50/50B/N3 投影误差 2.6~3.1 km、`M1→T330` 达 5.8 km，算出 d×=49 的荒谬值
+   * （详见 `nav/parallel-pick.ts` 文件头）。
+   *
+   * ⚠️ **可选**：缺失（如未跑 `db:station-mileage` 的库、或手工夹具）⇒ 并行线补漏**整体降级**
+   *   （一条都不新增），不会退化成「用别的口径硬算」。
+   */
+  hopMeters?: Map<string, number>;
 }
 
 /** segment_stats 行（读端最小列集） */

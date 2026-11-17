@@ -204,7 +204,7 @@ export default function NavStrip({
       {board && row(0, true)}      {/* 中间站：静态时默认收起；导航中强制展开 */}
       {mids > 0 && !open && (
         <button className="rc-strip__toggle" onClick={() => setOpenManual(true)} aria-expanded={false}>
-          途经 <b>{mids}</b> 站 · 车上约{" "}
+          途经 <b>{mids}</b> 站 - 车上约{" "}
           <b className={est ? "rc-val--est" : undefined}>
             {strip.kind === "lrt" && strip.rideSecText ? strip.rideSecText : `${Math.round(strip.rideMin)} 分`}
           </b>
@@ -237,12 +237,14 @@ export default function NavStrip({
         <div className="rc-strip__transfer">
           <Icon name="expandVertical" size={16} />
           {transfer.sameField ? (
-            <>同站台换乘 · 无需步行</>
+            <>同站台换乘 - 无需步行</>
           ) : (
             <>
-              换乘 {transfer.atLabel} · 步行{" "}
+              {/* R6：原来「换乘 …」「步行 N 分」「等车约 M 分」三段之间各有一个中点，均已删 ——
+                  三段本就分属 `.rc-strip__transfer` 的 flex 子项，间隔由 `gap: 6px`
+                  （globals.css:2416）承担，删字即完成「同一行靠排版分开」。 */}
+              换乘 {transfer.atLabel} 步行{" "}
               <b className={transfer.estimated ? "rc-val--est" : undefined}>{transfer.minutes}</b> 分
-              {" · "}
               {waitMin != null ? (
                 <>
                   等车约 <b className="rc-strip__wait-n">{Math.round(waitMin)}</b> 分

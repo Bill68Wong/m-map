@@ -139,7 +139,7 @@ export default function HelpPage() {
         帮助与合规
       </h1>
       <p className="t-label t-muted" style={{ marginBottom: 4 }}>
-        M Map · 澳門巴士／轻轨全澳导航
+        M Map - 澳門巴士／轻轨全澳导航
       </p>
 
       {/* ── ① 数据来源与合规（置顶 · 不可折叠）── */}

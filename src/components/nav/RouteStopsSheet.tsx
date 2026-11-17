@@ -13,7 +13,7 @@
  *   section.lst-sheet                              position:fixed（三档位移走 transform）
  *     ├ .lst-sheet__handle                         固定，不随内容滚；起拖区
  *     │   ├ .lst-sheet__grip
- *     │   └ .lst-sheet__head  [线号 chip] [方向/终点] [· 首班时刻]  [换向][刷新][关闭]
+ *     │   └ .lst-sheet__head  [线号 chip] [方向/终点] [ - 首班时刻]  [换向][刷新][关闭]
  *     ├ .lst-sheet__body                           唯一滚动容器
  *     │   └ <LineStopList>                         复用现有纵条（左 rail + 节点 + 站名 + 澳/琴）
  *     └ .lst-sheet__toast                          aria-disabled 键的原因提示（3s）
@@ -37,7 +37,9 @@
  *        （`visibility` 虽不进 a11y 树，但显式声明才是可读的意图，不靠 CSS 副作用兜）。
  *
  * ── 顶部行（顺序锁死，逐项有理由）────────────────────────────────────────
- *   `[线号] 方向/终点 · 首班时刻   [换向][刷新][关闭]`
+ *   `[线号] 方向/终点 - 首班时刻   [换向][刷新][关闭]`
+ *   ⚠️ 分隔符：R6（2026-11-17）已把中点改为 ` - `（前后各一空格），渲染处见 `:703`；
+ *      「用户可见即改，注释同步」—— 别再按旧稿写回中点。
  *   · **线号**：白字 + 线路主题色底（R6 裁决：**一律白字**，禁止自适应墨色；底色保持官方色
  *     不加深）。复用 `.lst-sheet__no`（13px·700 + `text-shadow`，与通琴号同一视觉语汇，
  *     **不自创第二套 chip 形态** —— R5：图标视觉定稿前任何人不得自改）。
@@ -697,9 +699,10 @@ export default function RouteStopsSheet({
           >
             {chipText}
           </span>
-          {/* 方向可省略（让位给时刻与三键）；时刻自带「 · 」前缀，与搜索卡副行同一语汇 */}
+          {/* 方向可省略（让位给时刻与三键）；时刻自带「 - 」前缀，与搜索卡副行同一语汇。
+              R6（2026-11-17）：前缀原为中点，与全站文案去中点同批改为 ` - `。 */}
           <span className="lst-sheet__dir">{directionLabel}</span>
-          {firstTime && <span className="lst-sheet__time"> · {firstTime}</span>}
+          {firstTime && <span className="lst-sheet__time"> - {firstTime}</span>}
           {/* 三键：尺寸/命中区/间距全部由 CSS 接管（见文件头 `TOAST_MS` 上方的说明） */}
           <span className="lst-sheet__acts">
             <button

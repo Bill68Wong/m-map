@@ -33,7 +33,7 @@
 const MIN_MS = 60_000;
 
 /** 全程剩余显示「即将到达」的阈值：四舍五入后为 0 分钟（含负值/超时） */
-const ARRIVED_BELOW_MIN = 0.5;
+export const ARRIVED_BELOW_MIN = 0.5;
 
 export interface RemainView {
   /** 全程剩余分钟（**未取整、已 clamp ≥0**；永不为负） */
@@ -197,3 +197,78 @@ export const REMAIN_ARRIVED_TEXT = "即将到达";
 
 /** 到达时刻已过时的后缀文案（替代裸露的过去时刻） */
 export const ARRIVE_OVERDUE_TEXT = "预计已过";
+
+/* ══════════════ 步行段「按已走路程比例」折算剩余分钟（R1 阶段1 · 2026-11-13） ══════════════
+ *
+ * ── 负责人的口径（原话）─────────────────────────────────────────────────
+ *   「步行也要仿照**区间进度模型按照已走路程的比例**实时更新剩余用时
+ *     （**不是**实时调高德 API）」
+ *
+ * ── 为什么是「规划时长 × 剩余比例」，**不是**「剩余米 ÷ 步速」──────────────
+ *   `card.walkIn.minutes`（= `totalMin`）来自高德**逐步 `duration` 累加**，其中含过街等待、
+ *   起步等**固定开销**；而 `总米 ÷ WALK_BASE_M_PER_MIN(84)` 只是几何折算。
+ *   ⇒ 两者在匀速假设下**并不等价**，末段只剩 30 米时差额可达数十秒。
+ *   `catch-up-live.ts:10-20` 已把同一区别写清：那边算的是**赶车档位**
+ *   （`remainWalkMin = 剩余米 ÷ 步速`），**不是**总剩余，别拿来复用。
+ *
+ * ── 边界（全部显式，不抛错、不出 NaN）──────────────────────────────────
+ *   | 输入 | 输出 |
+ *   |---|---|
+ *   | `totalM <= 0`（无几何 / 退化）             | `0` |
+ *   | `totalMin <= 0`（无规划分钟）              | `0` |
+ *   | `remainM >= totalM`（还没走 / 定不到位）   | `totalMin` |
+ *   | `remainM <= 0`（走完了）                   | `0` |
+ *   | 任一参数非有限（NaN / Infinity）           | `0` |
+ *   中间段：`totalMin × remainM / totalM`（单调、线性、范围 `(0, totalMin)`）。
+ */
+export function walkRemainMinOf(remainM: number, totalM: number, totalMin: number): number {
+  if (!Number.isFinite(remainM) || !Number.isFinite(totalM) || !Number.isFinite(totalMin)) return 0;
+  if (totalM <= 0) return 0;
+  if (totalMin <= 0) return 0;
+  if (remainM <= 0) return 0;
+  if (remainM >= totalM) return totalMin;
+  return totalMin * (remainM / totalM);
+}
+
+/**
+ * ★「**实时总剩余**」这一族的唯一实现（`off` / `boarding` / `done` 三态共用）。
+ *
+ * ── 为什么 `overdue` 恒 `false`（**两处锚的语义不同，故这些态不据规划锚判 overdue**）──
+ *   `overdue` 的原判据是「到达时刻锚是否已过」，而这三个态手里唯一的锚是
+ *   `card.arriveAt` —— **规划时**算出的绝对时刻，规划之后全仓无回写
+ *   （`remaining.ts:49-50`：`patchedCard` 只在服务端内部流转、绝不下发）。
+ *   一旦行程晚于规划，这个锚必然落在过去，于是会出现「**还剩 5.7 分**」与
+ *   「**预计已过 15:32**」**同一屏自相矛盾**。
+ *   ⇒ 本族只让 `arriveAtMs` 参与**显示**，不参与任何判定；「到没到」只由
+ *     `arrived`（剩余 < `ARRIVED_BELOW_MIN`）表达。
+ *
+ * `arriveAtMs` 原样透传（调用方决定是否/如何显示时刻），本函数不改它。
+ */
+export function remainLiveOf(input: { remainMin: number; arriveAtMs: number }): RemainView {
+  const raw = Number(input.remainMin);
+  const totalMin = Number.isFinite(raw) ? Math.max(0, raw) : 0;
+  const arriveAtMs = Number.isFinite(input.arriveAtMs) ? input.arriveAtMs : 0;
+  return { totalMin, arriveAtMs, overdue: false, arrived: totalMin < ARRIVED_BELOW_MIN };
+}
+
+/**
+ * ★ 末段步行段（`done` 相位）的剩余视图 —— **总时长唯一来源 = 实时剩余分钟**。
+ *
+ * ── 为什么必须单独一个函数（而不是调用方各写一遍）─────────────────────────
+ *   两个渲染位（`NavDetailBody` 详情头 / `RouteSheet` peek 摘要）都要这个分支，
+ *   而它内含 `ARRIVED_BELOW_MIN` 阈值。两处各写一遍 ⇒ 阈值迟早只改一处
+ *   ⇒ 出现「详情头说即将到达、peek 还写着 1 分」的第二个真相。
+ *
+ * ── `overdue` 恒 `false` 的理由 ────────────────────────────────────────
+ *   见 `remainLiveOf` 头注（**两处锚的语义不同，故 `done` 态不据规划锚判 overdue**）。
+ *   本函数就是它的 `done` 语义别名：实现只有一份，名字保留是因为它承载
+ *   「末段步行」这条业务含义，且既有断言按此名调用。
+ */
+export function remainWalkOnlyOf(input: {
+  /** 末段步行**实时**剩余分钟（`walkRemainMinOf` 的产物） */
+  walkRemainMin: number;
+  /** 到达时刻锚（原样透传，**不参与计算**）—— 通常传 `card.arriveAt` */
+  arriveAtMs: number;
+}): RemainView {
+  return remainLiveOf({ remainMin: input.walkRemainMin, arriveAtMs: input.arriveAtMs });
+}

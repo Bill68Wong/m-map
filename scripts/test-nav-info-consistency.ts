@@ -134,7 +134,7 @@ const deriveRow = (p: TrackProgress | null, rawSegSec: number | null, legIdx = 0
           shown != null ? `约 ${shown} 分` : "",
         ]
           .filter(Boolean)
-          .join(" · ") || null;
+          .join(" - ") || null;
   /**
    * 主行（`NavDetailBody.postStation`）：已过站时**前缀翻转、站号站名仍是被错过的那一站**。
    * 设计定稿要求「过站前后同一组站号站名逐字不变」⇒ 这里用下车站（`lastIdx`），

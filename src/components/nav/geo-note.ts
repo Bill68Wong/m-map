@@ -23,18 +23,18 @@
 import type { GeoState } from "./observe-hooks";
 
 /** 判定暂停、且定位轴处于 `ok`（暂停与定位无关）时的兜底句 */
-export const NOTE_GPS_UNAVAILABLE = "定位不可用 · 自动上车判断已暂停，上车后请点「手动标记上车」";
+export const NOTE_GPS_UNAVAILABLE = "定位不可用 - 自动上车判断已暂停，上车后请点「手动标记上车」";
 
 /** 权限被拒（`GeolocationPositionError.code === 1`）—— 语义词「设置」 */
-export const NOTE_GEO_DENIED = "定位权限没开 · 到系统「设置」里允许定位后自动恢复，也可上车后点「手动标记上车」";
+export const NOTE_GEO_DENIED = "定位权限没开 - 到系统「设置」里允许定位后自动恢复，也可上车后点「手动标记上车」";
 /** 无信号 / 位置不可用（`code === 2`：隧道、室内、地下停车场）—— 语义词「信号」 */
-export const NOTE_GEO_WEAK = "暂时收不到定位信号 · 走到开阔处会自动恢复，也可上车后点「手动标记上车」";
+export const NOTE_GEO_WEAK = "暂时收不到定位信号 - 走到开阔处会自动恢复，也可上车后点「手动标记上车」";
 /** 取位超时（`code === 3`）—— 语义词「重试」 */
-export const NOTE_GEO_TIMEOUT = "定位超时，正在自动重试 · 也可上车后点「手动标记上车」";
+export const NOTE_GEO_TIMEOUT = "定位超时，正在自动重试 - 也可上车后点「手动标记上车」";
 /** 精度差但仍能用（**不是错误**）：不用警报词，只陈述事实 */
-export const NOTE_GEO_LOW_ACC = "定位精度偏低 · 暂时无法自动判断上车，上车后请点「手动标记上车」";
+export const NOTE_GEO_LOW_ACC = "定位精度偏低 - 暂时无法自动判断上车，上车后请点「手动标记上车」";
 /** 长时间无新帧（**不是错误**）：数据稍旧，同样只陈述事实 */
-export const NOTE_GEO_STALE = "定位有一会儿没更新 · 暂时无法自动判断上车，上车后请点「手动标记上车」";
+export const NOTE_GEO_STALE = "定位有一会儿没更新 - 暂时无法自动判断上车，上车后请点「手动标记上车」";
 
 const BY_GEO: Record<GeoState, string> = {
   denied: NOTE_GEO_DENIED,

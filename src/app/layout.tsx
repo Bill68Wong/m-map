@@ -9,7 +9,7 @@ import "./globals.css";
 const SITE_URL = "https://macaomap.vercel.app";
 
 export const metadata: Metadata = {
-  title: { default: "M Map", template: "%s · M Map" },
+  title: { default: "M Map", template: "%s - M Map" },
   description: "澳门巴士 / 轻轨全澳导航：全屏地图、路线收藏与实时报站",
   manifest: "/manifest.webmanifest",
   /**
@@ -26,16 +26,16 @@ export const metadata: Metadata = {
     siteName: "M Map",
     locale: "zh_CN",
     url: "/",
-    title: "M Map · 澳门巴士／轻轨全澳导航",
+    title: "M Map - 澳门巴士／轻轨全澳导航",
     description:
       "输入起点与终点，给出步行 + 巴士／轻轨 + 换乘 + 实时到站的门到门方案，按总时长排序。",
     images: [
-      { url: "/brand/og.png", width: 1200, height: 630, alt: "M Map · 澳门巴士与轻轨全澳导航" },
+      { url: "/brand/og.png", width: 1200, height: 630, alt: "M Map - 澳门巴士与轻轨全澳导航" },
     ],
   },
   twitter: {
     card: "summary_large_image",
-    title: "M Map · 澳门巴士／轻轨全澳导航",
+    title: "M Map - 澳门巴士／轻轨全澳导航",
     description:
       "输入起点与终点，给出步行 + 巴士／轻轨 + 换乘 + 实时到站的门到门方案，按总时长排序。",
     images: ["/brand/og.png"],

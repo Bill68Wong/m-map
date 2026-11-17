@@ -119,7 +119,7 @@ export function createVehicleMatcher(): VehicleMatcher {
 
       /* ② 组装输入并调用（`enabled` 原样透传：关闭 ⇒ 算法自己返回 low，不产生副作用） */
       /** 空阶梯（几何/阶梯未就绪时用）—— 结构与 `LrtLadder` 一致，让硬门 `g1` 去否决 */
-      const EMPTY_LADDER: LrtLadder = { path: [], ladder: [], valid: [] };
+      const EMPTY_LADDER: LrtLadder = { path: [], ladder: [], valid: [], endStop: null };
       const input: MatchInput = {
         colored: args.colored ?? [],
         ladder: args.ladder ?? EMPTY_LADDER,

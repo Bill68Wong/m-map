@@ -87,6 +87,50 @@ CREATE TABLE IF NOT EXISTS route_stations (
     UNIQUE (route_id, dsat_dir, seq)
 );
 
+-- 2.5b 线路走向（地图画线用；**在用但此前未登记进本文件**，2026-11-17 补登）
+--   一行 = 线路 × 我们的方向(dsat_dir)。polyline 是「lng,lat;lng,lat;…」坐标串，**GCJ-02**。
+--   建表语句原先只存在于 db/migrate-v2900.ts，本文件长期缺这一段（存量分叉）——
+--   按 scripts/lib/push-guard-rules.mjs 的「新增表必须与迁移脚本同批进 schema.sql」补齐。
+--   ⚠️ v2900 的 CREATE 与本段等价；重复执行时 v2900 退化为 no-op，不冲突。
+CREATE TABLE IF NOT EXISTS route_shapes (
+    id            SERIAL PRIMARY KEY,
+    route_code    TEXT        NOT NULL,
+    kind          TEXT        NOT NULL DEFAULT 'bus',
+    dsat_dir      TEXT        NOT NULL,
+    amap_line_id  TEXT,
+    amap_name     TEXT,
+    amap_dir      TEXT,
+    polyline      TEXT        NOT NULL,
+    points        INTEGER     NOT NULL,
+    start_stop    TEXT,
+    end_stop      TEXT,
+    min_lng       DOUBLE PRECISION,
+    min_lat       DOUBLE PRECISION,
+    max_lng       DOUBLE PRECISION,
+    max_lat       DOUBLE PRECISION,
+    src           TEXT        NOT NULL DEFAULT 'amap.v3.bus.linename',
+    fetched_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- 几何来源（纯溯源元数据，无代码读它做分支判断）。取值语义见下方 COMMENT。
+    geom_source   TEXT        NOT NULL DEFAULT 'amap-gcj02',
+    CONSTRAINT route_shapes_uniq UNIQUE (route_code, dsat_dir)
+);
+CREATE INDEX IF NOT EXISTS route_shapes_code ON route_shapes (route_code);
+-- 存量库升级路径（本文件范式：CREATE … IF NOT EXISTS 之后紧跟 ALTER … ADD COLUMN IF NOT EXISTS）
+ALTER TABLE route_shapes ADD COLUMN IF NOT EXISTS geom_source TEXT NOT NULL DEFAULT 'amap-gcj02';
+
+COMMENT ON TABLE route_shapes IS
+  '线路走向（地图画线用）。一行 = 线路 × 我们的方向(dsat_dir)；polyline 为 GCJ-02 坐标串，直接喂高德地图。
+   **来源不唯一，辨别只看 geom_source 列**：dsat-shp-20261112 = 澳门交通事务局官方 ROUTE_NETWORK.SHP 反算；
+   amap-gcj02 = 高德 /v3/bus/linename 抓取。两者可共存于同一张表（2026-11-17 起 108 行官方 / 9 行高德）。
+   ⚠️ 高德有 QPS 限流 ⇒ 只允许离线抓取入库，运行时禁实时查询。抓取：scripts/fetch-route-shapes.ts。';
+COMMENT ON COLUMN route_shapes.polyline IS
+  '「lng,lat;lng,lat;...」坐标串（**GCJ-02**；同库 stations 表是 WGS84，两者不可混用）';
+COMMENT ON COLUMN route_shapes.dsat_dir IS
+  '我们的方向口径（与 route_stations.dsat_dir 对齐）；双方向线路会有两行';
+COMMENT ON COLUMN route_shapes.geom_source IS
+  '几何来源标识：dsat-shp-20261112 = 澳门交通事务局官方 SHP 反算（Macau_Grid→WGS84→GCJ-02）；
+   amap-gcj02 = 高德 /v3/bus/linename 抓取。默认值 amap-gcj02 是为存量行兜底，不表示当前值一定是高德。';
+
 -- 2.9 计时器会话（一次完整通勤 = 一个 session）
 CREATE TABLE IF NOT EXISTS timer_sessions (
     id            SERIAL PRIMARY KEY,

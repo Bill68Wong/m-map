@@ -34,7 +34,9 @@ export default function AlightBanner({
       <span className="nav-alarm__icon" aria-hidden="true">
         <Icon name="info-circle" size={20} />
       </span>
-      <span className="nav-alarm__lead">{now ? "请下车 ·" : "准备下车 ·"}</span>
+      {/* R6：原来「请下车」「准备下车」后面跟着一个中点，已删 —— 与站名的间隔由 `.nav-alarm`
+          的 `gap: 10px`（globals.css:7095）承担，两段本就分属两个 flex 子项。 */}
+      <span className="nav-alarm__lead">{now ? "请下车" : "准备下车"}</span>
       <span className="nav-alarm__dest">{destLabel}</span>
     </div>
   );

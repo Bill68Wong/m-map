@@ -75,7 +75,7 @@ import { circuitState, recordSearchCall } from "./quota";
  * ★ 文案 = **简体**（产品总原则：界面文案一律简体 · 站名/线路名一律繁体）。
  * ★ 【7②】v2.0.1：主入口已从「回车」改为**输入框右侧的搜索按钮** ⇒ 提示同步改为「点『搜索』」。
  */
-export const HINT_NO_LOCAL_ENTER = "没有本地结果 · 点「搜索」查找网上的新地点";
+export const HINT_NO_LOCAL_ENTER = "没有本地结果 - 点「搜索」查找网上的新地点";
 /**
  * 高德也无结果时的行内提示（简体；同产品总原则）
  * ★ 2026-11-12：所有结果都因**非澳门**被剔时，不说「换个说法」——要说清**为什么**没有结果，
@@ -83,12 +83,12 @@ export const HINT_NO_LOCAL_ENTER = "没有本地结果 · 点「搜索」查找�
  */
 export const HINT_AMAP_EMPTY = "找不到这个地点，试试换个说法";
 /** 结果全部落在澳门以外（或无法证明在澳门）时的行内提示 */
-export const HINT_MACAU_ONLY = "该地点不在澳门范围内 · 本应用只提供澳门地点";
+export const HINT_MACAU_ONLY = "该地点不在澳门范围内 - 本应用只提供澳门地点";
 /**
  * ★ 搜索优化（2026-09-21）：**搜索配额熔断中**（高德兜底已停）的行内提示。
  * 为什么必须有它：熔断时点「搜索」拿不到任何网上结果，若不告知，用户只会觉得「搜索坏了」。
  */
-export const HINT_AMAP_CIRCUIT = "在线搜索暂时不可用（本月配额已满）· 仍可搜本地站名";
+export const HINT_AMAP_CIRCUIT = "在线搜索暂时不可用（本月配额已满）- 仍可搜本地站名";
 
 export interface SuggestOptions {
   /** 用户当前位置（GCJ-02）——用于近者优先排序 */
