@@ -426,11 +426,21 @@ async function loadStaticsUncached(): Promise<RecStatic> {
   for (const r of rows.colors) routeColors[r.code] = r.color;
 
   /**
+   * ★ v4.1.0：**邻接对沿线里程**（米）。**单一源**：同一份 `rows.hopDist` 同时喂
+   * `SegmentIndex.hopMeters`（L6/L7 物理护栏）与 `RouteIndex.hopMeters`（R2 并行线补漏门槛）。
+   * ⚠️ 不要为后者另查一次库、也不要各建一份 Map —— 两份就会有两种真相。
+   */
+  const hopMeters = new Map(rows.hopDist.map((d) => [`${d.r}|${d.f}|${d.t}`, Number(d.m)]));
+
+  /**
    * ★ v4.2.0：第三个参数是 `routes.is_loop`（循环线权威口径）。
    * `rows.routeRows` 在**旧缓存 payload** 上是 `undefined`（字段是后加的）⇒
    * `buildRouteIndexFromRows` 会回落老口径并告警，**不要**在这里 `?? []` 兜底。
+   *
+   * ★ R2（2026-11-17）：第四个参数是上面的 `hopMeters`（可选）。缺失时
+   * `RouteIndex.hopMeters` 为空 ⇒ 并行线补漏整体降级（不新增），不会崩、也不会换口径硬算。
    */
-  const routeIdx = buildRouteIndexFromRows(rows.routeStops, rows.stations, rows.routeRows);
+  const routeIdx = buildRouteIndexFromRows(rows.routeStops, rows.stations, rows.routeRows, hopMeters);
 
   // ★ v4.1.0：中途总站集合（站名含總站/总站且不在首末位）——纯函数，零额外 DB 往返
   //   判据本体在 `src/lib/rebuild/mid-terminus.ts`（不要在此另写一套）。
@@ -438,7 +448,6 @@ async function loadStaticsUncached(): Promise<RecStatic> {
     rows.routeStops,
     new Map(rows.stations.map((s) => [s.code, s.name_tc])),
   );
-  const hopMeters = new Map(rows.hopDist.map((d) => [`${d.r}|${d.f}|${d.t}`, Number(d.m)]));
 
   return {
     routeIdx,

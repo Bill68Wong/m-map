@@ -28,6 +28,8 @@ import type { RouteIndex } from "@/lib/recommend/types";
 import { segmentsOf } from "@/lib/recommend/enumerate";
 import { normalizeName } from "@/lib/shared/normalize";
 import { anchorMainFor } from "./anchor";
+import { routesServing } from "./enumerate-nav";
+import { makeMeasure, mergeParallels, pickExtraParallels } from "./parallel-pick";
 import type { AmapPlanLeg, AmapStop, StationConfidence } from "./types";
 import type { GeoStation } from "./graph-search";
 
@@ -223,13 +225,107 @@ export function bridgeLeg(ctx: BridgeContext, leg: AmapPlanLeg): AmapPlanLeg {
 
   // ★ v2.3.0（B2）：同段并行线 —— 其余高德线路名 → 本库线码（**必须 `valid.has` 才认**）；
   //   去重、剔除主干线自身；映射不出（null）则不填（宁少不误）。
-  const parallelRoutes = dedupe(
+  const declaredParallels = dedupe(
     (leg.parallelNames ?? [])
       .map((n) => routeCodeOf(n, leg.kind, ctx.validRoutes))
       .filter((c): c is string => !!c),
   ).filter((c) => c !== mappedRoute);
 
+  /**
+   * ★ R2（2026-11-17）：**反查补漏** —— 用我们自己的站序索引补上「高德没给、但确实同段」的线。
+   *
+   * 为什么需要：`parallelNames` 是高德 `buslines[1..]` 的**唯一**入口，而实测 79.0% 的方案
+   * 首段只有 1 条线（`transit_cache` 985 条响应 / 5074 个方案）⇒ 并行线常年为空
+   * ⇒ `siblingSeedsOf` 不造 sibling ⇒ 「后续班车」只剩推荐线。
+   *
+   * 判据**全部**在 `nav/parallel-pick.ts`（纯函数，单测在那里守）；本处只做三件事：
+   *   ① 把「反查候选」和「实测事实」喂进去；② 合并；③ 什么都不满足时**原样返回**。
+   *   ⛔ 不要在这里加任何阈值/过滤 —— 散一条出去，单测就只能守半个判据。
+   *
+   * 只做加法：`declaredParallels`（高德原名单）内容与顺序逐字不动（`mergeParallels` 保证）。
+   * 无里程数据 ⇒ `pickExtraParallels` 判 `main_unmeasurable` ⇒ `extra` 为空 ⇒ 走下面的
+   * `: declaredParallels` 分支，**逐字节等价于改前**。
+   */
+  const extraParallels = pickExtraForSegment(ctx, mappedRoute, mappedBoard, mappedAlight, declaredParallels);
+  const parallelRoutes = extraParallels.length
+    ? mergeParallels(declaredParallels, extraParallels)
+    : declaredParallels;
+
   return { ...leg, mappedRoute, mappedBoard, mappedAlight, mappedHops, parallelRoutes };
+}
+
+/**
+ * R2：降级告警的**进程级**一次性开关（见 `pickExtraForSegment`）。
+ *
+ * 放模块作用域而不是请求作用域，正是为了「每个进程只打一次」：
+ * Vercel 每个 Serverless 实例冷启动各打一次 ⇒ 日志条数 = 实例数，不随请求量增长。
+ */
+let warnedNoMileage = false;
+
+/**
+ * R2：反查候选 → 收口判据 → 待追加名单。
+ *
+ * ⚠️ **本函数不允许长判据**：它只做装配（取候选、注入事实、返回 `picked`）。
+ *    任何 `if (ratio > …)` / `if (hops > …)` 都必须住在 `parallel-pick.ts`。
+ */
+function pickExtraForSegment(
+  ctx: BridgeContext,
+  mappedRoute: string | null,
+  mappedBoard: string | null,
+  mappedAlight: string | null,
+  declared: string[],
+): string[] {
+  if (!mappedRoute || !mappedBoard || !mappedAlight) return [];
+  if (mainCodeOf(mappedBoard) === mainCodeOf(mappedAlight)) return [];
+  /**
+   * ★ R2（2026-11-17 · team-lead 要求）：**里程缺失时打一次进程级告警**。
+   *
+   * 为什么必须有：没有 `route_mileage` 就一条都不会新增，而**线上表现与改前逐字相同**
+   * ⇒ 这是 fail-safe，也是**静默空转**。「上线了但等于没上线、且没有任何痕迹」不可接受。
+   * Vercel 日志里**看得见这一行** = 它没在工作；**看不见** = 它在工作。
+   *
+   * 约束（改动前先读）：
+   *   · **进程级只打一次**（模块级 `warnedNoMileage`）—— 一次导航有多个方案、多腿，不许刷屏；
+   *   · **不改任何响应结构、不动 `NavStats`**（新观测面不在 R2 范围）；
+   *   · 早退返回 `[]` 与「跑一遍判据后得空」**观测结果完全相同**（后者见
+   *     `parallel-pick` 的 `main_unmeasurable` 分支，`test:parallel-pick` 有断言），
+   *     早退只是顺手省掉一次全库反查。
+   */
+  if (!ctx.routeIdx.hopMeters?.size) {
+    if (!warnedNoMileage) {
+      warnedNoMileage = true;
+      console.warn(
+        "[parallel] hopMeters 为空 ⇒ 并行线补漏整体降级（不新增）；请检查 db:station-mileage 是否已跑",
+      );
+    }
+    return [];
+  }
+  const candidates = routesServing(ctx.routeIdx, mappedBoard, mappedAlight, memoOf(ctx.routeIdx));
+  const { picked } = pickExtraParallels(
+    { mainRoute: mappedRoute, declared, candidates },
+    makeMeasure(ctx.routeIdx, mappedBoard, mappedAlight),
+  );
+  return picked;
+}
+
+
+/**
+ * R2：**请求内**反查记忆（`board|alight → 线路集合`）。
+ *
+ * 为什么可以挂在 `RouteIndex` 上（而不是每次请求新建）：`routesServing` 的返回值是**索引的
+ * 纯函数** —— 索引不变则值恒不变，缓存它不引入任何随请求变化的状态，也不会串请求。
+ * 上限 4096 条后整体清空（最坏退化为无缓存），避免长尾站点把 Map 撑大。
+ */
+const servingMemo = new WeakMap<RouteIndex, Map<string, string[]>>();
+function memoOf(idx: RouteIndex): Map<string, string[]> {
+  let m = servingMemo.get(idx);
+  if (!m) {
+    m = new Map();
+    servingMemo.set(idx, m);
+  } else if (m.size > 4096) {
+    m.clear();
+  }
+  return m;
 }
 
 /** 去重（保序） */

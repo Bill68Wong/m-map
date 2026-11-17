@@ -36,11 +36,13 @@ import {
   remainOf,
   remainServedOf,
   remainTotalMinOf,
+  remainLiveOf,
+  remainWalkOnlyOf,
 } from "@/lib/nav/remaining-view";
 import { remainFromIdxOf, stopsAwayOf } from "@/lib/nav/track";
 /** ★ 2026-11-05：「人确实在车上」判据（与 `NavShell` 的锁存共用同一份，见 `riding-real.ts`） */
 import { ridingRealOfRide } from "./riding-real";
-import type { RideTrackView } from "./useRideTracking";
+import type { RidePhase, RideTrackView } from "./useRideTracking";
 /* ★ v3.6.0 S5：步行预览（展开键 + 静态步骤列表） */
 import WalkSegToggle from "@/components/walk/WalkSegToggle";
 import WalkStepList, { distText } from "@/components/walk/WalkStepList";
@@ -606,6 +608,31 @@ export interface NavDetailBodyProps {
    *   有了这个属性，QA 可断言「点刷新后不得出现 `403:*`」，线上也可一眼看出是 403 还是 5xx。
    */
   liveRemainFail?: string | null;
+  /**
+   * ★ R1 阶段1（2026-11-13）：**导航内唯一时钟**（宿主 `RouteSheet` 的单个 tick 提供）。
+   *   传了它 ⇒ 本组件**不再自走 15s 定时器**：详情头与 peek 摘要从此读同一个「现在」。
+   *   缺省 `null` ⇒ 保持旧行为（自走 15s）—— 收藏页薄壳 `RouteDetailSheet` 走这条。
+   */
+  nowMs?: number | null;
+  /**
+   * ★ R1 阶段1：**乘车相位**（`off` / `boarding` / `riding` / `done`）。
+   *   为什么不复用 `track.phase`：宿主在步行段把 `track` 置 `null`
+   *   （`NavShell` 的 `track: walkActive ? null : trackView`），而「末段步行」只在
+   *   步行段活跃时出现 ⇒ 从 `track` 取相位恰好取不到。
+   */
+  ridePhase?: RidePhase | null;
+  /**
+   * ★ R1 阶段1：**末段步行实时剩余分钟**（`walkRemainMinOf` 产物）。
+   *   `null` = 无末段几何 / 判不出来 ⇒ 不覆盖显示。
+   *   仅在 `ridePhase === "done"` 时消费（其他相位归阶段2）。
+   */
+  walkInLiveMin?: number | null;
+  /**
+   * ★ R1 阶段2（2026-11-13）：**`off` / `boarding` 的实时总剩余分钟**
+   *   （`NavShell` 用 `remain-parts.ts` 那份清单算出）。
+   *   `null` = 不可用 ⇒ 不覆盖显示（回落 `card.arriveAt` 递减）。
+   */
+  preRideLiveMin?: number | null;
 }
 
 export default function NavDetailBody({
@@ -631,6 +658,11 @@ export default function NavDetailBody({
   liveRemain = null,
   liveStrips = null,
   liveRemainFail = null,
+  /* ★ R1 阶段1（2026-11-13）：唯一时钟 + 乘车相位 + 末段步行实时值 */
+  nowMs = null,
+  ridePhase = null,
+  walkInLiveMin = null,
+  preRideLiveMin = null,
 }: NavDetailBodyProps) {
   /**
    * ★ T1：步行步骤展开态（不记忆，父组件持有亦不落盘）。
@@ -831,19 +863,29 @@ export default function NavDetailBody({
     const parts: string[] = [];
     if (stopsAway != null) parts.push(`还有 ${stopsAway} 站下车`);
     if (shownAlightMin != null) parts.push(`约 ${shownAlightMin} 分`);
-    return parts.length ? parts.join(" · ") : null;
+    return parts.length ? parts.join(" - ") : null;
   }, [infoMode, missedStop, legIdx, card.rides.length, track?.alarm, stopsAway, shownAlightMin]);
 
   /**
    * 15s 心跳：**只服务顶部「全程剩余」的时钟重算**（`remainNowMs`）。
    * ⚠️ U4 之后它**不再**驱动「到下车分钟」—— 那个数字来自服务端重算（见 `alightMin`），
    *   `data-eta-remain` 的旧语义「本地每 15s 递减」随之作废（同源同值，不再独立递减）。
+   *
+   * ══ ★ R1 阶段1（2026-11-13）：被宿主接管 ⇒ 本定时器**停用** ══════════════
+   *   原因（病根）：本组件 15s、宿主 `RouteSheet` 1s，两个定时器各自取「现在」，
+   *   而两个渲染位（详情头 / peek 摘要）读的是**同一个** `card.arriveAt`
+   *   ⇒ 详情头每 15s 跳一格、peek 冻住（「详情头实时、peek 冻住」）。
+   *   ⇒ 宿主传 `nowMs` 时本定时器不再启动（README：唯一时钟）。
+   *   **保留**自走分支：收藏页薄壳 `RouteDetailSheet` 没有宿主 tick（也不会传 `nowMs`），
+   *   若直接删掉定时器，那里的剩余时间会永久冻在挂载那一刻 —— 那是**新**缺陷。
    */
+  const hostedNowMs = nowMs;
   const [etaTick, setEtaTick] = useState(0);
   useEffect(() => {
+    if (hostedNowMs != null) return; // 宿主供钟 ⇒ 本组件不另起一个
     const t = setInterval(() => setEtaTick((x) => x + 1), 15_000);
     return () => clearInterval(t);
-  }, []);
+  }, [hostedNowMs]);
 
   /* ══════════════════════════════════════════════════════════════════════
      ★ 2026-11-03（需求 1）：全程剩余 / 到达时刻「活」起来
@@ -860,28 +902,62 @@ export default function NavDetailBody({
 
      · 当前时刻：`Date.now() + clockOffsetMs`（本地时间映射到服务端时间轴）；
        ⚠️ **禁止渲染期直接 `Date.now()`**（`useCooldown.ts:15` 项目纪律）⇒ 取在
-       `useMemo` 里，且**只由既有 15s `etaTick` 驱动**（不新增第二个定时器）。
+       `useMemo` 里。时钟来源**只有两个可能**：宿主 `nowMs`（导航内，唯一 tick）
+       或本组件 15s `etaTick`（收藏页薄壳，无宿主）——**二者互斥**，不并存。
      · 两条语义红线（刻意不同，勿"统一"）见 `src/lib/nav/remaining-view.ts` 头注。
      ══════════════════════════════════════════════════════════════════════ */
   const clockOffsetMs = liveRemain?.clockOffsetMs ?? 0;
-  /** 服务端时间轴上的"现在"（无服务端结果时等于本地时间） */
+  /**
+   * 服务端时间轴上的"现在"（无服务端结果时等于本地时间）。
+   * ★ R1 阶段1：有宿主时钟（`nowMs`）就**只认它** —— 与 peek 摘要同一个「现在」。
+   */
   const remainNowMs = useMemo(
-    () => Date.now() + clockOffsetMs,
+    () => (hostedNowMs != null ? hostedNowMs : Date.now()) + clockOffsetMs,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [etaTick, clockOffsetMs],
+    [hostedNowMs, etaTick, clockOffsetMs],
   );
+  /**
+   * ★ R1 阶段1（2026-11-13）：`done`（**最后一程**已下车）+ 末段步行实时值可用
+   *   ⇒ 总剩余改由**步行段**提供，不再用 `card.arriveAt` 兜底。
+   *
+   * ── 为什么必须换掉（负责人报的「下车瞬间剩余时间突变」）─────────────────
+   *   `done` 只在最后一程发生（`useRideTracking.ts:2324-2325`：还有下一腿就换腿，
+   *   否则 `setPhase("done")`）⇒ 此时真实剩余**就是**末段步行那段。
+   *   而 `done` 时 `liveRemain` 必为 `null`（`useNavRemaining.ts:172` 的
+   *   `enabled = phase === "riding"`，`:283-296` 离开 riding 即清空），
+   *   旧代码于是落到 `remainOf(card.arriveAt, now)` —— 那是**规划时**算出的绝对到达时刻
+   *   （`remaining.ts:49-50`：`patchedCard` 只在服务端内部流转、绝不下发）。
+   *   两个量语义不同（「规划时预计到达」vs「从这儿到目的地还剩多久」），
+   *   切换瞬间数字必然跳，这就是突变源。
+   *
+   * ── 为什么与 `RouteSheet.peekRemain` 调**同一个** `remainWalkOnlyOf` ────────
+   *   两处是同一组数字的两个渲染位；各写一遍 ⇒ 详情头与 peek 说两个数。
+   *   `overdue` 在该视图恒 `false` 的理由见其头注（`card.arriveAt` 锚在 done 态不可信）。
+   */
+  const walkTailActive = ridePhase === "done" && walkInLiveMin !== null;
+  /**
+   * ★ R1 阶段2（2026-11-13）：`off` / `boarding` ⇒ **实时总剩余**。
+   *   排在 `liveRemain` 之前（那两个相位 `liveRemain` 必为 `null`，先判 `lr` 会落到
+   *   `remainOf(card.arriveAt)` 的规划快照递减上）。与 `RouteSheet.peekRemain` 同源同序。
+   */
+  const preRideActive =
+    (ridePhase === "off" || ridePhase === "boarding") && preRideLiveMin !== null;
   const remain = useMemo(
     () =>
-      liveRemain
-        ? remainServedOf({
-            remainingMin: liveRemain.remainingMin,
-            serverNowMs: liveRemain.serverNowMs,
-            staleSec: liveRemain.staleSec,
-            arriveAtMs: liveRemain.arriveAt,
-            nowMs: remainNowMs,
-          })
-        : remainOf(card.arriveAt, remainNowMs),
-    [liveRemain, remainNowMs, card.arriveAt],
+      walkTailActive
+        ? remainWalkOnlyOf({ walkRemainMin: walkInLiveMin ?? 0, arriveAtMs: card.arriveAt })
+        : preRideActive
+          ? remainLiveOf({ remainMin: preRideLiveMin ?? 0, arriveAtMs: card.arriveAt })
+          : liveRemain
+            ? remainServedOf({
+                remainingMin: liveRemain.remainingMin,
+                serverNowMs: liveRemain.serverNowMs,
+                staleSec: liveRemain.staleSec,
+                arriveAtMs: liveRemain.arriveAt,
+                nowMs: remainNowMs,
+              })
+            : remainOf(card.arriveAt, remainNowMs),
+    [walkTailActive, walkInLiveMin, preRideActive, preRideLiveMin, liveRemain, remainNowMs, card.arriveAt],
   );
   /** 全程剩余（整数分钟，已 clamp ≥0 —— **绝不出现 "-3 分"**） */
   const remainTotalMin = remainTotalMinOf(remain);
@@ -942,7 +1018,7 @@ export default function NavDetailBody({
       meta.minutes ? `约 ${meta.minutes} 分钟` : "",
     ]
       .filter(Boolean)
-      .join(" · ");
+      .join(" - ");
     return (
       <div className="rc-walkpreview">
         {pv.phase === "ready" ? (
@@ -959,7 +1035,7 @@ export default function NavDetailBody({
                   步骤列表与「全程 · 时间」摘要保留。 */}
               {pv.totalDistM > 0 && (
                 <span className="rc-walkpreview__go-meta">
-                  全程 {distText(pv.totalDistM)} · 约 {Math.max(1, Math.round(pv.totalMin))} 分钟
+                  全程 {distText(pv.totalDistM)} - 约 {Math.max(1, Math.round(pv.totalMin))} 分钟
                 </span>
               )}
             </div>
@@ -967,12 +1043,13 @@ export default function NavDetailBody({
         ) : pv.phase === "failed" ? (
           /* 降级：只给直线距离 + 固定步速估算，绝不显示假的分步（架构 §3.3 纪律 4） */
           <p className="rc-walkpreview__fallback t-label t-muted">
-            步行路径暂时取不到{metaText ? ` · ${metaText}` : ""}
+            步行路径暂时取不到{metaText ? ` - ${metaText}` : ""}
           </p>
         ) : (
           <p className="rc-walkpreview__sk t-label t-muted">
             {metaText || "步行距离估算中"}
-            {" · 步骤载入中…"}
+            <br />
+            步骤载入中…
           </p>
         )}
       </div>
@@ -1039,7 +1116,7 @@ export default function NavDetailBody({
                 预计 <b>{macauClock(remain.arriveAtMs)}</b> 到达
               </>
             )}
-            {card.crossBorder && <span className="rc-warn"> · 不含通关</span>}
+            {card.crossBorder && <span className="rc-warn"> - 不含通关</span>}
           </span>
         </div>
         <div className="rc-dhead__r">
@@ -1295,7 +1372,7 @@ export default function NavDetailBody({
       )}
 
       <div className="rc-foot">
-        <span className="rc-hint t-muted">数据来源：澳门交通事务局（DSAT）· 高德地图</span>
+        <span className="rc-hint t-muted">数据来源：澳门交通事务局（DSAT）- 高德地图</span>
       </div>
     </>
   );

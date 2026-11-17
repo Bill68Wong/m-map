@@ -211,7 +211,7 @@ export function useBoardingEta(opts: UseBoardingEtaOpts): UseBoardingEta {
       const etaMinRaw = Number(hit.etaMin);
       const etaMin = Number.isFinite(etaMinRaw) ? Math.max(0, Math.round(etaMinRaw)) : null;
       const n = Math.max(0, Math.round(stopsAway));
-      const text = etaMin == null ? `还有 ${n} 站` : `还有 ${n} 站 · 约 ${Math.max(1, etaMin)} 分`;
+      const text = etaMin == null ? `还有 ${n} 站` : `还有 ${n} 站 - 约 ${Math.max(1, etaMin)} 分`;
 
       seqRef.current += 1;
       setLive({

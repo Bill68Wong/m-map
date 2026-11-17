@@ -194,7 +194,7 @@ function TqhResultRow({ trip, onOpen }: { trip: TqhTrip; onOpen: (t: TqhTrip) =>
         <span className="ssheet__name">{trip.line_full_name}</span>
         <span className="ssheet__addr t-muted">
           {trip.direction}
-          {dep ? ` · ${dep} 发车` : ""}
+          {dep ? ` - ${dep} 发车` : ""}
         </span>
       </span>
       <Icon name="forward" size={16} />
@@ -300,6 +300,12 @@ export interface SearchSheetProps {
  * ★ 2026-09-27（用户口径）：搜索结果统一「地点名 + 地址（小字）」，不显示行政区划。 */
 const MACAU_ZONE_WORDS =
   "澳门|澳門|花地玛堂区|花地瑪堂區|圣安多尼堂区|聖安多尼堂區|大堂区|大堂區|望德堂区|望德堂區|风顺堂区|風順堂區|嘉模堂区|嘉模堂區|圣方济各堂区|聖方濟各堂區|路氹填海区|路氹填海區";
+/**
+ * ⚠️ R6 保留中点（**不动**）：正则里的 `·` 匹配的是**外部数据**（高德返回的地址形如
+ *   「澳門」+中点+「花地瑪堂區」+中点+…，用中点分层）。这是**输入侧的解析契约**，不是界面文案 ——
+ *   改成空格会让区划前缀剥不干净（页面表现为地址行残留「澳門 花地瑪堂區」）。
+ *   紧随其后的 `cleanAddr` 末尾那条「去掉尾部中点/空白」的正则同理。
+ */
 const MACAU_ZONE_RE = new RegExp(`^(${MACAU_ZONE_WORDS})[·\\s]*`);
 
 /**
@@ -593,7 +599,7 @@ export default function SearchSheet({
     const json = await query(name, "enter", true);
     const top = json?.results?.[0];
     if (top) pick(top);
-    else setErr("这条地点暂时确认不到坐标 · 换个说法试试");
+    else setErr("这条地点暂时确认不到坐标 - 换个说法试试");
   }
 
   const results = resp?.results ?? [];
@@ -882,7 +888,7 @@ export default function SearchSheet({
 
             {/* ★ 2026-11-05：有通琴号命中时也不算"找不到"（否则同一屏同时显示结果与空态） */}
             {!loading && !results.length && !pending.length && !tqhHits.length && (
-              <p className="ssheet__empty t-muted">{hint ?? (err || "找不到这个地点 · 试试换个说法")}</p>
+              <p className="ssheet__empty t-muted">{hint ?? (err || "找不到这个地点 - 试试换个说法")}</p>
             )}
             {!!results.length && hint && <p className="ssheet__empty t-muted">{hint}</p>}
           </div>

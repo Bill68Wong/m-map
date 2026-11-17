@@ -1,6 +1,6 @@
 {
   "name": "must-dengxiao",
-  "version": "4.2.1",
+  "version": "4.3.0",
   "private": true,
   "description": "M Map · 澳门巴士 / 轻轨全澳导航：全屏地图、路线收藏与实时报站（数据来源：澳门交通事务局 DSAT）",
   "scripts": {
@@ -46,7 +46,7 @@
     "test:ride-note": "tsx scripts/test-ride-note.ts",
     "test:lrt-progress": "tsx scripts/test-lrt-progress.ts",
     "test:remaining-all": "npm run test:remaining && npm run test:strips && npm run test:remaining-route && npm run test:remaining-view && npm run test:remaining-contract && npm run test:remaining-fail",
-    "verify": "npm run test:remaining-all && npm run test:overview && npm run test:boarding-detect && npm run test:boarding-latency && npm run check:api-guards && npm run check:shape-coverage && npm run test:ride-note && npm run test:lrt-progress && npm run test:service-state && npm run test:alight-converge && npm run test:limits && npm run test:nav-info-consistency && npm run test:nav-catch-latch && npm run test:geo-resume && npm run test:vehicle-model && npm run test:vehicle-model-plate && npm run test:xborder-parse && npm run test:xborder-status && npm run test:xborder-compliance && npm run check:xborder-links && npm run test:station-spec && npm run test:stop-marks && npm run test:xborder-ui && npm run test:data-chain && npm run test:run-gate && npm run test:diagnostics-isolation && npm run test:tolerance-guard && npm run test:ingest-guards && npm run test:live-backtrack && npm run test:benchmark-readings && npm run test:rebuild-scope && npm run test:layer-prefs && npm run test:toilets-data && npm run test:poi-macau && npm run test:compass && npm run test:layer-view-guards && npm run test:poi-cache && npm run test:nav-params && npm run test:nav-area && npm run test:no-abs-paths && npm run test:nav-direction && npm run test:service-text && npm run test:compass-arrow && npm run test:compass-fallback && npm run test:compass-robust && npm run test:cron-auth && npm run test:xborder-credentials && npm run test:no-inline-secrets && npm run test:guard-scope",
+    "verify": "npm run test:remaining-all && npm run test:overview && npm run test:boarding-detect && npm run test:boarding-latency && npm run check:api-guards && npm run check:shape-coverage && npm run test:ride-note && npm run test:lrt-progress && npm run test:service-state && npm run test:alight-converge && npm run test:limits && npm run test:nav-info-consistency && npm run test:nav-catch-latch && npm run test:geo-resume && npm run test:vehicle-model && npm run test:vehicle-model-plate && npm run test:xborder-parse && npm run test:xborder-status && npm run test:xborder-compliance && npm run check:xborder-links && npm run test:station-spec && npm run test:stop-marks && npm run test:xborder-ui && npm run test:data-chain && npm run test:run-gate && npm run test:diagnostics-isolation && npm run test:tolerance-guard && npm run test:ingest-guards && npm run test:live-backtrack && npm run test:benchmark-readings && npm run test:rebuild-scope && npm run test:layer-prefs && npm run test:toilets-data && npm run test:poi-macau && npm run test:compass && npm run test:layer-view-guards && npm run test:poi-cache && npm run test:nav-params && npm run test:nav-area && npm run test:no-abs-paths && npm run test:nav-direction && npm run test:service-text && npm run test:compass-arrow && npm run test:compass-fallback && npm run test:compass-robust && npm run test:cron-auth && npm run test:xborder-credentials && npm run test:no-inline-secrets && npm run test:guard-scope && npm run test:route-shapes-gate && npm run test:no-xlsx-import && npm run test:ride-multiroute && npm run test:parallel-pick && npm run test:readme-version",
     "db:migrate-v071": "tsx scripts/db-guard.ts run db/migrate-v071.ts",
     "db:migrate-v090": "tsx scripts/db-guard.ts run db/migrate-v090.ts",
     "db:migrate-v100": "tsx scripts/db-guard.ts run db/migrate-v100.ts",
@@ -157,13 +157,20 @@
     "test:nav-direction": "tsx scripts/test-nav-direction.ts",
     "test:service-text": "tsx scripts/test-service-text.ts",
     "test:no-inline-secrets": "tsx scripts/test-no-inline-secrets.ts",
-    "test:guard-scope": "tsx scripts/test-guard-scope.ts"
+    "test:guard-scope": "tsx scripts/test-guard-scope.ts",
+    "test:route-shapes-gate": "tsx scripts/test-route-shapes-gate.ts",
+    "test:no-xlsx-import": "tsx scripts/test-no-xlsx-import.ts",
+    "test:ride-multiroute": "tsx scripts/test-ride-multiroute.ts",
+    "test:parallel-pick": "tsx scripts/test-parallel-pick.ts",
+    "docs:sync-version": "tsx scripts/sync-readme-version.ts",
+    "test:readme-version": "tsx scripts/test-readme-version.ts",
+    "postversion": "npm run docs:sync-version"
   },
   "dependencies": {
     "@tabler/icons-react": "^3.47.0",
     "@vercel/analytics": "^2.0.1",
     "@vercel/speed-insights": "^2.0.0",
-    "next": "^16.4.4",
+    "next": "^16.4.6",
     "pg": "^8.13.1",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
@@ -174,7 +181,7 @@
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "eslint": "^10.14.0",
-    "eslint-config-next": "^16.4.4",
+    "eslint-config-next": "^16.4.6",
     "prettier": "^3.4.2",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3"

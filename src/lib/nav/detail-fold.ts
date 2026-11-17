@@ -88,7 +88,7 @@ export async function foldLiveAt(
     const missing: string[] = [];
     for (const r of Object.keys(stopCodeOf)) {
       const b = live.get(`${r}@${stopCodeOf[r]}`)?.nearest ?? null;
-      if (b) out[r] = `还有 ${b.stopsAway} 站 · ${etaTextOf(b)}`;
+      if (b) out[r] = `还有 ${b.stopsAway} 站 - ${etaTextOf(b)}`;
       else missing.push(r);
     }
     if (missing.length) {

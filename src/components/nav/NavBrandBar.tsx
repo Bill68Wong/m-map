@@ -113,7 +113,7 @@ export default function NavBrandBar({
         {/* 品牌位（★ v2.15.0）：标志 + 字标。标志走内联 SVG ⇒ var(--brand-route/pin)
             随 prefers-color-scheme 自动换亮蓝/亮绿（详见 BrandMark.tsx 头注）。 */}
         {!navMode && (
-          <Link href="/help" className="nav-brand" aria-label="M Map · 帮助与合规说明">
+          <Link href="/help" className="nav-brand" aria-label="M Map - 帮助与合规说明">
             <BrandMark className="nav-brand__mark" size={20} />
             {"M Map"}
           </Link>

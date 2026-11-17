@@ -31,6 +31,7 @@
  */
 import { cumDistM, type LL } from "./route-overview";
 import { mainOf, progressOf, type TrackVehicle } from "./track";
+import { isCrossRoute } from "./ride-multiroute";
 import { alongMileM, followFramesOf, vehicleMileOnPath, type VehFrame } from "./follow-frames";
 import { FOLLOW_AMBIG_M, FOLLOW_MAX_D_M, medianOf } from "./follow-slope";
 
@@ -122,11 +123,27 @@ export function departedCandidatesOf(o: {
   tolM?: number;
   fixes?: { lng: number; lat: number; accuracy: number; ts: number }[] | null;
   vehFrames?: VehFrame[] | null;
+  /**
+   * ★ R3：本腿推荐线（`leg.route`）。给了 ⇒ **跨线车不参与候选**。
+   *
+   * 为什么必须排除（不是保守，是口径错配）：
+   *   本函数下面的里程差 `d` 是把各车投影到**本腿 `colored`**（推荐线形状）上算的。
+   *   并行线在分叉后的位置投到推荐线折线上会给出一个**无物理意义**的里程
+   *   ⇒ 跨线车可能因「里程差很小」被锁成用户的车，即 team-lead 说的
+   *   「21A 的车把 25 的锁定吸过去」。
+   *   ⇒ 跨线车**只进候选池供人眼挑**（`useRideTracking` 的 `candidates`），
+   *      **不进里程类锚定/锁牌**。
+   *
+   * ⚠️ 缺省 ⇒ 不排除任何车 = R3 之前的逐条行为（老调用点与手搓夹具不受影响）。
+   */
+  legRoute?: string;
 }): DepartCand[] {
   const board = mainOf(o.boardMain);
   if (!board) return [];
+  const legRoute = String(o.legRoute ?? "").trim();
   const cands: DepartCand[] = [];
   for (const v of o.vehicles) {
+    if (legRoute && isCrossRoute(v.route, legRoute)) continue;
     const via: DepartVia[] = [];
     if (v.interval?.from?.code && mainOf(v.interval.from.code) === board) via.push("L-a");
     if (o.stopMains && o.stopMains.length >= 2 && progressOf(o.stopMains, v).passedIdx >= 0) via.push("L-b");

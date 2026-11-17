@@ -144,6 +144,15 @@ import { catchUpLive } from "@/lib/nav/catch-up-live";
 import { WALK_BASE_M_PER_MIN, type CatchTier } from "@/lib/recommend/types";
 /** ★ 修复批 #10：剩余步行米数（未跟随态也能算）—— 与步行横幅/地图三线**同一个**投影函数 */
 import { progressOnPath } from "@/lib/walk/follow";
+/**
+ * ★ R1 阶段1（2026-11-13）：步行段「按已走路程比例」折算剩余分钟。
+ *   与 `remainOf` / `remainServedOf` 同族纯函数（`src/lib/nav/remaining-view.ts`）。
+ */
+import { walkRemainMinOf } from "@/lib/nav/remaining-view";
+/**
+ * ★ R1 阶段2（2026-11-13）：**剩余分量清单**（与服务端 `remaining.ts` 同一份，不许另列）。
+ */
+import { preRideRemainMinOf } from "@/lib/nav/remain-parts";
 import { useUserFix } from "./useUserFix";
 import { useUserHeading } from "./useUserHeading";
 import { noteOfHeading } from "./compass-note";
@@ -1275,6 +1284,87 @@ export default function NavShell({
   /** 供回调/effect 读取最新剩余米数（它们不能把每帧变化的数放进依赖） */
   const walkRemainRef = useRef<number | null>(walkRemainM);
   walkRemainRef.current = walkRemainM;
+
+  /**
+   * ★ R1 阶段1（2026-11-13）：**末段步行**（下车站 → 目的地）的实时剩余分钟。
+   *
+   * ── 为什么末段和首段用**同一个**函数 ─────────────────────────────────
+   *   首段 `walkRemainM` 走 `progressOnPath(...).remainM`（沿路折线投影），末段若另造一套
+   *   （直线距离 / 按时间递减）就会出现「首段实时、末段静态」的新不一致。
+   *   ⇒ 同一个 `progressOnPath`、同一个 `walkFix`、同一份 4 位小数缓存几何。
+   *
+   * ── 口径：`规划时长 × 剩余比例`，不是「剩余米 ÷ 步速」────────────────────
+   *   理由见 `remaining-view.ts#walkRemainMinOf` 头注（固定开销 vs 几何折算）。
+   *
+   * ── 三档退化（与首段完全一致，不另立规则）──────────────────────────────
+   *   ① 无末段几何（`steps` 空 / `stepsTotalM` 为 0）⇒ `null`（判不出来 ⇒ 不覆盖显示）；
+   *   ② 低精度 / 无定位 ⇒ `progressOnPath` 返回**全程**米数（保守侧：当作还没开始走）；
+   *   ③ `prev` 传 `null`：与首段同法（无状态投影），不引入第二份单调性状态。
+   */
+  const walkInSteps = walkRoute.in.steps;
+  const walkInTotalM = walkRoute.in.stepsTotalM;
+  const walkInRemainM = useMemo(() => {
+    if (!walkInSteps.length || !(walkInTotalM > 0)) return null;
+    return Math.max(0, progressOnPath(walkInSteps, walkInTotalM, walkFix, null).remainM);
+  }, [walkInSteps, walkInTotalM, walkFix]);
+  const walkInLiveMin = useMemo(() => {
+    if (walkInRemainM == null) return null;
+    return walkRemainMinOf(walkInRemainM, walkInTotalM, detailCard?.card.walkIn.minutes ?? 0);
+  }, [walkInRemainM, walkInTotalM, detailCard]);
+
+  /**
+   * ★ R1 阶段2（2026-11-13）：**`off` / `boarding` 相位的实时总剩余**。
+   *
+   * ── 口径（team-lead 规格）────────────────────────────────────────────
+   *   `total = walkOutLive + waitLive + Σ(ride.minutes + transfer.minutes + transfer.waitMin) + walkInLive`
+   *   分量清单**不在这里列** —— 它来自 `src/lib/nav/remain-parts.ts`（与服务端
+   *   `remaining.ts#recomputeRemaining` **同一份**）。本处只负责「取值器」：
+   *     · `curWaitMin`：**实时**优先（`boardingEtaMin`，来自已在跑的 `/api/station/eta`），
+   *       缺省回落 `card.rides[legIndex].waitMin`（静态）——这是**唯一**一处允许回落的地方，
+   *       因为 `waitMin` 是规划值，只用它等于「等了 5 分钟数字不减」；
+   *     · 下游候车（i > legIndex）：客户端拿不到班距索引 ⇒ 恒取 `ride.waitMin`（source `"kept"`），
+   *       与服务端 `remaining.ts` 的 `kept` 档同义；
+   *     · `curRideMin`：还没上车 ⇒ 静态 `rides[legIndex].minutes`（车上剩余无从谈起）；
+   *     · `curTransferMin`：`legIndex > 0` 时计入 `transfers[legIndex-1].minutes`（**还没走**），
+   *       见 `remain-parts.ts` 头注「已知边界 ①」——这一项没有实时几何，是静态值。
+   *
+   * ── 为什么只在 `off` / `boarding` 算 ─────────────────────────────────
+   *   `riding` 有服务端重算（`liveRemain`），`done` 只有末段步行 —— 都已经有更准的来源。
+   *   这里算出来仅在上述两相位被消费，`null` ⇒ 调用方回落旧口径（不覆盖）。
+   */
+  const preRideLegIndex = ride.legIndex;
+  const preRidePhase = ride.phase;
+  const preRideLiveMin = useMemo(() => {
+    const card = detailCard?.card;
+    if (!card) return null;
+    if (preRidePhase !== "off" && preRidePhase !== "boarding") return null;
+    /** 首段步行实时分钟（与赶车档同一个 `walkRemainM`，同一口径折算） */
+    const walkOutLive =
+      walkRemainM == null || !(walkOutTotalM > 0)
+        ? Math.max(0, card.walkOut.minutes)
+        : walkRemainMinOf(walkRemainM, walkOutTotalM, card.walkOut.minutes);
+    /**
+     * 分量清单与回落规则**一律在 `preRideRemainMinOf` 内**（对应
+     * `src/lib/nav/remain-parts.ts`）—— 本处只喂三个实时值，不自己列清单、不自己回落。
+     */
+    return preRideRemainMinOf({
+      card,
+      legIndex: preRideLegIndex,
+      nowMs: Date.now(),
+      walkOutRemainMin: walkOutLive,
+      /** 【唯一回落点】实时到站分钟优先，缺省才用规划 waitMin */
+      waitLiveMin: boardingEtaMin,
+      walkInRemainMin: walkInLiveMin,
+    });
+  }, [
+    detailCard,
+    preRidePhase,
+    preRideLegIndex,
+    boardingEtaMin,
+    walkRemainM,
+    walkOutTotalM,
+    walkInLiveMin,
+  ]);
 
   /** 重算门（与 `boardEtaEnabled` 同源；`catchGateRef` 供稳定回调读取） */
   const catchGate = boardEtaEnabled && (detailCard?.card.rides[0]?.kind ?? "bus") === "bus";
@@ -3026,6 +3116,25 @@ export default function NavShell({
                 degraded: detailCard.degraded,
                 destLabel: to.label,
                 phase: ov.phase,
+                /**
+                 * ★ R1 阶段1（2026-11-13）：**乘车相位，独立于 `track`**。
+                 *   为什么不能用 `track.phase`：`track` 在步行段被置 `null`
+                 *   （见下方 `track: walkActive ? null : trackView`），而「末段步行」
+                 *   恰恰只在步行段活跃时出现 ⇒ 从 `track` 取相位永远是 `undefined`。
+                 */
+                ridePhase: ride.phase,
+                /**
+                 * ★ R1 阶段1：**末段步行实时剩余分钟**（`walkRemainMinOf` 产物）。
+                 *   `null` = 无末段几何 / 判不出来 ⇒ 调用方**不覆盖**显示（回落原口径）。
+                 *   消费方：`NavDetailBody` 详情头 + `RouteSheet` peek 摘要（两处必须同源）。
+                 */
+                walkInLiveMin,
+                /**
+                 * ★ R1 阶段2：**`off` / `boarding` 的实时总剩余分钟**。
+                 *   `null` = 不可用（非这两相位 / 无卡）⇒ 调用方回落旧口径（`card.arriveAt` 递减）。
+                 *   消费方：`NavDetailBody` 详情头 + `RouteSheet` peek 摘要（两处必须同源）。
+                 */
+                preRideLiveMin,
                 body: ov.body,
                 /* ★ v3.6.0 S4：观测钩子改用唯一车辆来源（`ov.vehicles` 已删除） */
                 vehicles: ride.mapVehicles.length,

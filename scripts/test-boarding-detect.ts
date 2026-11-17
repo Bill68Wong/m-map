@@ -43,7 +43,10 @@ import {
   followSlopeOf,
 } from "@/lib/nav/follow-slope";
 import { followFramesOf, type FollowFrame, type VehFrame } from "@/lib/nav/follow-frames";
-import type { TrackVehicle } from "@/lib/nav/track";
+import { passedBoardOf, type TrackVehicle } from "@/lib/nav/track";
+import { isCrossRoute, mergeFrameVehicles, routeSetOf } from "@/lib/nav/ride-multiroute";
+import { matchVehicle } from "@/lib/nav/match-vehicle";
+import { buildLrtLadder } from "@/lib/nav/lrt-progress";
 import type { LL } from "@/lib/nav/route-overview";
 
 /* ── 断言器（禁硬编码聚合；逐条打点）──────────────────────────────── */
@@ -1397,6 +1400,179 @@ console.log("\n[㉒ 停站即上车]");
     const noLeft = autoBoardOf(inputOf({ vehicles: [vAtBoard], fixes: standing, walkActive: false, autoLeft: 0 }));
     eq(noLeft.hit, false, "次数用尽 ⇒ 停站判据也不再触发（如实停手）");
   }
+}
+
+
+/* ══════════ ⑮ R3：同卡多线（取数集合 / 帧合并 / 跨线隔离） ══════════
+ *
+ * 背景（2026-11-17 定性）：`fetchFrame` 原来只按**推荐线**取帧 ⇒ 并行线的车从未进 `list`
+ * ⇒ 用户实际上了 21A 时「无车牌可匹配 / 翻候选翻不到」。**不是判据保守，是数据从未进来。**
+ *
+ * 本组断言三件事（缺一不可）：
+ *   a) 单线腿的**请求数不变**（线路集合长度仍为 1）—— 防「给 87% 的单线场景加请求」；
+ *   b) 多线合并后每辆车带 `route` 且按 `plate` 去重、推荐线副本优先；
+ *   c) 跨线车**不进里程类锁牌/站序判据**（里程是投到本腿 `colored` 上算的，跨线无意义）。
+ */
+console.log("\n[⑮ R3 同卡多线]");
+{
+  const tv = (plate: string, m: number, extra: Partial<TrackVehicle> = {}): TrackVehicle => ({
+    ...vehAt(plate, m, 0).vehicles[0],
+    ...extra,
+  });
+
+  /* ⑮-a 单线腿：集合长度必须为 1（= 请求数不变） */
+  const single = routeSetOf("25", []);
+  ok(single.length === 1 && single[0] === "25", "单线腿 ⇒ 线路集合长度 1（请求数不变）", JSON.stringify(single));
+  ok(
+    routeSetOf("25", null).length === 1 && routeSetOf("25", undefined).length === 1,
+    "单线腿（parallelRoutes 为 null / 缺省）⇒ 长度仍为 1",
+  );
+
+  /* ⑮-b 多线集合：去重保序、剔空 */
+  const rs = routeSetOf("25", ["21A", "25", "21A", ""]);
+  ok(rs.length === 2 && rs[0] === "25" && rs[1] === "21A", "多线集合去重保序且剔空", JSON.stringify(rs));
+
+  /* ⑮-c 帧合并：route 标签 + plate 去重 + 推荐线优先 */
+  const frames = [
+    { route: "21A", vehicles: [{ plate: "AA1111" }, { plate: "SHARED" }] },
+    { route: "25", vehicles: [{ plate: "BB2222" }, { plate: "SHARED" }] },
+  ];
+  const merged = mergeFrameVehicles("25", frames);
+  ok(merged.length === 3, "合并后按 plate 去重（2+2 含 1 重叠 ⇒ 3 辆）", merged.map((m) => m.plate).join(","));
+  ok(merged.find((m) => m.plate === "AA1111")?.route === "21A", "并行线车带 route=21A");
+  ok(merged.find((m) => m.plate === "BB2222")?.route === "25", "推荐线车带 route=25");
+  ok(merged[0]?.plate === "BB2222", "同 plate 保留推荐线副本且排在前面", merged.map((m) => m.plate).join(","));
+  ok(
+    isCrossRoute("21A", "25") && !isCrossRoute("25", "25") && !isCrossRoute(undefined, "25"),
+    "isCrossRoute：跨线 true / 同线 false / route 缺省按同线",
+  );
+
+  /* ⑮-d 跨线车不进「里程类锁牌」——缺省 legRoute 时才进（= 区分新旧行为） */
+  const vSame = tv("BB2222", 200, { route: "25" });
+  const vCross = tv("AA1111", 210, { route: "21A" });
+  const depAll = departedCandidatesOf({
+    vehicles: [vSame, vCross],
+    boardMain: "T100",
+    stopMains: STOP_MAINS,
+    colored: PATH,
+  });
+  const depGated = departedCandidatesOf({
+    vehicles: [vSame, vCross],
+    boardMain: "T100",
+    stopMains: STOP_MAINS,
+    colored: PATH,
+    legRoute: "25",
+  });
+  ok(
+    depAll.some((c) => c.plate === "AA1111"),
+    "[旧行为] 不传 legRoute ⇒ 跨线车也在候选里（证明该参数确实改变行为）",
+    depAll.map((c) => c.plate).join(","),
+  );
+  ok(
+    depGated.length > 0 && depGated.every((c) => c.plate !== "AA1111"),
+    "[新行为] legRoute=25 ⇒ 跨线车 21A 被排除出里程类候选",
+    depGated.map((c) => c.plate).join(","),
+  );
+  const lockGated = pickLockPlateOf(depGated);
+  ok(lockGated.plate === "BB2222", "锁牌只可能是推荐线那辆（不会被 21A 的车吸走）", String(lockGated.plate));
+  const lockAll = pickLockPlateOf(depAll);
+  ok(
+    lockAll.plate === null && lockAll.ambiguous === true,
+    "[关键] 不排除跨线车 ⇒ 两辆都无里程可比 ⇒ 判歧义不锁（旧路径的错锁风险面）",
+    `plate=${String(lockAll.plate)} ambiguous=${lockAll.ambiguous}`,
+  );
+
+  /* ⑮-e 跨线车不参与「站序过站」判据（站序是推荐线的） */
+  const crossAtStop1 = tv("AA1111", 250, {
+    route: "21A",
+    atStation: { code: "T101" }, // 推荐线站序第 1 站 ⇒ 旧逻辑会判「已过站」
+    interval: null,
+    status: "stopping",
+  });
+  ok(
+    passedBoardOf({ vehicle: crossAtStop1, stopMains: STOP_MAINS, boardPos: { ...atM(0) } }) === true,
+    "[旧行为] 不传 legRoute ⇒ 用推荐线站序判跨线车「已过站」（口径错配的来源）",
+  );
+  ok(
+    passedBoardOf({ vehicle: crossAtStop1, stopMains: STOP_MAINS, boardPos: { ...atM(0) }, legRoute: "25" }) === false,
+    "[新行为] legRoute=25 ⇒ 跨线车跳过站序判据，不因此被判过站",
+  );
+  /* 同线车不受影响（回归保护） */
+  const sameAtStop1 = { ...crossAtStop1, plate: "BB2222", route: "25" };
+  ok(
+    passedBoardOf({ vehicle: sameAtStop1, stopMains: STOP_MAINS, boardPos: { ...atM(0) }, legRoute: "25" }) === true,
+    "同线车仍按站序判过站（legRoute 不影响同线）",
+  );
+}
+
+/* ══════ ⑳ matchVehicle：`excludedPlates` 必须过滤候选池 ══════
+ *
+ * 守的是「我没上车 / 不是这辆」两条手动否决的**依赖契约**：
+ *   `useRideTracking.ts:2429`（onNotBoard）与 `:2497`（onNotThisBus）都只是
+ *   `matcherRef.current?.exclude(plate)`；真正生效的地方在
+ *   `match-vehicle.ts:71`（`new Set(input.excludedPlates ?? [])`）与 `:90`（`!excluded.has(v.plate)`）。
+ * ⇒ 所以这里**不测 React 回调**，测那个纯判据。
+ *
+ * ⚠️ 为什么必须有反例（不传 excludedPlates ⇒ 池子必须回到 2）：
+ *   只写「排除后 = 1」的话，这个 1 可能来自别的过滤（`status` 不在三态、几何门…），
+ *   排除逻辑整个坏掉也照样绿 —— 那正是这一轮反复踩的「断言恒真」。
+ *
+ * 观测量用 `MatchResult.poolSize`：其文档定义为「可打分候选数（dV 可解、**未被排除**、时间上对得上）」，
+ * 是显式契约字段，不是拿别的值反推。`ranking` 在 low 置信下恒为 `[]`（见 `low()`），
+ * 不能承担反例，故不用它。
+ */
+{
+  // ~1 km 正北直线（GCJ-02 量级），9 顶点；站点取首/中/末
+  const path: LL[] = Array.from({ length: 9 }, (_, i) => [113.55, 22.15 + i * 0.001] as LL);
+  const stops = [path[0], path[4], path[8]].map(([lng, lat]) => ({ lng, lat }));
+  const ladder = buildLrtLadder(path, stops);
+  const veh = (plate: string): TrackVehicle => ({
+    plate,
+    lng: path[4][0],
+    lat: path[4][1],
+    status: "moving",
+    interval: { from: { code: "A01" }, to: { code: "A02" } },
+    atStation: null,
+  });
+  /* 多帧历史（≥ MATCH_MIN_FRAMES=3 才能过帧数门、让 `ranking` 非空 —— 否则 ranking 断言恒真） */
+  const hist = (dM: number) => Array.from({ length: 5 }, (_, i) => ({ ts: 992_000 + i * 2_000, dM }));
+  const base = {
+    colored: path,
+    ladder,
+    stopMains: ["A01", "A02", "A03"],
+    dUser: 400,
+    userSpeedKmh: 30,
+    nowMs: 1_000_000,
+    enabled: true,
+    userHistory: hist(400),
+    vehicleHistory: { AA1111: hist(400), BB2222: hist(400) },
+  };
+  const twoCars = { ...base, vehicles: [veh("AA1111"), veh("BB2222")] };
+
+  const withoutExclusion = matchVehicle({ ...twoCars, excludedPlates: [] });
+  const excludingOne = matchVehicle({ ...twoCars, excludedPlates: ["AA1111"] });
+  const excludingGhost = matchVehicle({ ...twoCars, excludedPlates: ["ZZ9999"] });
+
+  ok(
+    withoutExclusion.poolSize === 2,
+    "反例（无排除）⇒ 候选池 2 台 —— 证明下面的 1 不是别的过滤造成的",
+    `poolSize=${withoutExclusion.poolSize} reasons=${JSON.stringify(withoutExclusion.reasons)}`,
+  );
+  ok(
+    excludingOne.poolSize === 1,
+    "排除 AA1111 ⇒ 候选池降为 1（excludedPlates 生效）",
+    `poolSize=${excludingOne.poolSize}`,
+  );
+  ok(
+    !excludingOne.ranking.some((r) => r.plate === "AA1111") && excludingOne.plate !== "AA1111",
+    "被排除的车不得出现在 ranking，也不得被选为结论",
+    `ranking=${JSON.stringify(excludingOne.ranking.map((r) => r.plate))} plate=${String(excludingOne.plate)}`,
+  );
+  ok(
+    excludingGhost.poolSize === 2,
+    "排除一个不存在的车牌 ⇒ 池子仍为 2（排除不得误伤其它车）",
+    `poolSize=${excludingGhost.poolSize}`,
+  );
 }
 
 const total = pass + fail;

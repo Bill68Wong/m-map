@@ -32,6 +32,7 @@
  * 纪律：全 Token 上色；单行 nowrap；决策点 ≤4；新鲜度不占主按钮位。
  */
 import type { ReactNode } from "react";
+import RouteStack from "@/components/RouteStack";
 import BusCodeChip from "./BusCodeChip";
 import type { RidePhase } from "./useRideTracking";
 
@@ -39,6 +40,21 @@ export interface NavTrackBarProps {
   phase: RidePhase;
   /** 当前段线路展示名（如「51 路」/「轻轨 石排灣線」） */
   routeLabel: string;
+  /**
+   * ★ R4（2026-11-17）：**线路码原文**（`26` / `LRT-氹仔线`）—— 仅轻轨态用于主题色标签。
+   *
+   * ── 为什么必须单独传，不能用 `routeLabel` 顶替 ────────────────────────
+   *   `routeLabel` 是**已剥前缀的展示名**（`RouteSheet.tsx` 经 `lineNameOf()` 得到 `氹仔線`）。
+   *   `RouteStack` 内部要按**码**查色表（`colors[code]`）并再跑一次 `lineNameOf()`；
+   *   把展示名当码传 ⇒ 查不到色（回落 `--primary`）+ 名字被原样透传 ⇒ 色块颜色错、语义拧巴。
+   *   ⇒ 码走本 prop，展示名仍走 `routeLabel`。
+   */
+  routeCode?: string | null;
+  /**
+   * ★ R4：**整张线路色表**（`routes.color` 映射），来自 `RouteSheet` 的 `colors` prop。
+   *   缺色时 `RouteStack` 回落 `var(--primary)`（见 `RouteStack.tsx:91`），**不会渲染成透明**。
+   */
+  colors?: Record<string, string> | null;
   /** 上车站显示名（等车态） */
   boardLabel: string;
   /** 下车站显示名 */
@@ -98,6 +114,8 @@ export default function NavTrackBar(props: NavTrackBarProps) {
   const {
     phase,
     routeLabel,
+    routeCode = null,
+    colors = null,
     boardLabel,
     alightLabel,
     plate,
@@ -170,7 +188,10 @@ export default function NavTrackBar(props: NavTrackBarProps) {
   } else if (phase === "boarding") {
     left = (
       <>
-        等待上车 · <b>{boardLabel}</b>
+        {/* R6：原来「等待上车」与站名之间有一个中点，已删 —— 状态词与站名分属
+            `.nav-actions__staterow` 的两个 flex 子项，间隔由 `gap: 8px`
+            （globals.css:7011）承担，删字即「同一行靠排版分开」。 */}
+        等待上车 <b>{boardLabel}</b>
       </>
     );
     /**
@@ -184,13 +205,15 @@ export default function NavTrackBar(props: NavTrackBarProps) {
     if (alarm === "now") {
       left = (
         <>
-          已到站 · <b>{alightLabel}</b>
+          {/* R6：中点已删，间隔同 `等待上车` 那条（`.nav-actions__staterow` 的 gap）。 */}
+          已到站 <b>{alightLabel}</b>
         </>
       );
     } else {
       left = (
         <>
-          乘车中 ·{" "}
+          {/* R6：中点已删，间隔同 `等待上车` 那条（`.nav-actions__staterow` 的 gap）。 */}
+          乘车中{" "}
           {/* ★ v3.6.1：有牌号 ⇒ 车牌标签；无牌号回落**线路名**（绝不能套车牌马甲，外层也别再套 `<b>`）。v3.7.0 S3：中置信（`plate` 为 null）⇒ 车牌 + 「待确认」；contract：medium 不得据以报站 */}
           {plate ? (
             <>
@@ -219,12 +242,17 @@ export default function NavTrackBar(props: NavTrackBarProps) {
           ) : pendingPlate ? (
             <>
               <span className="plate plate--sm">{pendingPlate}</span>
-              <span className="nav-actions__sub"> · 车牌待确认</span>
+              <span className="nav-actions__sub">车牌待确认</span>
             </>
+          ) : lrt && routeCode ? (
+            /* ★ R4：轻轨态走全站统一的线路主题色标签（`RouteStack`）。
+               必须传**线路码**（`LRT-氹仔线`）而非展示名（`氹仔線`），否则查不到 `colors[code]`。
+               缺色时 `RouteStack.tsx:91` 回落 `var(--primary)`，不会渲染成透明。
+               巴士态不进本分支 ⇒ 下一个 `<b>` 分支保持原样（逐字节未变）。 */
+            <RouteStack codes={[routeCode]} colors={colors} size="sm" />
           ) : (
             <b>{routeLabel}</b>
           )}
-          {!plate && lrt && <span className="nav-actions__sub"> · {routeLabel}</span>}
         </>
       );
     }

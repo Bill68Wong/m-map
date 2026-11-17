@@ -154,7 +154,7 @@ export default function StationReachFold({
   return (
     <div className="rc-fold">
       <button className="rc-fold__head" type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
-        上车站其他线路 · <b>{items.length}</b> 条
+        上车站其他线路 - <b>{items.length}</b> 条
         <span className="rc-strip__caret">
           <Icon name={open ? "caretUp" : "caretDown"} size={16} />
         </span>

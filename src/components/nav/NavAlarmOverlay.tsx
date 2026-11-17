@@ -75,7 +75,7 @@ export default function NavAlarmOverlay({ track }: NavAlarmOverlayProps) {
       {showAlightDone && track && (
         <div className="nav-alight-layer">
           <div className="nav-alight-done" role="status">
-            <span className="nav-alight-done__text">已到站 · 导航结束</span>
+            <span className="nav-alight-done__text">已到站 - 导航结束</span>
             <button type="button" className="nav-alight-done__undo" onClick={track.onUndoAlight}>
               还没到
             </button>

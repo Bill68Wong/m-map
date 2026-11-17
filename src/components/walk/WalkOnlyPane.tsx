@@ -99,7 +99,7 @@ export default function WalkOnlyPane({
           </p>
           {phase === "ready" && steps.length > 0 ? (
             <p className="t-label t-muted" style={{ margin: "4px 0 0" }}>
-              全程 <b>{Math.round(totalDistM)}</b> 米 · 约 <b>{minutes}</b> 分钟
+              全程 <b>{Math.round(totalDistM)}</b> 米 - 约 <b>{minutes}</b> 分钟
             </p>
           ) : null}
         </div>
@@ -140,7 +140,7 @@ export default function WalkOnlyPane({
           <p className="h-title">步行路线暂时取不到</p>
           <p className="t-body t-muted" style={{ marginTop: 6, lineHeight: 1.7 }}>
             {err || "请检查网络后重试"}
-            {totalDistM > 0 ? ` · 直线约 ${Math.round(totalDistM)} 米（按常速估算）` : ""}
+            {totalDistM > 0 ? ` - 直线约 ${Math.round(totalDistM)} 米（按常速估算）` : ""}
           </p>
           <button type="button" className="btn btn--outline btn--sm" onClick={onRetry} style={{ marginTop: 10 }}>
             重试

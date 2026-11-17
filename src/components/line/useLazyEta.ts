@@ -58,7 +58,7 @@ function pickItem(items: StationEtaItem[] | undefined, lineCode: string, platfor
   // 0 站 = 车已到站；写「即将到站」而不是「还有 0 站」
   if (hit.stopsAway <= 0) return { phase: "on", text: "即将到站" };
   const min = hit.etaMin != null ? Math.max(1, Math.round(hit.etaMin)) : null;
-  return { phase: "on", text: `还有 ${hit.stopsAway} 站${min != null ? ` · 约 ${min} 分钟` : ""}` };
+  return { phase: "on", text: `还有 ${hit.stopsAway} 站${min != null ? ` - 约 ${min} 分钟` : ""}` };
 }
 
 /**

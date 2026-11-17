@@ -36,7 +36,7 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
   const { station } = await params;
   const name = stationName(station);
   return {
-    title: name ? `${name} · 即时班次` : "跨境交通",
+    title: name ? `${name} - 即时班次` : "跨境交通",
     /* 实时班次页不进索引：内容按分钟变，索引里只会留下过期的时刻 */
     robots: { index: false, follow: false },
   };

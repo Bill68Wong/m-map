@@ -2137,7 +2137,7 @@ export default function NavMap({
    *   定位文案**在此实时求值**：`hasExternalPos` 一旦变 true（浏览器 GPS 到位）就自动消失。
    *   ⇒ 不需要"定位恢复后清提示"的反向逻辑，也就不会再出现"永久挂着"。
    */
-  const noteText = note || (locateFailed && !hasExternalPos ? "无法定位 · 请手动选择出发点" : "");
+  const noteText = note || (locateFailed && !hasExternalPos ? "无法定位 - 请手动选择出发点" : "");
 
   return (
     <div

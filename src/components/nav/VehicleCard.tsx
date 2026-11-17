@@ -264,7 +264,7 @@ export default function VehicleCard({
                   <span className="nav-vehicle-card__seg">{`${interval.to.code} ${interval.to.name}`}</span>
                 </>
               ) : (
-                <span className="nav-vehicle-card__seg">站名未知 · 以车牌为准</span>
+                <span className="nav-vehicle-card__seg">站名未知 - 以车牌为准</span>
               )}
             </span>
           </div>

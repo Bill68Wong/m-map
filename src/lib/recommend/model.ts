@@ -535,7 +535,7 @@ export function modelOption(seed: OptionSeed, ctx: ModelContext): ModeledOption 
       boardAtMs = nowMs + est.hiMin * 60_000;
       // 未发车 ⇒ 不涉及「赶车档位」，按常速（档 3；SPEED_RATIO[3] === 1）
       tier = 3;
-      liveText = `未发车 · ${waitRangeText(est.loMin, est.hiMin)}`;
+      liveText = `未发车 - ${waitRangeText(est.loMin, est.hiMin)}`;
       // 无实车可列 ⇒ 后续班次留空（卡片不展示 altBuses）
       busPool = [];
       chosenBus = null;
@@ -554,7 +554,7 @@ export function modelOption(seed: OptionSeed, ctx: ModelContext): ModeledOption 
       }
       boardAtMs = nowMs + chosen.loSec * 1000;
       tier = t0;
-      liveText = `还有 ${chosen.stopsAway} 站 · ${etaTextOf(chosen)}`;
+      liveText = `还有 ${chosen.stopsAway} 站 - ${etaTextOf(chosen)}`;
       waitMin0 = Math.max(0, (boardAtMs - cursor) / 60_000);
     }
   } else {

@@ -39,7 +39,7 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
   const decoded = safeDecode(code);
   // 不查库（避免与页面重复一次 DB 往返）；标题用线路码即可，够用于分享卡片
   return {
-    title: `${decoded} 线路站点 · MUST登校`,
+    title: `${decoded} 线路站点 - MUST登校`,
     description: `查看 ${decoded} 的全线站序、线路走向与实时到站`,
   };
 }

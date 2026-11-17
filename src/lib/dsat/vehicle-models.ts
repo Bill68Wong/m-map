@@ -86,7 +86,7 @@ const SEGMENTS: readonly Segment[] = [
     category: "中巴",
     source: SRC_OFFICIAL,
     confidence: "high",
-    note: "9.55m 增程电动 · 官网原文「車號: HE57-76 / 款式: KLQ6956GHEV」（2026-10-30 核对）",
+    note: "9.55m 增程电动 - 官网原文「車號: HE57-76 / 款式: KLQ6956GHEV」（2026-10-30 核对）",
   },
   {
     prefix: "HE",
@@ -96,7 +96,7 @@ const SEGMENTS: readonly Segment[] = [
     category: "大巴",
     source: SRC_OFFICIAL,
     confidence: "high",
-    note: "11.36m 增程电动 · 官网原文「車號: HE33-56 / 款式: KLQ6116GHEV」",
+    note: "11.36m 增程电动 - 官网原文「車號: HE33-56 / 款式: KLQ6116GHEV」",
   },
   {
     prefix: "YE",
@@ -106,7 +106,7 @@ const SEGMENTS: readonly Segment[] = [
     category: "大巴",
     source: SRC_OFFICIAL,
     confidence: "high",
-    note: "11.38m 宇通增程电动 · 官网原文「車號: YE01-YE02 / 款式: ZK6116SHEVPG」",
+    note: "11.38m 宇通增程电动 - 官网原文「車號: YE01-YE02 / 款式: ZK6116SHEVPG」",
   },
   {
     prefix: "HE",
@@ -116,7 +116,7 @@ const SEGMENTS: readonly Segment[] = [
     category: "小巴",
     source: SRC_OFFICIAL,
     confidence: "high",
-    note: "7.59m 增程电动小巴 · 官网原文「Bus Number: HE601-640 / Type: KLQ6756GHEV」。维基把该段拆成 601-635(2024.01)/636-640(2024.08) 两批，型号相同故合并",
+    note: "7.59m 增程电动小巴 - 官网原文「Bus Number: HE601-640 / Type: KLQ6756GHEV」。维基把该段拆成 601-635(2024.01)/636-640(2024.08) 两批，型号相同故合并",
   },
 
   // ── 新福利 · 维基车队表（confidence medium）──────────────────────────
@@ -133,7 +133,7 @@ const SEGMENTS: readonly Segment[] = [
     //   —— 两种型号列在同一个编号段里，**官网没说 347 这个分界**。
     //   下面 347 的拆分来自维基逐段表，并由 fotobus 逐车登记佐证了 HE241~HE275 = GHEV1
     //   （佐证到 275，未逐台核到 384）。故取值可用、置信度只能是 medium。
-    note: "10.499m（2024.11）· 与 GHEV1 大致相同 · ★ HE380 落此段（主人点名样例）",
+    note: "10.499m（2024.11）- 与 GHEV1 大致相同 - ★ HE380 落此段（主人点名样例）",
   },
   {
     prefix: "HE",
@@ -143,7 +143,7 @@ const SEGMENTS: readonly Segment[] = [
     category: "中巴",
     source: SRC_WIKI_TRANSMAC,
     confidence: "medium",
-    note: "10.499m（2023.12）· 移除车顶整流罩、降低车身 · 官网仅给 HE241-384 合并段，此拆分来自维基",
+    note: "10.499m（2023.12）- 移除车顶整流罩、降低车身 - 官网仅给 HE241-384 合并段，此拆分来自维基",
   },
   {
     prefix: "HE",
@@ -153,7 +153,7 @@ const SEGMENTS: readonly Segment[] = [
     category: "中巴",
     source: SRC_WIKI_TRANSMAC,
     confidence: "medium",
-    note: "10m（2022.12）· HE201/HE202 原编号为 HE197/HE198（改号史，勿按原号反查）",
+    note: "10m（2022.12）- HE201/HE202 原编号为 HE197/HE198（改号史，勿按原号反查）",
   },
   {
     prefix: "HE",
@@ -163,7 +163,7 @@ const SEGMENTS: readonly Segment[] = [
     category: "大巴",
     source: SRC_WIKI_TRANSMAC,
     confidence: "medium",
-    note: "10.87m（2018.07）· 因超限重禁行嘉乐庇总督大桥",
+    note: "10.87m（2018.07）- 因超限重禁行嘉乐庇总督大桥",
   },
   {
     prefix: "HE",
@@ -173,7 +173,7 @@ const SEGMENTS: readonly Segment[] = [
     category: "大巴",
     source: SRC_WIKI_TRANSMAC,
     confidence: "medium",
-    note: "10.88m（2020.12）· 原属银河娱乐",
+    note: "10.88m（2020.12）- 原属银河娱乐",
   },
   {
     prefix: "HE",
@@ -184,7 +184,7 @@ const SEGMENTS: readonly Segment[] = [
     source: SRC_WIKI_TRANSMAC,
     confidence: "medium",
     // HE06/HE07 不在车队表内 ⇒ 单独成段，不用 HE03-10 把它们"顺带"覆盖
-    note: "10.88m（2020.12）· 与 HE03-05 同型；HE06/HE07 无资料，故本段从 8 起",
+    note: "10.88m（2020.12）- 与 HE03-05 同型；HE06/HE07 无资料，故本段从 8 起",
   },
   {
     prefix: "DH",
@@ -194,7 +194,7 @@ const SEGMENTS: readonly Segment[] = [
     category: "小巴",
     source: SRC_WIKI_TRANSMAC,
     confidence: "medium",
-    note: "7.5m 纯电（2026.01）· 新福利首批纯电动巴士",
+    note: "7.5m 纯电（2026.01）- 新福利首批纯电动巴士",
   },
   {
     prefix: "ZE",
@@ -204,7 +204,7 @@ const SEGMENTS: readonly Segment[] = [
     category: "小巴",
     source: SRC_WIKI_TRANSMAC,
     confidence: "medium",
-    note: "7.59m 中通（2023.10）· 规格与澳巴购入版本大致相同",
+    note: "7.59m 中通（2023.10）- 规格与澳巴购入版本大致相同",
   },
   {
     prefix: "ZE",
@@ -228,7 +228,7 @@ const SEGMENTS: readonly Segment[] = [
     confidence: "medium",
     // 整段未逐台核对：E3212 / E3220 / E3225 已由逐车登记记录独立佐证同型号，
     // 其余编号依社区区段表。若将来发现段内混入其他型号，应拆段而非改整段。
-    note: "11.3m 中通增程电动 · 仅 E3212/E3220/E3225 已逐台佐证，整段未全核",
+    note: "11.3m 中通增程电动 - 仅 E3212/E3220/E3225 已逐台佐证，整段未全核",
   },
 ];
 

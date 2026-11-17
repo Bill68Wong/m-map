@@ -132,7 +132,9 @@ console.log("\n[1] ready = 停靠在首站（表达「还没发车」，不交�
   ok("state=ready", mark?.state === "ready", mark?.state);
   ok("frac=0（非 moving ⇒ 吸附节点）", mark?.frac === 0, String(mark?.frac));
   ok("toEndStops=4", mark?.toEndStops === 4, String(mark?.toEndStops));
-  ok("label 含车牌+运营商+还有几站", /MR-11-11 · 澳巴 · 还有 4 站/.test(mark?.label ?? ""), mark?.label ?? "(无 label)");
+  // R6（2026-11-17）中点清理：本 label 的分隔符契约由 " · " 改为 " - "（负责人裁定）。
+  // 只改分隔符字面量，断言的三段内容（车牌 / 运营商 / 还有 N 站）与顺序保持不变。
+  ok("label 含车牌+运营商+还有几站", /MR-11-11 - 澳巴 - 还有 4 站/.test(mark?.label ?? ""), mark?.label ?? "(无 label)");
 }
 
 /* ── [2] stop：停靠在非首站 ───────────────────────────────────────────── */

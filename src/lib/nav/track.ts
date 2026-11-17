@@ -27,6 +27,16 @@ import type { VehicleProgress } from "./progress";
 /** 追踪用的车辆子集（= `/api/route-vehicles` 的 vehicles[] 元素；坐标已 GCJ-02） */
 export interface TrackVehicle {
   plate: string;
+  /**
+   * ★ R3（2026-11-17）：该车来自**哪条线路**的帧（本腿 = 推荐线 + `parallelRoutes`）。
+   *
+   * 为什么必须显式带、不能从 `plate` 或文案反解：同卡多线场景下 `list` 里混着
+   * 两条线的车，判据/展示都要能分辨来源。
+   *
+   * ⚠️ **缺省 = 同线**（老帧 / 单元测试手搓对象），下游一律按「与本腿同线」处理，
+   *    保证 R3 之前的用例逐条不变。
+   */
+  route?: string;
   lat: number;
   lng: number;
   /** moving | stopping | terminal | unknown | lost */
@@ -290,11 +300,21 @@ export function passedBoardOf(input: {
   stopMains?: string[] | null;
   boardPos?: { lng: number; lat: number } | null;
   anchor?: BoardAnchor | null;
+  /**
+   * ★ R3：本腿推荐线（`leg.route`）。给了且车带 `route` 且两者不同 ⇒
+   *   **跳过站序判据**（①），只保留几何判据（②）。
+   *
+   * 为什么：`stopMains` 是**推荐线**的站序，拿它去判并行线车的「第几站」会把
+   *   「并行线在它自己的第 3 站」误读成「在推荐线的第 3 站」⇒ 误判过站/未过站。
+   *   几何判据（`distToBoardM`）是空间量、不分线路，仍然可用。
+   */
+  legRoute?: string;
 }): boolean {
-  const { vehicle: v, stopMains, boardPos, anchor } = input;
+  const { vehicle: v, stopMains, boardPos, anchor, legRoute } = input;
 
-  // ① 站序判据
-  if (stopMains && stopMains.length >= 2) {
+  // ① 站序判据（★ R3：跨线车不适用 —— 站序是推荐线的）
+  const sameRoute = !v.route || !legRoute || v.route === legRoute;
+  if (sameRoute && stopMains && stopMains.length >= 2) {
     const p = progressOf(stopMains, v);
     if (p.atIdx != null && p.atIdx > 0) return true;
     if (p.kind === "between" && p.passedIdx >= 0) return true;
@@ -327,6 +347,8 @@ export function rankBoardingVehicles(
     filterPassed?: boolean;
     stopMains?: string[] | null;
     anchor?: BoardAnchor | null;
+    /** ★ R3：本腿推荐线；跨线车不参与站序判据（见 `passedBoardOf` 的同名参数） */
+    legRoute?: string;
   },
 ): TrackVehicle[] {
   const board = mainOf(boardMain);
@@ -350,6 +372,7 @@ export function rankBoardingVehicles(
           stopMains: opts.stopMains,
           boardPos,
           anchor: opts.anchor,
+          legRoute: opts.legRoute,
         }),
     )
     .sort((a, b) => score(a) - score(b));

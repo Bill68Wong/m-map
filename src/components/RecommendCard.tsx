@@ -211,7 +211,7 @@ export default function RecommendCard({
         </div>
         <span className="rc-arrive">
           预计 <b>{macauClock(card.arriveAt)}</b> 到达
-          {card.crossBorder && <span className="rc-warn"> · 不含通关</span>}
+          {card.crossBorder && <span className="rc-warn"> - 不含通关</span>}
         </span>
         {cardAction}
         <RouteStack segments={routeSegments} colorOf={colorOf} size="sm" />
@@ -232,7 +232,7 @@ export default function RecommendCard({
         />
 
         {/* ② 上车站 */}
-        {first && <Row dot="wait" main={<span className="rc-board">上车 · {first.boardLabel}</span>} />}
+        {first && <Row dot="wait" main={<span className="rc-board">上车 - {first.boardLabel}</span>} />}
 
         {/* ③ 附属行（属于 ②）：实时报站 + 赶车分档
             ★ v2.4.1：改用 `dot="sub"` —— 它是**上车站的附属信息**，不再单给一个巴士站图标 */}
@@ -284,7 +284,7 @@ export default function RecommendCard({
         />
 
         {/* ⑤ 下车站（**末段**；换乘路线这里才是真正的终点站） */}
-        {last && <Row dot="wait" main={<span className="rc-board">下车 · {last.alightLabel}</span>} />}
+        {last && <Row dot="wait" main={<span className="rc-board">下车 - {last.alightLabel}</span>} />}
 
         {/* ⑥ 步行：下车站 → **目的地**（`walkIn.toLabel` 已是目的地名，v2.4.1 修复） */}
         <Row

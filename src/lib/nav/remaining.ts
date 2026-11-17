@@ -76,6 +76,11 @@ import { segmentsOf } from "@/lib/recommend/enumerate";
 import { conservativeWaitMin, headwayAt, headwayMedian, type HeadwayIndex } from "@/lib/recommend/headway";
 import { lookupHop, type SegmentIndex } from "@/lib/recommend/segment-lookup";
 import type { RecommendCard, RideLegView, RouteIndex } from "@/lib/recommend/types";
+/**
+ * ★ R1 阶段2（2026-11-13）：**剩余分量清单的唯一一份** —— 本模块与客户端
+ * `off`/`boarding` 相位的实时总剩余共用它。`round1Min` 也在此单点定义（原来本文件各写一份）。
+ */
+import { remainPartsOf, round1Min } from "@/lib/nav/remain-parts";
 
 /** 重算所需的**已装载**索引（由 route 层 `loadStatics` / `loadHeadway` 备好，本模块不查库） */
 export interface RemainingCtx {
@@ -127,7 +132,7 @@ export interface RemainingResult {
   retimedWaits: { legIndex: number; route: string; waitMin: number; source: WaitSource }[];
 }
 
-const round1 = (v: number): number => Math.round(v * 10) / 10;
+const round1 = round1Min;
 
 /** 非有限值（undefined / NaN / 字符串脏数据）统一归 0 —— 上游 body 只做浅校验，这里兜底 */
 const numOr0 = (v: unknown): number => {
@@ -253,31 +258,44 @@ export function recomputeRemaining(ctx: RemainingCtx, input: RemainingInput): Re
   }
   curRemainMin = Math.max(0, numOr0(curRemainMin));
 
-  // ── ② 下游逐段：换乘步行 + 候车（重估）+ 乘车（静态）──
-  let cursor = nowMs + curRemainMin * 60_000;
+  /* ── ②③ **剩余分量清单**（唯一一份，见 `src/lib/nav/remain-parts.ts`）─────────
+   *   ⚠️ 改前这里是一段内联的 `for (i = legIndex+1 …) { transfer; wait; ride }` + `walkIn` 累加。
+   *   客户端 `off` / `boarding` 相位的实时总剩余要用**同一份**清单（否则两边各写一遍，
+   *   迟早有一项对不上，而两边都自洽、没有断言会红）⇒ 抽到 `remain-parts.ts`，两侧共调。
+   *
+   *   本模块传 `curTransferMin: null` / `curWaitMin: null` —— 与文件头「已知边界 ①」同源：
+   *   **本模块假设用户已在车上**，当前腿之前的换乘步行与当前腿候车都视为已发生、不计入。
+   *   客户端在 `boarding` 相位会把这两项传进来（它们**还没发生**）。
+   */
+  const { parts, totalMinutesRaw } = remainPartsOf({
+    card,
+    legIndex,
+    nowMs,
+    curTransferMin: null,
+    curWaitMin: null,
+    curRideMin: curRemainMin,
+    /** 服务端取值器：按 `headwayAt` 重估（客户端拿不到班距索引，用静态 `waitMin`） */
+    waitMinAt: (_i, ride, arrivalMs) => {
+      const w = reestimateWait(ctx, ride, arrivalMs);
+      return { minutes: w.waitMin, source: w.source };
+    },
+    walkInMin: Math.max(0, numOr0(card.walkIn?.minutes)),
+  });
+
+  /** 逐段候车重估明细（诊断/测试用；route 层**不下发**）—— 从分量清单派生，不另算一遍 */
+  const retimedWaits: RemainingResult["retimedWaits"] = parts
+    .filter((p) => p.kind === "wait" && p.legIndex > legIndex)
+    .map((p) => ({
+      legIndex: p.legIndex,
+      route: rides[p.legIndex]!.route,
+      waitMin: p.minutes,
+      source: (p.waitSource ?? "kept") as WaitSource,
+    }));
   /** legIndex → 重估后的 waitMin（同时回写 rides[i].waitMin 与 transfers[i-1].waitMin） */
-  const newWaitOf = new Map<number, number>();
-  const retimedWaits: RemainingResult["retimedWaits"] = [];
+  const newWaitOf = new Map<number, number>(retimedWaits.map((w) => [w.legIndex, w.waitMin]));
 
-  for (let i = legIndex + 1; i < rides.length; i++) {
-    const ride = rides[i]!;
-    const t = card.transfers?.[i - 1];
-    if (t) cursor += Math.max(0, numOr0(t.minutes)) * 60_000;
-
-    const w = reestimateWait(ctx, ride, cursor);
-    const wMin = round1(Math.max(0, numOr0(w.waitMin)));
-    newWaitOf.set(i, wMin);
-    retimedWaits.push({ legIndex: i, route: ride.route, waitMin: wMin, source: w.source });
-    cursor += wMin * 60_000;
-
-    cursor += Math.max(0, numOr0(ride.minutes)) * 60_000;
-  }
-
-  // ── ③ 末段步行 ──
-  cursor += Math.max(0, numOr0(card.walkIn?.minutes)) * 60_000;
-
-  // ── ④ clamp（车晚点时 cursor 可能早于 now ⇒ 停在 0）──
-  const remainingMin = round1(Math.max(0, (cursor - nowMs) / 60_000));
+  // ── ④ clamp（车晚点时 totalMinutesRaw 可能为负 ⇒ 停在 0）──
+  const remainingMin = round1(Math.max(0, totalMinutesRaw));
   const arriveAtMs = nowMs + Math.round(remainingMin * 60_000);
 
   // ── ⑤ patchedCard：只改时间字段，其余**引用与值都不动** ──

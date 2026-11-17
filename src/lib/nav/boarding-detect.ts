@@ -453,6 +453,17 @@ export interface AutoBoardInput {
    * 缺省 `false`（= 不在步行段）—— 保持既有调用点行为不变。
    */
   walkActive?: boolean;
+  /**
+   * ★ R3（2026-11-17）：本腿**推荐线**（`leg.route`）。
+   *
+   * 车辆帧现在覆盖「推荐线 + `parallelRoutes`」（`fetchFrame`），于是 `vehicles` 里会混着
+   * 并行线的车。本字段只用于**把跨线车从里程类判据里摘出去**（`departedCandidatesOf`）：
+   * 那里的里程差是投影到本腿 `colored` 上算的，跨线车投过来没有物理意义。
+   *
+   * ⚠️ 缺省 ⇒ 所有车按同线处理 = R3 之前的逐条行为（老调用点与手搓夹具不受影响）。
+   * ⚠️ 本字段**不影响** r2 / 斜率 / 停站三条判据的阈值 —— `R2_*` 常量一个都不动。
+   */
+  legRoute?: string;
   /** 调用方维护的连续命中帧数 */
   streak?: number;
 }
@@ -577,6 +588,11 @@ export function autoBoardOf(input: AutoBoardInput): AutoBoardResult {
            */
           fixes,
           vehFrames: input.vehFrames ?? null,
+          /**
+           * ★ R3：跨线车不参与里程类锚定/锁牌（见 `departedCandidatesOf` 的同名注释）。
+           *   缺省 ⇒ 不排除任何车 = R3 之前的逐条行为。
+           */
+          legRoute: input.legRoute,
           tolM: Math.max(
             R2_TOL_M,
             (latest && Number.isFinite(latest.accuracy) ? latest.accuracy : 0) * R2_ACC_TOL_FACTOR,

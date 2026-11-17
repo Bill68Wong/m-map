@@ -183,7 +183,7 @@ function etaNode(it: EtaItem, nowMs: number, offsetMs = 0) {
    */
   if (it.stopsAway === null) return <>{noVehicleText(it.service ?? null)}</>;
   return (
-    <EtaText text={it.stopsAway === 0 ? "即将到站" : `还有 ${it.stopsAway} 站 · 约 ${it.etaMin ?? 0} 分`} />
+    <EtaText text={it.stopsAway === 0 ? "即将到站" : `还有 ${it.stopsAway} 站 - 约 ${it.etaMin ?? 0} 分`} />
   );
 }
 

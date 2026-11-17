@@ -52,7 +52,7 @@ function cardInfo(
      *   为什么不做整页错误态：一张卡的上游挂了不代表另外三张也挂了，
      *   整页报错会让用户以为"跨境交通整个不可用"。
      */
-    return { sub: `${hints} · 暂时取不到`, label: "下一班", value: null };
+    return { sub: `${hints} - 暂时取不到`, label: "下一班", value: null };
   }
   if (state.status === "loading") {
     /* 还没取到 ⇒ 副标题只给静态目的港，右块留 `--`（不占位、不编数字） */
@@ -61,7 +61,7 @@ function cardInfo(
   const now = macauParts(state.data.serverNow);
   const next = nextSailing(state.data.items, now?.minutes ?? null);
   return {
-    sub: `${hints} · 今日 ${state.data.dayTotal} 班`,
+    sub: `${hints} - 今日 ${state.data.dayTotal} 班`,
     label: "下一班",
     value: next?.schedTime ?? null,
   };
