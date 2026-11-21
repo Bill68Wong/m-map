@@ -334,6 +334,10 @@ export default function LineStopsSheet({
           linesOfStation={noLines}
           lineCode=""
           sideOf={sideOf}
+          /* ★ 2026-11-21（负责人）：「通琴号没有站号，只有站名」—— 本组件**只服务通琴号**
+             （`trip.stops` 的 `code` 是站 id 字符串，不是站台码），所以类型由组件本体决定，
+             不靠数据猜。有这条之后，`--lp-name-chars` 只按站名算 ⇒ 长名不再被压小。 */
+          lineType="tqh"
         />
       </div>
 

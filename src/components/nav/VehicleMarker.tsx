@@ -60,6 +60,12 @@ export interface VehicleLite {
   progress?: VehicleProgress | null;
   /** 运营商：`澳巴` / `新福利`（决定涂装色） */
   company?: string;
+  /**
+   * ★ R11（2026-11-21）：**疑似本车**（中置信匹配指向它，但证据不足以锁牌）。
+   * 只在 `useRideTracking.mapVehicles` 里由 `pendingPlate` 派生，**不由接口下发**。
+   * ⚠️ 它只是展示：不参与任何判定，也不改变 `.vbus-wrap[data-state]` 的语义。
+   */
+  pending?: boolean;
 }
 
 /** 合并阈值（屏距，px）—— Spec AC-07 */
@@ -177,7 +183,7 @@ export default function VehicleMarker({ items, onClick }: VehicleMarkerProps) {
   const state = v.status;
   const label = `${companyLabel(company)}${v.isLast ? " 末班" : ""} ${VEHICLE_STATE_LABEL[state] ?? "状态未知"}${
     count > 1 ? `，共 ${count} 辆` : ""
-  }`;
+  }${v.pending ? "，疑似本车" : ""}`;
 
   return (
     <button
@@ -185,6 +191,8 @@ export default function VehicleMarker({ items, onClick }: VehicleMarkerProps) {
       className="vbus-wrap"
       data-state={state}
       data-last={v.isLast ? "1" : undefined}
+      /* ★ R11：疑似本车（中置信）—— 只改视觉，不改任何行为 */
+      data-pending={v.pending ? "1" : undefined}
       style={{ "--vbus-livery": VEHICLE_LIVERY[company] } as CSSProperties}
       aria-label={label}
       title={label}

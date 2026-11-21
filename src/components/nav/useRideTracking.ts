@@ -71,6 +71,8 @@ import type { UserFix } from "./useUserFix";
 import { inflightGate, noteVehFail, noteVehFrame, registerVehSentinel, retainVehTicker, setYouDotHook, shouldForceRefresh } from "./observe-hooks";
 import { useResumeRefresh } from "./useResumeRefresh";
 import { createVehicleMatcher, usableMedium } from "./vehicle-match-run";
+/* ★ R11（2026-11-21）：未锁车牌的**定期重试** —— 节奏/双帧确认/6 条放弃条件全在纯模块里 */
+import { begin as retryBegin, createRetryState, note as retryNote, retryTag, type RetryState } from "./match-retry";
 import { MATCH_VEHICLE_ENABLED } from "@/lib/nav/match-vehicle";
 import type { GeoState } from "./observe-hooks";
 import { noteOfPausedGeo } from "./geo-note";
@@ -289,6 +291,15 @@ export interface RideTrackView {
    *   语义红线：此时 `plate` 仍为 `null` ⇒ `progressSource` 是 `gps`，报站读数**不**由它推出。
    */
   pendingPlate: string | null;
+  /**
+   * ★ R11：**连续 2 次 medium 同车牌** ⇒ 给用户「一键确认」用的车牌（`null` = 不显示）。
+   *   与 `pendingPlate` 的区别：`pendingPlate` 是"系统觉得像"，本值是"值得让用户点一下"。
+   *   ⚠️ 它仍然**不写库**：用户点了 `confirmMatch()` 才写（`boardMatch` 才变 `confirmed`）。
+   *   ⚠️ 全程常驻：一旦出现就保持到锁上牌 / 用户点掉 / 本段结束（不被低置信帧冲掉）。
+   */
+  matchConfirmPlate: string | null;
+  /** ★ R11 观测值（`data-match-retry`）：`<帧序号>/<fast|slow>[/<放弃原因>]`，只读不判 */
+  matchRetry: string;
   /** 安全网检出 */
   anomaly: "none" | "not_boarded" | "alighted";
   /**
@@ -332,6 +343,12 @@ export interface RideTrackView {
   onNotBoard: () => void;
   onNotArrive: () => void;
   onNotThisBus: () => void;
+  /**
+   * ★ R11：用户**一键确认**「就是这辆」（参数 = `matchConfirmPlate`）。
+   *   这是 medium 唯一的出口：系统不写库，人点了才写 ⇒ `boardMatch` 变 `confirmed`。
+   *   ⚠️ 与 `onRepick`（选另一辆）互补：本方法只在"系统猜对了但不够确定"时用。
+   */
+  onConfirmMatch: (plate: string) => void;
   onDismissAnomaly: () => void;
   /** ★ 本批：撤销自动下车（仅最后一次自动下车可撤销；AC-56） */
   onUndoAlight: () => void;
@@ -712,6 +729,17 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
   const [matchSource, setMatchSource] = useState<MatchSource>("gps");
   /** ★ 中置信：`boardMatch="auto"` + 本标记（不占用 `confirmed`，见 `BoardMatch` 注释） */
   const [matchPending, setMatchPending] = useState(false);
+  /**
+   * ★ R11：**连续 2 次 medium 同车牌** ⇒ 给用户一个「一键确认」（全程常驻，直到锁上或放弃）。
+   * 与 `pendingPlate` 的区别：`pendingPlate` 是"系统觉得像"，本值是"值得让用户点一下"。
+   * ⚠️ 它**不写库**：用户点了才写，`boardMatch` 才会变 `confirmed`。
+   */
+  const [matchConfirmPlate, setMatchConfirmPlate] = useState<string | null>(null);
+  /**
+   * ★ R11 观测值（`data-match-retry`）：`<帧序号>/<fast|slow>[/<放弃原因>]`。
+   * 只用于验收与排障；**不得**回读它做任何判定（同 R8 那份纪律）。
+   */
+  const [matchRetry, setMatchRetry] = useState("");
   /** ★ 2026-11-05：本次 riding 的进入方式（`null` = 不在 riding）。见 `BoardEntry`。 */
   const [enteredVia, setEnteredVia] = useState<BoardEntry | null>(null);
   /**
@@ -746,6 +774,18 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
    */
   const matcherRef = useRef<ReturnType<typeof createVehicleMatcher> | null>(null);
   if (matcherRef.current === null) matcherRef.current = createVehicleMatcher();
+  /* ══ ★ R11（2026-11-21）：未锁车牌定期重试的运行时状态 ══════════════════════
+     判定全在 `match-retry.ts`（纯函数、可单测）；这里只持有 3 个运行时事实。 */
+  /** 重试状态机（帧序号 / 降频闸 / 双帧确认计数 / 放弃原因）—— 每段重置 */
+  const retryRef = useRef<RetryState>(createRetryState());
+  /** 进入 riding 的时刻（0 = 不在 riding）。「累计 15 分钟降频」与「第 2 帧起算」都要它 */
+  const ridingAtRef = useRef(0);
+  /**
+   * 上一车辆帧的沿线里程（用于算**用户沿线速度**）。
+   * ⚠️ 不用 GPS 原始 speed：口径与 `advanceLrt` 的里程轴不一致（一个沿路、一个直线）。
+   *   `null` / 负增量一律当"不知道"⇒ 放弃条件③不计数（宁可多跑一帧，也不凭猜想放弃）。
+   */
+  const matchDistRef = useRef<{ ts: number; dist: number } | null>(null);
   /** ★ 本批：车辆帧序号（`mapVehicles` 随 12s 帧重算，AC-46） */
   const [listTick, setListTick] = useState(0);
   /** ★ 本批：站点里程阶梯版本（ladder 就绪后触发 `youAt` 重算） */
@@ -922,11 +962,19 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
      *   展示本线路全部在途车（与候车态同语义）比空白诚实。
      *   ⚠️ 必须与"步行段降频轮询"成对：无牌时帧靠它供给，只改这里没有数据可显。
      */
-    if (!plate) return lites.map(withCompany);
+    /**
+     * ★ R11（2026-11-21）：未锁牌时**仍然画全部在途车**（见上面的既有理由），
+     *   但中置信指向的那一辆打 `pending` 标记 ⇒ 地图上「疑似本车」有独立视觉，
+     *   且带 `data-pending="1"` 观测钩子。**这只是展示**：不写库、不改报站。
+     */
+    if (!plate) {
+      if (!pendingPlate) return lites.map(withCompany);
+      return lites.map((v) => (v.plate === pendingPlate ? { ...withCompany(v), pending: true } : withCompany(v)));
+    }
     const v = lites.find((x) => x.plate === plate);
     return v ? [withCompany(v)] : [];
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase, plate, listTick]);
+  }, [phase, plate, listTick, pendingPlate]);
 
   /**
    * 更新 GPS 采样缓冲。
@@ -1008,6 +1056,13 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
     setMatchSource("gps");
     setMatchPending(false);
     setPendingPlate(null);
+    /* ★ R11：重试状态机与"进入 riding 时刻"都只对本段有效 ⇒ 换段/重置必须归零，
+       否则上一段的帧序号会让新段跳过"第 2 帧起算"的预热，甚至带着旧的放弃原因永不重试。 */
+    retryRef.current = createRetryState();
+    ridingAtRef.current = 0;
+    matchDistRef.current = null;
+    setMatchConfirmPlate(null);
+    setMatchRetry("");
     setEnteredVia(null); // ★ 2026-11-05：会话重置（否则下一段带着上一段的进入方式）
     setBoardedByPosition(false);
     setRefVehDistToBoardM(null);
@@ -1220,14 +1275,60 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
             if (!matchOnRef.current) return;
             const latestFix = fixesRef.current[fixesRef.current.length - 1] ?? null;
             const distNow = lrtStateRef.current;
+            const nowMs = Date.now();
+            if (ridingAtRef.current === 0) ridingAtRef.current = nowMs;
+
+            /* ── ★ R11：本帧**外部事实**（全部在跑算法之前取好）────────────────────
+               `null` 一律表示"不知道" ⇒ 依赖它的放弃条件不计数（见 `match-retry.ts`）。
+               ⚠️ 剩余站数 / 剩余里程 / 最近站距都从 **ladder** 推，而不是从 `prog`：
+                  `prog` 是"已锁牌"之后的产物，未锁牌时它本来就是空的 —— 用它判放弃会 100% 误判。 */
+            const lad = ladderRef.current;
+            const ladderArr = lad && lad.ladder.length >= 2 ? lad.ladder : null;
+            const distOk = distNow.dist > 0 && distNow.badStreak < 2;
+            const dist = distOk ? distNow.dist : null;
+            const lastMile = ladderArr ? ladderArr[ladderArr.length - 1] : null;
+            const prevDist = matchDistRef.current;
+            // 沿线速度（km/h）：只在「上一帧也是可信里程」且时间前进时给值；负增量 = 里程跳回 ⇒ 不知道
+            let speedKmh: number | null = null;
+            if (prevDist && dist != null && prevDist.dist > 0 && nowMs > prevDist.ts) {
+              const v = (((dist - prevDist.dist) / (nowMs - prevDist.ts)) * 3600) / 1000;
+              speedKmh = v >= 0 ? v : null;
+            }
+            if (dist != null) matchDistRef.current = { ts: nowMs, dist };
+            const lastRes = matcherRef.current!.last();
+            const topGapM =
+              lastRes && lastRes.ranking.length >= 2
+                ? Math.abs(lastRes.ranking[1].dM - lastRes.ranking[0].dM)
+                : null;
+            const ctx = {
+              nowMs,
+              ridingMs: nowMs - ridingAtRef.current,
+              userSpeedKmh: speedKmh,
+              nearestStopM:
+                dist != null && ladderArr
+                  ? ladderArr.reduce((m, v) => Math.min(m, Math.abs(v - dist)), Number.POSITIVE_INFINITY)
+                  : null,
+              remainM: dist != null && lastMile != null ? Math.max(0, lastMile - dist) : null,
+              remainStops: ladderArr ? Math.max(0, ladderArr.length - 1 - distNow.passedIdx) : null,
+              accuracyM: latestFix?.accuracy ?? null,
+              excludedCount: matcherRef.current!.excludedCount(),
+              poolSize: lastRes ? lastRes.poolSize : null,
+              topGapM,
+            };
+
+            /* ① 节奏闸 + 6 条放弃条件（纯逻辑；命中即整段不再重试） */
+            const gate = retryBegin(retryRef.current, ctx);
+            setMatchRetry(retryTag(retryRef.current));
+            if (!gate.run) return;
+
             const res = matcherRef.current!.run({
               colored: leg.colored,
               ladder: ladderRef.current,
               stopMains,
               vehicles: list,
               // GPS 里程不可信（连续丢帧）⇒ 不当作锚，让算法自己的硬门否决
-              dUser: distNow.dist > 0 && distNow.badStreak < 2 ? distNow.dist : null,
-              nowMs: Date.now(),
+              dUser: distOk ? distNow.dist : null,
+              nowMs,
               userAccuracyM: latestFix?.accuracy ?? null,
             });
             /** 供「不是这辆」翻候选：用本帧排名，别再依赖候车阶段留下的旧名单 */
@@ -1246,35 +1347,82 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
                   }),
               );
             }
-            if (res.confidence === "high" && res.plate) {
-              // 高置信：锁牌 + 进度改由车辆驱动（报站读数这才有依据）
-              vehicleRef.current = list.find((x) => x.plate === res.plate) ?? null;
+            /* ② 双帧确认 + 降频（纯逻辑）：`lockPlate` 只在"连续 2 次 high 同车牌"时给出 */
+            const out = retryNote(retryRef.current, res, ctx, { mediumOk: usableMedium(res) });
+            setMatchRetry(retryTag(retryRef.current));
+            if (out.lockPlate) {
+              // 高置信 ×2：锁牌 + 进度改由车辆驱动（报站读数这才有依据）
+              const locked = out.lockPlate;
+              vehicleRef.current = list.find((x) => x.plate === locked) ?? null;
               missRef.current = 0;
-              setPlate(res.plate);
+              setPlate(locked);
               setPendingPlate(null);
               setMatchPending(false);
+              setMatchConfirmPlate(null); // 已自动锁上 ⇒ 不再需要人工确认
               setProgressSource("vehicle");
               setBoardMatch("auto");
               // 跃迁瞬间读到的来源必须是「定位+车辆」：匹配的证据本身就是用户自身位移
               setMatchSource("gps+vehicle");
               setNote("");
-              setAutoNote(`已对上车辆 - ${res.plate}`);
-            } else if (usableMedium(res)) {
+              setAutoNote(`已对上车辆 - ${locked}`);
+            } else if (out.pendingPlate) {
               /**
-               * 中置信：**只标注，不锁牌**（`plate` 保持 null）。
+               * 中置信（或 high 的**第 1 帧**）：**只标注，不锁牌**（`plate` 保持 null）。
                *
                * ① 为什么不能设 `plate`：`plate` 一旦有值，轮询 effect 会走 `fetchFrame(plate)`
                *    ⇒ `progressOf` 从车牌推出报站值 ⇒ 违反契约「medium 不得据以报站」。
                *    所以用独立的 `pendingPlate` 只做**展示**，进度与报站继续走 GPS。
                * ② 为什么 `boardMatch` 是 `auto` 而不是 `confirmed`（team-lead 裁决）：
                *    `confirmed` 留给「用户确认」。若中置信占用它，同一个值会同时代表
-               *    「系统不确定（可能需要纠错）」与「人已确认（无需纠错）」两件**相反**的事，
-               *    将来做 Q5 轻确认时再也分不开 ⇒ 用独立 `matchPending`（`data-match-pending`）区分。
+               *    「系统不确定（可能需要纠错）」与「人已确认（无需纠错）」两件**相反**的事
+               *    ⇒ 用独立 `matchPending`（`data-match-pending`）区分。
+               * ③ ★ R11：连续 2 次 medium 同车牌 ⇒ 额外给「一键确认」（`matchConfirmPlate`），
+               *    但**仍然不写库** —— 人点了才算确认（`boardMatch` 才会变 `confirmed`）。
                */
-              setPendingPlate(res.plate);
-              setMatchPending(true);
-              setBoardMatch("auto");
-              setMatchSource("gps+vehicle");
+              setPendingPlate(out.pendingPlate);
+              /**
+               * ★ P1（2026-11-21 评审）：**「一键确认」必须粘住**，不能每帧覆盖。
+               *
+               * ── 原来的 bug ────────────────────────────────────────────────────
+               *   写成 `setMatchConfirmPlate(out.confirmPlate)` ⇒ 任何一帧 `out.confirmPlate === null`
+               *   （低置信 / 本帧没算出 medium）就把按钮**抹掉**。而 `:298` 的对外契约原文是
+               *   「**全程常驻**：一旦出现就保持到锁上牌 / 用户点掉 / 本段结束（不被低置信帧冲掉）」
+               *   ⇒ **文档承诺的行为根本不存在**（本仓最忌讳的一类：契约与实现说两件事）。
+               *
+               * ── 现在 ──────────────────────────────────────────────────────────
+               *   `?? prev` ⇒ 新值只为非 null 时才覆盖。清空**只允许**下面 5 个显式点：
+               *     ① 自动锁上牌（本函数 high 分支）
+               *     ② 用户点掉（`confirmMatch()`）
+               *     ③ `repick()` 换到另一辆
+               *     ④ 用户手动选车 / 回等车态（`board()` / `onNotBoard()`）
+               *     ⑤ 换段 / 会话重置（分段 reset 块）
+               *   ⚠️ 不要加第 6 个清零点，尤其**不要**在低置信分支里清 —— 那正是这条 P1 的病根。
+               */
+              setMatchConfirmPlate((prev) => out.confirmPlate ?? prev);
+              /**
+               * ⚠️ 这里必须区分「medium」与「high 的第 1 帧」：两者都给 `pendingPlate`（都要让用户
+               *   先看见车牌），但 `data-match-pending` 的**契约是"中置信"** ⇒ high 的第 1 帧
+               *   不能置位，否则观测面会说谎（断言会读到"中置信"而实际是等第二帧的高置信）。
+               *   同理 `boardMatch` / `matchSource` 也只在真·medium 时才声称（此时什么都没锁）。
+               */
+              const isMediumNow = res.confidence === "medium" && usableMedium(res);
+              if (isMediumNow) {
+                setMatchPending(true);
+                setBoardMatch("auto");
+                setMatchSource("gps+vehicle");
+              } else {
+                setMatchPending(false);
+              }
+            } else {
+              /**
+               * low：清掉「本帧的待确认展示」（避免上一帧的车牌一直挂着）。
+               * ⚠️ **但绝不在这里清 `matchConfirmPlate`** —— 那正是 P1 ① 的病根：
+               *   「一键确认」的契约是**全程常驻**（`:298`），一旦被低置信帧抹掉，
+               *   用户再也没机会确认，只能等下一次连续两次 medium 重来。
+               *   它的四个清零点见上方 `setMatchConfirmPlate(prev => …)` 那段注释。
+               */
+              setMatchPending(false);
+              setPendingPlate(null);
             }
             return;
           }
@@ -1406,6 +1554,7 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
       setMatchSource(nextPlate ? "vehicle" : "gps");
       setMatchPending(false); // 自动上车（R1/R2/轻轨）不是"中置信"，无待确认语义
       setPendingPlate(null);
+      setMatchConfirmPlate(null); // ★ R11：已锁定 ⇒ 一键确认按钮不得继续挂着
       setAutoSwitched(true);
       setNote(source === "gps" ? "" : "");
       setAutoNote(
@@ -2190,6 +2339,7 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
         setMatchSource("manual");
         setMatchPending(false);
         setPendingPlate(null);
+        setMatchConfirmPlate(null); // ★ R11：用户已手动选车 ⇒ 一键确认作废
         ridingStartIdxRef.current = -1;
         setListTick((t) => t + 1);
         ladderRef.current = null;
@@ -2230,6 +2380,7 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
     setMatchSource("vehicle");
     setMatchPending(false);
     setPendingPlate(null);
+    setMatchConfirmPlate(null); // ★ R11：已换到另一辆 ⇒ 原「一键确认」指向的车牌作废
     missRef.current = 0;
     setNote("");
     setProg(null);
@@ -2237,6 +2388,38 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
     boardStreakRef.current = 0;
     lastSwitchTsRef.current = Date.now();
   }, [clearTraveled]);
+
+  /**
+   * ★ R11：**用户一键确认**「就是这辆」。
+   *
+   * ── 与 `repick` 的分工 ──────────────────────────────────────────────────
+   *   · `repick`   = 用户说"**不是**这辆"（从候选里另选一辆）⇒ `boardMatch="corrected"`；
+   *   · 本方法     = 用户说"**就是**这辆"（系统猜对了但证据只到 medium）⇒ `boardMatch="confirmed"`。
+   *   `confirmed` 这个值在 `BoardMatch` 里一直**为它留着**（见 `useRideTracking` 顶部那段
+   *   "中置信为什么占 auto 不占 confirmed"），到这里才第一次被真正写入。
+   *
+   * ── 三条纪律 ────────────────────────────────────────────────────────────
+   *   ① **只在这里写 `plate`**：medium 本身绝不写库（否则 `progressSource` 变 vehicle、
+   *      报站值从车牌推 ⇒ 违反「medium 不得据以报站」）；
+   *   ② `matchConfirmPlate` 立刻清掉 —— 按钮是一次性的，不能重复点出两次状态跃迁；
+   *   ③ `refVehDistToBoardM` 清 `null`：与 `repick` 同因（该值属于**上一辆车**，
+   *      保留会让 `gaveUpThisBus` 用旧车距离误报"没赶上"）。
+   */
+  const confirmMatch = useCallback((p: string) => {
+    if (!p) return;
+    setRefVehDistToBoardM(null);
+    vehicleRef.current = listRef.current.find((x) => x.plate === p) ?? null;
+    missRef.current = 0;
+    setPlate(p);
+    setProgressSource("vehicle");
+    setBoardMatch("confirmed");
+    setMatchSource("gps+vehicle");
+    setMatchPending(false);
+    setPendingPlate(null);
+    setMatchConfirmPlate(null);
+    setNote("");
+    setAutoNote(`已确认车辆 - ${p}`);
+  }, []);
 
   /**
    * 下车推进（手动 / 自动共用）。
@@ -2433,6 +2616,7 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
     setMatchSource("gps");
     setMatchPending(false);
     setPendingPlate(null);
+    setMatchConfirmPlate(null); // ★ R11：回等车态 ⇒ 一键确认作废
     setProg(null);
     clearTraveled();
     setAlarm("none");
@@ -2622,6 +2806,9 @@ export function useRideTracking(opts: UseRideTrackingOpts): RideTrackView {
     matchSource,
     matchPending,
     pendingPlate,
+    matchConfirmPlate,
+    matchRetry,
+    onConfirmMatch: confirmMatch,
     anomaly,
     lastVehicleTs,
     lastFixTs,

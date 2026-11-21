@@ -8,7 +8,9 @@
  *     ├ .lp-stop__rail  线路色竖线 3px（首站从圆点起、末站到圆点止）
  *     ├ .lp-stop__dot   9px 空心圆（线路色描边）／首末站 11px 实心
  *     ├ .lp-stop__body
- *     │   ├ .lp-stop__name  站名（繁体原文，**不做简繁转换**）
+ *     │   ├ .lp-stop__name  **澳门巴士/轻轨**：平台码 + 一个空格 + 站名，同一个文本流
+ *     │   │                  （如 `T363/2 連貫公路/威尼斯人`）；**通琴号只有站名**（无站号）
+ *     │   │                  繁体原文，**不做简繁转换**；码与名同字号/同字重/同颜色
  *     │   └ .lp-stop__xfer  「换乘 3 路、25 路」（可选，最多 3 条）
  *     └ .lp-stop__eta   报站三态，固定 16px 高（**不画骨架**，列表零跳动）
  *         └ .lp-stop__time  计划时刻 `HH:MM`（★ 2026-11-08，**可选**；不传即不渲染）
@@ -186,6 +188,21 @@ export interface LineStopRowProps {
    *   不传 ⇒ 图标渲染为**非交互 `span`**（不做「死键」：绝不渲染一个点了没反应的 button）。
    */
   onOpenBusCard?: ((veh: LineStopVeh) => void) | null;
+  /**
+   * ★ 2026-11-21（负责人口径）：**线路类型** —— 决定站名行前面有没有站号。
+   *
+   *   负责人原话：「**通琴号没有站号，只有站名。站标号只有澳门公共交通的站**」。
+   *   ⇒ `tqh` 行**只渲染站名**；`macau`（巴士 / 轻轨）行渲染「平台码 + 一个空格 + 站名」。
+   *
+   * ⚠️ **不要**改成用「`stop.code` 是否为空」来判：
+   *   通琴号的 `code` 现在是站 id 的字符串（`LineStopsSheet` 里 `String(st.station_id)`），
+   *   它**非空**——按空值兜会让 `12 站名` 这种纯数字 id 直接上屏；
+   *   而哪天数据给通琴号补了码，同一个"空值判断"又会**静默放行**。
+   *   类型是**事实**，码是否为空是**巧合** —— 判据只能钉事实。
+   *
+   * 缺省 `macau`：既有消费方（`/line/[code]` 页、`RouteStopsSheet` 的 bus/lrt）行为不变。
+   */
+  lineType?: "macau" | "tqh";
 }
 
 /** 把 `frac` 夹进 [0,1]；非有限值（NaN / ±Infinity）⇒ 0（吸附本行节点） */
@@ -206,10 +223,17 @@ export default function LineStopRow({
   veh,
   plannedTime,
   onOpenBusCard,
+  lineType = "macau",
 }: LineStopRowProps) {
   const isFirst = index === 0;
   const isLast = index === total - 1;
   const isEnd = isFirst || isLast;
+  /**
+   * ★ 2026-11-21：**通琴号没有站号**（负责人原话），只渲染站名。
+   *   澳门巴士 / 轻轨：站号与站名**同一文本流**（`T363/2 連貫公路/威尼斯人`）——
+   *   与导航纵条一致（`NavStrip` 渲染的 `s.label` 本来就是一整串）。
+   */
+  const withCode = lineType === "macau";
 
   return (
     <li
@@ -247,11 +271,49 @@ export default function LineStopRow({
               {side === "横琴" ? "琴" : "澳"}
             </span>
           )}
+          {/**
+           * ★ R3（2026-11-21 · 负责人口径）：**澳门巴士/轻轨**行 = 平台码 + 空格 + 站名，
+           *   如 `T363/2 連貫公路/威尼斯人`；**通琴号行只有站名**（负责人：
+           *   「通琴号没有站号，只有站名，站标号只有澳门公共交通的站」）⇒ 由 `lineType` 门控。
+           *
+           * ★★ 2026-11-21 真机验收返工（②）：**改成与站名同一个文本流**。
+           *   上一版把码做成独立灰色小字（`--meta` / `--text-2xs`），那是抄了「导航信息行」
+           *   的样式；负责人要的是**导航纵条**的样子 —— 导航纵条里站号根本不是独立 span，
+           *   `NavStrip.tsx:158-170` 直接渲染 `s.label` 一整串，而巴士的 label 本来就含站号
+           *   前缀（`"T373/2 偉龍/科技大學"`，见 `NavDetailBody.tsx` 的 `splitStopLabel` 注释）。
+           *   ⇒ 判据是「与导航纵条里同一站的一行，字号/字重/颜色一致」。同一文本流是这个
+           *     判据**唯一**的结构性保证：分成两个 span 就必须靠两条 CSS 同步，早晚漂。
+           *
+           * ① 放**站位码**还是主码：用户要的是能对着站牌核对的**平台码** ⇒ 直接用 `stop.code`
+           *    原文（`M95/2` / `T363/2` 这种带 `/` 的形态，与站牌一致）；
+           *    ⚠️ 不要用 `mainOf(stop.code)` 剥掉 `/x` —— 那样「同站不同站台」就分不开了，
+           *    而这正是 R3 要解决的问题。
+           * ② 空格：码与名之间必须有**可见的一个空格**（不是 `gap`）—— 用户给的样例是
+           *    `T363/2 連貫公路/威尼斯人`，空格是文案的一部分，复制/朗读都靠它分词。
+           *    ⚠️ 写成 `{" "}` 而不是 `&nbsp;`：屏幕阅读器读普通空格会分词，读 `&nbsp;` 不会。
+           * ③ `--lp-name-chars` = **本行实际渲染的字符数**：
+           *    · 有码（`macau`）= 码 + 空格 + 名 的整串；无码（`tqh`）= **只算站名**。
+           *    ⚠️ 2026-11-21 修正：上一版**无条件**按整串算，于是在通琴号行上为一个
+           *       **根本不该出现**的站号预留了预算 ⇒ 18 字长名被压到 7.04px（实测不可读）。
+           *       现在通琴号不出码，预算自然回到站名（同一条长名回到 9.78px）。
+           *    ⚠️ 本变量只对 `[data-side-row="1"]` 的行生效，而这类行现在**只有通琴号**
+           *       （澳门行的 `side` 恒 undefined）⇒ 实际生效值就是"只算站名"。
+           *       保留 `withCode` 分支是为了将来澳门行若也带 `side` 时**不会裁字**，
+           *       不是为了通琴号。
+           */}
           <span
             className="lp-stop__name"
-            style={side ? ({ ["--lp-name-chars" as string]: String([...stop.name].length) } as CSSProperties) : undefined}
+            style={
+              side
+                ? ({
+                    ["--lp-name-chars" as string]: String(
+                      withCode ? [...stop.code].length + 1 + [...stop.name].length : [...stop.name].length,
+                    ),
+                  } as CSSProperties)
+                : undefined
+            }
           >
-            {stop.name}
+            {withCode ? `${stop.code} ${stop.name}` : stop.name}
           </span>
         </span>
         {xfer.length > 0 && (

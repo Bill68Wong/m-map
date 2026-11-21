@@ -102,7 +102,7 @@ npx tsc --noEmit       # 类型检查
 
 ## 状态
 
-当前版本 **v<!-- app-version -->4.3.0<!-- /app-version -->**。个人项目，持续按实际通勤体验迭代。
+当前版本 **v<!-- app-version -->4.4.0<!-- /app-version -->**。个人项目，持续按实际通勤体验迭代。
 
 发现问题或有建议，欢迎开 [Issue](https://github.com/Bill68Wong/m-map/issues)。
 

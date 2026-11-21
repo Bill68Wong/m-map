@@ -50,7 +50,7 @@
  * ★ 站名/线路名用**繁体**，界面文案用**简体**（§6.2）。
  * ★ 报站的**站数 N** 与「**即将到站**」用 `<b>` + 青花蓝突出（与卡片报站行同款）。
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import RouteStack from "@/components/RouteStack";
 import Icon from "@/components/ui/Icon";
@@ -255,6 +255,26 @@ export default function StationCard({
   const [items, setItems] = useState<EtaItem[]>([]);
   const [showAllGroups, setShowAllGroups] = useState(false);
   /**
+   * ★ R7（2026-11-21 · 负责人口径）：导航中点线路行 **不再变灰**，但**不能是"点了没反应"**。
+   *   `NavShell` 那段「禁止沉默逻辑错误」的注释是硬纪律：同一个卡片里一行禁用、一行不禁用，
+   *   而用户看不出原因，就是最典型的沉默错误 ⇒ 必须给一句当场的说明。
+   *   实现：轻提示（3s 自清），挂在 `aria-live="polite"` 里 —— 视觉用户看得见，
+   *   屏幕阅读器也播得出来（`aria-disabled` 本身**不会**播报原因）。
+   */
+  const [pickHint, setPickHint] = useState("");
+  const pickHintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showPickHint = useCallback((msg: string) => {
+    setPickHint(msg);
+    if (pickHintTimerRef.current) clearTimeout(pickHintTimerRef.current);
+    pickHintTimerRef.current = setTimeout(() => setPickHint(""), 3000);
+  }, []);
+  useEffect(
+    () => () => {
+      if (pickHintTimerRef.current) clearTimeout(pickHintTimerRef.current);
+    },
+    [],
+  );
+  /**
    * ★ 2026-09-22：秒级倒计时的时钟。
    *   **只在需要逐秒刷新时才起定时器**（轻轨含 `depMs`，或列表里出现「石排湾线 / 横琴线」），
    *   否则每秒重渲染纯属浪费。
@@ -380,7 +400,12 @@ export default function StationCard({
   const canPick = !!onPickLine;
   const pickDisabled = !canPick || pickLineDisabled;
   const pickOf = (it: EtaItem) => () => {
-    if (pickDisabled || !onPickLine) return;
+    if (!onPickLine) return;
+    if (pickDisabled) {
+      // ★ R7：**不静默**。导航态下行仍然可点（只是不跳走），点了必须解释一句为什么。
+      showPickHint("导航中不可切换线路，请先结束导航");
+      return;
+    }
     onPickLine(it.route, it.kind === "lrt" ? "lrt" : "bus");
   };
 
@@ -405,7 +430,14 @@ export default function StationCard({
             },
           }
         : {})}
-      style={canPick ? { cursor: pickDisabled ? "not-allowed" : "pointer", opacity: pickDisabled ? 0.45 : undefined } : undefined}
+      /**
+       * ★ R7（2026-11-21）：**不再降透明度**（原 `opacity: 0.45`）。
+       *   用户口径：「点击站点图标正常显示站点弹窗，但禁用点击跳转线路查看模式」——
+       *   要的是**看得清、点不跳**，不是"整行看着不可用"。
+       *   保留 `cursor: not-allowed` + `aria-disabled`：前者给鼠标用户当下的提示，
+       *   后者让辅助技术知道"这不是可执行操作"（R7 不改变可达性语义，只改视觉 + 补提示）。
+       */
+      style={canPick ? { cursor: pickDisabled ? "not-allowed" : "pointer" } : undefined}
     >
       <RouteStack codes={[it.route]} colorOf={(c) => colors[c] ?? null} size="sm" />
       <span className="nav-station-card__dir t-label t-muted">{it.dirLabel}</span>
@@ -492,6 +524,21 @@ export default function StationCard({
             ))
           ))}
       </div>
+
+      {/**
+       * ★ R7：导航中点线路行的**当次解释**（3s 自清）。
+       *   · `role="status"` + `aria-live="polite"`：屏幕阅读器会播（`aria-disabled` 只报"不可用"、
+       *     **不报原因**，这是本元素存在的全部理由）；
+       *   · 高度用 `min-height` 占位，出现/消失**不推挤**下面的设点按钮与卡片高度。
+       */}
+      <p
+        className="nav-station-card__hint t-label"
+        role="status"
+        aria-live="polite"
+        data-pick-hint={pickHint ? "on" : undefined}
+      >
+        {pickHint}
+      </p>
 
       {/* ★ M4（需求 4）：设点按钮统一由 `SetPointActions` 渲染（导航态整块不渲染） */}
       <SetPointActions navActive={navActive} onSetFrom={onSetFrom} onSetTo={onSetTo} />

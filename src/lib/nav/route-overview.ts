@@ -189,6 +189,18 @@ export interface ColoredLeg {
   colored: LL[];
   /** true = 未切割成功 ⇒ colored === gray（整线着色）；**注意 ④ 同站整线着色为 false 但 colored===gray** */
   degraded: boolean;
+  /**
+   * ★ 2026-11-21（真机验收 ③ 续）：**彩段起点 / 终点的解析结果**（含来源标记）。
+   *
+   *   `point.src === "platform"` ⇒ 用的是 `(dir, seq)` 命中的站台坐标（如 `T373/2`）；
+   *   `"main"`                   ⇒ 回落主码坐标（`/api/stations` 的合成点，通常是 `/1`）；
+   *   **缺省（undefined）**       ⇒ 本腿没有彩段（①②③ 降级：无 shapes / 缺坐标 / 方向解不出）。
+   *
+   * 这是**唯一的端点真相**：步行段端点、DOM 观测属性都读它，
+   * 不要再各自调 `legPointOf` 重算一遍（那就是第二个口，早晚漂）。
+   */
+  boardPoint?: LegPoint;
+  alightPoint?: LegPoint;
 }
 
 /* ────────────────────────────── 基础几何 ────────────────────────────── */
@@ -475,15 +487,100 @@ function seqVerdictOf(
  *   · 两站序位置相同；· 全部候选被判据剔除；· 结果比旧解更长。
  *   **回落永不更差**。
  */
+/** 按 (dir, seq) 取站台；缺任一项 ⇒ `null`（调用方据此跳过该组合） */
+function platformCandAt(
+  list: PlatformCand[] | undefined,
+  dir: string | null | undefined,
+  seq: number | undefined,
+): PlatformCand | null {
+  if (!list?.length || dir == null || seq == null) return null;
+  return list.find((p) => p.dir === dir && p.seq === seq) ?? null;
+}
+
 /** 按 (dir, seq) 取站台坐标；缺任一项 ⇒ `null`（调用方据此跳过该组合） */
 function platformAt(
   list: PlatformCand[] | undefined,
   dir: string | null | undefined,
   seq: number | undefined,
 ): { lng: number; lat: number } | null {
-  if (!list?.length || dir == null || seq == null) return null;
-  const hit = list.find((p) => p.dir === dir && p.seq === seq);
+  const hit = platformCandAt(list, dir, seq);
   return hit ? { lng: hit.lng, lat: hit.lat } : null;
+}
+
+/**
+ * ══════════════════════════════════════════════════════════════════════════
+ * ★ 2026-11-21（真机验收 ③ 续）：**腿内站点坐标的唯一解析口**
+ * ══════════════════════════════════════════════════════════════════════════
+ *
+ * ── 为什么必须只有一个口 ────────────────────────────────────────────────
+ *   同一个主码 `T373` 在库里有两个站台（`/1` 与 `/2`，实测相距 43.2m，分居马路两侧），
+ *   而 `/api/stations` 按主码去重只留一个（通常是 `/1`）。于是**凡是直接吃
+ *   `leg.board.lng/lat` 的几何**都会落到 `/1`：彩段端点、步行段端点、`straightM` 距离。
+ *   本仓的教训很直接：一个概念有 N 个消费点，就会有 N 套实现、然后漂 N 种程度
+ *   （`--lp-code-chars` 那套让位公式就是这么烂掉的）。⇒ 只留一个函数，所有几何点都调它。
+ *
+ * ── 判据（为什么不"猜"第几次经过）──────────────────────────────────────
+ *   `platforms` 是 `(dir, seq)` 的候选集。`seq` 只能从**本方向的站序**反查主码得到：
+ *     · 主码在本方向站序里**恰好出现一次** ⇒ `seq` 唯一，取 `(dir, seq)` 命中的站台；
+ *     · 出现 0 次 / 多次（环线多次停靠）/ 无站序 ⇒ **不猜**，回落主码坐标。
+ *   与 `pickTripPair` 的「站码重复 ⇒ 整段回落旧解」同一条纪律：宁可少改，不肯改错。
+ *
+ * ── 返回来源标记，消费方必须按它分支 ────────────────────────────────────
+ *   `src === "main"` ⇒ 坐标与改动前**逐位相同** ⇒ 所有几何结果必须零变化
+ *   （老响应没有 `platforms`、轻轨线没有站序，都走这条）。这是"不回归"的唯一保证。
+ */
+export interface LegPoint {
+  lng: number;
+  lat: number;
+  /** `platform` = 用 `(dir, seq)` 命中的站台坐标；`main` = 回落主码坐标（= 改前行为） */
+  src: "platform" | "main";
+  /** 命中的完整站台码（`platform`）或主码（`main`） */
+  code: string;
+  /** 命中的站序（`platform` 时非空） */
+  seq: number | null;
+}
+
+/** 腿端点（`detail-body` 的 `legs[].board/alight` 结构；`code`/`platforms` 都可能缺） */
+export type LegEnd = {
+  code?: string;
+  lng: number;
+  lat: number;
+  platforms?: PlatformCand[];
+} | null | undefined;
+
+/** 主码在本方向站序里的**唯一**位置；0 次或 >1 次 ⇒ `null`（不可判，不猜） */
+function seqOfMainInStations(
+  stations: RouteStopSeq[] | null | undefined,
+  code: string | undefined,
+): number | null {
+  if (!stations?.length || !code) return null;
+  const main = mainCodeOf(code);
+  let hit: number | null = null;
+  for (const s of stations) {
+    if (mainCodeOf(s.code) !== main) continue;
+    if (hit != null) return null; // 出现 >1 次 ⇒ 第几次经过不可判
+    hit = s.seq;
+  }
+  return hit;
+}
+
+/**
+ * 腿端点 → 坐标（**唯一解析口**，见上方说明）。
+ *
+ * @param end      端点（缺 `platforms` / 缺 `code` / 无站序 ⇒ 回落主码坐标）
+ * @param dir      本腿方向（`shape.dir`）；空 ⇒ 不产出站台坐标
+ * @param stations 本方向站序（主码 + seq）
+ */
+export function legPointOf(
+  end: LegEnd,
+  dir: string | null | undefined,
+  stations: RouteStopSeq[] | null | undefined,
+): LegPoint | null {
+  if (!end) return null;
+  const seq = seqOfMainInStations(stations, end.code);
+  const cand = platformCandAt(end.platforms, dir, seq ?? undefined);
+  if (cand) return { lng: cand.lng, lat: cand.lat, src: "platform", code: cand.code, seq: seq as number };
+  return { lng: end.lng, lat: end.lat, src: "main", code: end.code ?? "", seq: null };
 }
 
 /**
@@ -596,8 +693,18 @@ function pickTripPair(
   /** 同一主码上下车（board === alight）⇒ 「第几次经过」不可判 ⇒ 回落旧解（不冒险） */
   if (pb === pa) return base;
 
-  const tb = nearestTrips(pts, board, tolM);
-  const ta = nearestTrips(pts, alight, tolM);
+  /**
+   * ★ 2026-11-21（真机验收 ③ 续）：**两个端点一律走 `legPointOf` 这一个口**。
+   *   有站台坐标 ⇒ 用它（`T373/2` 而不是 `/1`）；没有 ⇒ 与改前逐位相同。
+   *   受它影响的有两处，都是几何：`nearestTrips` 的锚点、`straightM`（三角不等式下限）。
+   */
+  const pB = legPointOf(board, dir, stations);
+  const pA = legPointOf(alight, dir, stations);
+  const bPt = pB ? { lng: pB.lng, lat: pB.lat } : board;
+  const aPt = pA ? { lng: pA.lng, lat: pA.lat } : alight;
+
+  const tb = nearestTrips(pts, bPt, tolM);
+  const ta = nearestTrips(pts, aPt, tolM);
   // 两个站都只有一趟 ⇒ 「重选」没有意义（与旧解一致）
   if (tb.length < 2 && ta.length < 2) return { ...base, seqDir: pa > pb ? "forward" : "reverse" };
 
@@ -634,8 +741,10 @@ function pickTripPair(
   const hops = pa > pb ? pa - pb : loop ? stopCount - pb + pa : pb - pa;
   /** ② 本条线路的站距经验下限 */
   const hopFloor = ARC_MIN_PER_HOP_RATIO * hops * avgHopM;
-  /** 起终点直线距离（① 三角不等式用；两个端点在同一坐标系，无需转换） */
-  const straightM = distM([board.lng, board.lat], [alight.lng, alight.lat]);
+  /** 起终点直线距离（① 三角不等式用；两个端点在同一坐标系，无需转换）
+   *  ★ 2026-11-21：改用 `legPointOf` 解析出的端点（站台优先），否则这一项会拿
+   *    `/1` 的坐标算出一条**偏大**的下限，把正确的短弧判据挤掉。 */
+  const straightM = distM([bPt.lng, bPt.lat], [aPt.lng, aPt.lat]);
 
   const baseArc = arcMiles(pts, iBoard0, iAlight0, loop, cum);
 
@@ -720,8 +829,18 @@ export function chooseShape(
     const shape = seqSame[0];
     const pts = parsePolyline(shape.polyline);
     if (pts.length >= 2) {
-      const nb = nearestOnPath(pts, board);
-      const na = nearestOnPath(pts, alight);
+      /**
+       * ★ 2026-11-21（真机验收 ③ 续）：`dBoard/dAlight`（选向打分与容差门）**继续用主码坐标**
+       *   —— 改外层选向会翻转 `ColoredLeg.dir`，而它要喂 `/api/route-vehicles?dir=`。
+       *   **基准锚点 `iBoard0/iAlight0` 改用 `legPointOf`**：有站台坐标就用站台，
+       *   没有就逐位等于今天的行为（老响应 / 轻轨 / 无站序零回归）。
+       */
+      const nbMain = nearestOnPath(pts, board);
+      const naMain = nearestOnPath(pts, alight);
+      const bPt = legPointOf(board, shape.dir ?? null, shape.stations);
+      const aPt = legPointOf(alight, shape.dir ?? null, shape.stations);
+      const nb = bPt?.src === "platform" ? nearestOnPath(pts, bPt) : nbMain;
+      const na = aPt?.src === "platform" ? nearestOnPath(pts, aPt) : naMain;
       const loop = isLoop(pts, shape.startStop, shape.endStop);
       const pair = pickTripPair(
         pts,
@@ -739,8 +858,8 @@ export function chooseShape(
         dir: shape.dir ?? null,
         iBoard: pair.iBoard,
         iAlight: pair.iAlight,
-        dBoard: nb.distM,
-        dAlight: na.distM,
+        dBoard: nbMain.distM,
+        dAlight: naMain.distM,
         pts,
         loop,
         seqDir: pair.seqDir,
@@ -754,11 +873,18 @@ export function chooseShape(
   for (const shape of shapes ?? []) {
     const pts = parsePolyline(shape.polyline);
     if (pts.length < 2) continue;
-    const nb = nearestOnPath(pts, board);
-    const na = nearestOnPath(pts, alight);
-    if (nb.distM > tolM || na.distM > tolM) continue; // 该方向不含此站
-    const score = nb.distM + na.distM;
+    /* 主码坐标：容差门与打分（**不许换成站台坐标**，理由见上面直选分支的注释） */
+    const nbMain = nearestOnPath(pts, board);
+    const naMain = nearestOnPath(pts, alight);
+    if (nbMain.distM > tolM || naMain.distM > tolM) continue; // 该方向不含此站
+    const score = nbMain.distM + naMain.distM;
     const loop = isLoop(pts, shape.startStop, shape.endStop);
+
+    /* 基准锚点：有站台坐标用站台，否则与改前逐位相同（见直选分支注释） */
+    const bPt = legPointOf(board, shape.dir ?? null, shape.stations);
+    const aPt = legPointOf(alight, shape.dir ?? null, shape.stations);
+    const nb = bPt?.src === "platform" ? nearestOnPath(pts, bPt) : nbMain;
+    const na = aPt?.src === "platform" ? nearestOnPath(pts, aPt) : naMain;
 
     // ★ 4-B−：内层按站序重选配对（无站序 / 无更优解 ⇒ 原样返回旧解）
     const pair = pickTripPair(
@@ -778,8 +904,8 @@ export function chooseShape(
       dir: shape.dir ?? null,
       iBoard: pair.iBoard,
       iAlight: pair.iAlight,
-      dBoard: nb.distM,
-      dAlight: na.distM,
+      dBoard: nbMain.distM,
+      dAlight: naMain.distM,
       pts,
       loop,
       seqDir: pair.seqDir,
@@ -944,11 +1070,26 @@ export function buildColoredLegs(
     const gray = picked.pts;
     const dir = picked.dir;
 
+    /**
+     * ★ 2026-11-21（真机验收 ③ 续）：④⑤ 的端点点位**一律走 `legPointOf`**。
+     *   `src === "main"` ⇒ 坐标与改前逐位相同（老响应 / 轻轨无站序 / 主码重复）⇒ 零回归。
+     *
+     *   ⚠️ ④「起终点同站」也换成站台坐标，看起来像多此一举，其实是**同一条不变式**：
+     *      board 与 alight 主码相同时，`seqOfMainInStations` 会给两边返回**同一个 seq**
+     *      ⇒ 命中同一个站台 ⇒ 距离仍是 ~0 ⇒ 分支判定不会翻转（这条已由
+     *      `test:route-overview` 的 ④ 用例守住）。
+     */
+    const bp = legPointOf(leg.board, dir, picked.shape.stations);
+    const ap = legPointOf(leg.alight, dir, picked.shape.stations);
+    /* ★ 2026-11-21：端点解析结果随腿下发（步行段端点与 DOM 观测都读它，不各自重算） */
+    const boardPoint = bp ?? undefined;
+    const alightPoint = ap ?? undefined;
+
     // ④ 起终点同站 ⇒ 整线着色（非降级）
-    const boardPt: LL = [leg.board.lng, leg.board.lat];
-    const alightPt: LL = [leg.alight.lng, leg.alight.lat];
+    const boardPt: LL = [bp?.lng ?? leg.board.lng, bp?.lat ?? leg.board.lat];
+    const alightPt: LL = [ap?.lng ?? leg.alight.lng, ap?.lat ?? leg.alight.lat];
     if (distM(boardPt, alightPt) <= eqM) {
-      return { ...base, dir, gray, colored: gray, degraded: false };
+      return { ...base, dir, gray, colored: gray, degraded: false, boardPoint, alightPoint };
     }
 
     // ⑤ 正常切割
@@ -957,7 +1098,7 @@ export function buildColoredLegs(
       console.warn(`[route-overview] ${leg.route} 切割失败（iBoard=${picked.iBoard} iAlight=${picked.iAlight}）⇒ 降级`);
       return { ...base, dir, gray, colored: gray, degraded: true };
     }
-    return { ...base, dir, gray, colored, degraded: false };
+    return { ...base, dir, gray, colored, degraded: false, boardPoint, alightPoint };
   });
 }
 

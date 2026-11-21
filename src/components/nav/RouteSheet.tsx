@@ -459,6 +459,11 @@ export default function RouteSheet({
         matchSource={dTrack.matchSource}
         matchPending={dTrack.matchPending}
         pendingPlate={dTrack.pendingPlate}
+        /* ★ R11（2026-11-21）：未锁车牌的定期重试 —— 双帧 medium 才给「一键确认」；
+           `matchRetry` 只作观测（帧序号/是否降频/放弃原因）。 */
+        confirmPlate={dTrack.matchConfirmPlate}
+        onConfirmPlate={dTrack.onConfirmMatch}
+        matchRetry={dTrack.matchRetry}
         onStart={dTrack.onStart}
         onBoard={dTrack.onBoard}
         onAlight={dTrack.onAlight}

@@ -2683,6 +2683,21 @@ button[aria-disabled="true"] {
   gap: 8px;
   margin-top: 10px;
 }
+/**
+ * ★ R7（2026-11-21）：导航中点线路行的**当次解释**（"导航中不可切换线路，请先结束导航"）。
+ *   · `min-height` 占位 ⇒ 提示出现/消失**不推挤**下方设点按钮，也不改变卡片高度
+ *     （卡片高度跳动会让用户手指下的按钮跑位，这是本项目反复踩过的坑）；
+ *   · 文案用 `--meta` 而非危险色：这不是错误，只是"现在不行"；
+ *   · `:empty` 时不占额外空间（只保留 min-height），避免无提示时多出一条白。
+ */
+.nav-station-card__hint {
+  min-height: 18px;
+  margin-top: 6px;
+  color: var(--meta);
+}
+.nav-station-card__hint:empty {
+  margin-top: 0;
+}
 
 /* ── 搜索面板 + 搜索框 ── */
 .nav-shell__panel {
@@ -2945,13 +2960,36 @@ button[aria-disabled="true"] {
    `RouteStopsSheet` 弹窗纵条重复，只保留弹窗。左栏空占位同步移除。
    ⚠️ `grid-template-columns: 1fr auto 1fr` **声明值不改**：现在只剩右栏一个子元素，
       仍由 `.nav-brandbar__acts { grid-column: 3 }` 靠右；中间 auto 列自然收成 0。
-   右：**竖排按钮组** 图层 → 刷新 → 路线 → 定位 → M Map（自上而下）
+   右：**竖排按钮组** 刷新 → 路线 → 定位 → M Map（自上而下；图层键已迁出，见 `.nav-layer-btn`）
    位置 = 地图区域下缘、底部导航之上（沿用 v2.4.1 拇指区口径）。
    ⚠️ `pointer-events: none` 是**必须**的：本栏是一条**通栏**，若吃事件会挡住地图的
       拖动 / 双指缩放；只让内部控件可点（`pointer-events` 可继承 ⇒ 子元素自动恢复可点）。 */
 .nav-brandbar {
+  /**
+   * ★ R5/R6（2026-11-21 · 方案 A）：右栏整体**上移 28px** —— 常量，不是百分比。
+   *
+   * ── 28 怎么来的（推导，别改成"看着差不多"的数）────────────────────────────
+   *   `--rail-lift = peek 档让位 − 原底距 + 需求间隙 = 96 − 76 + 8 = 28`
+   *     · 96 = `tqhDetentTopsPx()` 的 peek 可见高（抓手带 24 + 行 44 + 呼吸 28，
+   *            常量在 `sheet-detents.ts:63`）⇒ 面板顶边 y = H − (96 + safe-bottom)；
+   *     · 76 = 本栏原底距 = `--tabbar-h` 64 + `--space-3` 12；
+   *     · 8  = 负责人要求的「logo 条与弹窗顶边 ≥8px 可见间隙」（需求 5 第③款的量化）。
+   *   ⇒ logo 底边 y = H − (76 + safe-bottom) − 28 = H − 104 − safe-bottom，
+   *     与面板顶边 H − 96 − safe-bottom **恰好差 8px**。
+   *
+   * ── 为什么是常量而不是 `vh` ───────────────────────────────────────────────
+   *   这个数只由「peek 让位 96」和「底导 64 + 间距 12」两个**常量**决定，与视口高度、
+   *   机型安全区**都无关**（safe-bottom 在两边同时出现，约掉了）⇒ 写成 vh 反而会在
+   *   长屏上算错。⚠️ 若哪天 peek 的 96 改了（`sheet-detents.ts`），这里必须同步重算；
+   *   该函数里已有常量注释，改那边的人应当顺手改这里。
+   *
+   * ⚠️ 别顺手把 `.nav-brandbar` 的 z-index 抬起来「让右栏不被面板盖住」：
+   *   本栏整个挂在 `.nav-map-wrap`（z0）**内部**，抬 z 无效（详见 `.nav-layer-btn`）；
+   *   而且「面板盖住地图控件」是既有纪律，本轮唯一例外只有图层键。
+   */
+  --rail-lift: 28px;
   position: fixed;
-  bottom: calc(var(--tabbar-h) + var(--safe-bottom) + var(--space-3));
+  bottom: calc(var(--tabbar-h) + var(--safe-bottom) + var(--space-3) + var(--rail-lift));
   left: 0;
   right: 0;
   padding: 0 var(--space-4);
@@ -2994,6 +3032,76 @@ button[aria-disabled="true"] {
   border: var(--frame-w) solid var(--border-strong);
   border-radius: var(--radius-full);
   box-shadow: var(--shadow-hard-sm);
+}
+
+/* ══ ★ R5/R6（2026-11-21 · 方案 A）：**图层键 = 页面级独立浮动键** ══════════════════
+   外观：**完全复用 `.nav-locate`**（44×44 / `--surface` / `--accent` / 1.5px 强边 /
+   `--shadow-hard-sm` / 全圆角）—— 本类**只负责位置与层级**，不要再往这里加视觉声明，
+   否则「同一个右栏键长两种样子」就是下一轮的缺陷。
+
+   ── 为什么它必须脱离 `.nav-brandbar__acts`（结构性理由，不是审美）──────────────
+     · `.nav-brandbar` 是 `position:fixed; z-index:20` ⇒ **自成层叠上下文**；
+     · 它整棵又挂在 `.nav-shell--full .nav-map-wrap`（`fixed; z-index:0`）**内部**；
+     · ⇒ 键写在栏里，z-index 被 `20`（外层还有 `0`）夹死，**永远低于路线查看真正的宿主
+       `.lst-sheet`（76）与面板 `.route-sheet`（70）**，写多少都没用
+       （这正是「加了 z-index 却没反应」的典型陷阱）。
+     · 需求 5③「满档也看得见、点得到」⇒ 只能提到与 `.nav-locate-fab` 同级的**页面层**。
+
+   ── 两个位置态：驱动量是宿主的 `routeViewOn && !lineSheet`（输出为 `data-layer-pos`）────────
+     ※ 为什么要并上 `!lineSheet`：选线弹窗 `.rl-sheet` 是**全屏** z70，而 `route` 态的本键是 77
+       ⇒ 不并的话会出现「全屏选线弹窗之上飘着一个图层键」。选线时键回落到 `map` 态（z21），
+       被弹窗正常覆盖 —— 与改动之前的表现一致。
+     ① `map`（默认地图）：`top = 72 + safe-top`
+        推导：搜索框 = `top: 12 + safe-top`、`min-height: 52` ⇒ 底边 64 + safe-top，
+        再留 8px 间隙 ⇒ 72。右 `16px` 与搜索框 / 右侧栏**同一条右对齐线**。
+     ② `route`（路线查看）：`top = 12 + safe-top`
+        R4 已把搜索框整体隐藏（`body[data-sheet="open"] .nav-searchbar`）⇒ 顶部整条空出来，
+        键**顶到搜索框原位**，不与面板抢位置。
+     ⚠️ 两个数都是常量，锚的是「搜索框的两条边」，与视口高度无关 —— 别改成 `vh`/居中。
+     ⚠️ `lrt` 线路查看与默认地图右栏**同高**（两者都不含刷新键），但本键**不按线路族分支**：
+        它锚的是「顶部有没有搜索框」，与右栏内容高度完全无关 —— 别在这里引入
+        `picked.kind` 之类的判断（那是把两个正交的几何量耦合在一起）。
+
+   ── 层级（本轮唯一例外的收窄写法）──────────────────────────────────────────────
+     · 默认态 `z-index: 21` = **普通浮动控件**（高于搜索框 / 品牌栏 20，低于定位浮层 24）；
+     · 仅 `[data-layer-pos="route"]` 时抬到 `--z-layer-btn-float`。
+     ⚠️ 红线三条：
+       ① 这个数**只给这一个元素** —— 不许写成 `.nav-brandbar__acts{z-index:77}` 一类**容器级**规则
+          （那会把整列键都抬到面板之上，等于把「面板盖住地图控件」这条纪律整条废掉）；
+       ② 只有路线查看态抬层级，默认地图下它就是个普通控件；
+       ③ 「弹窗盖住地图控件」仍是既有纪律，此处是**唯一例外**，理由只有「需求 5③ 满档可见」。
+          **新增任何浮动控件都必须重新评估层级，不得默认继承这个数。** */
+.nav-layer-btn {
+  /**
+   * 层级常量 = **77**。
+   *
+   * ── 为什么不是 71（"面板 70 + 1"）—— 这半年的测量纠错 ─────────────────────
+   *  路线查看态真正的遮挡物**不是** `.route-sheet`（z70，那是推荐/详情面板，只在
+   *  `navPhase !== "off"` 时开，而本键在那种相位下压根不渲染），而是**站序弹窗**
+   *  `.lst-sheet`（`globals.css:9953` = **z76**）—— 它才是「线路查看 + 弹窗」这一态的宿主。
+   *  ⇒ 给 71 的话，键**输 5 层**，满档时被 `.lst-sheet` 的顶边盖掉一截：
+   *     · 键底 = `12 + safe-top + 44`；`.lst-sheet` full 顶边 = `clamp(max(safeTop+44, 12vh), 96, 128)`
+   *     · iPhone（safeTop 47 / vh 844）⇒ 103 vs 101.28 ⇒ **重叠 1.72px**；
+   *     · 灵动岛机（safeTop 59）⇒ 115 vs 103 ⇒ **重叠 12px**。
+   *  这两条都直接违反「full 档图层键完整可见」（需求 5③）⇒ 取 **76 + 1 = 77**。
+   *
+   * ── 与其它层的关系（仍然只越一级，不越级）──────────────────────────────────
+   *    77 > 76  `.lst-sheet`（站序）/ `.xb-sheet`（跨境，**在 `/cross-border` 独立路由，
+   *              与本壳不共存**；若哪天搬进 `NavShell`，必须回来重新评估这一条）
+   *    77 < 90  `.nav-card-overlay`（车卡 / 站卡：卡片是"当前关注物"，允许盖住本键）
+   *    77 < 94  `.nav-alarm--top`（下车横幅：安全级元素，永远在最上）
+   *  ⚠️ 不要"顺手"改成 999 / 1000：那会连全屏弹窗与站点卡一起盖住，表现为
+   *     「弹窗打开时顶上一个按钮还在飘」，且再没有任何规则能把它压回去。
+   */
+  --z-layer-btn-float: 77;
+  position: fixed;
+  top: calc(72px + var(--safe-top));
+  right: var(--space-4);
+  z-index: 21;
+}
+.nav-layer-btn[data-layer-pos="route"] {
+  top: calc(12px + var(--safe-top));
+  z-index: var(--z-layer-btn-float);
 }
 
 /* ── ★ v3.2.0（需求 9/11 / AC-83/85）：**页面级定位浮层** `.nav-locate-fab`
@@ -5411,7 +5519,11 @@ html[data-sheet-dragging="on"] .nav-locate-fab {
    两者的容器/芯片形态已由 `.rl-board--bus` + `.rl-chip--board` 取代，全仓 JSX 零引用。
    ⚠️ 别再按旧稿写 `grid-template-columns: repeat(7,…)` 容器：现行网格定义在 `.rl-board--bus`。 */
 
-/* 右侧竖排按钮组（★ v2.10.0）：自上而下 = 刷新 → 公共交通路线 → 定位 → M Map */
+/* 右侧竖排按钮组（★ v2.10.0；★ 2026-11-21 R5/R6 起图层键已移出）
+   自上而下 = 刷新 → 公共交通路线 → 定位 → M Map
+   ⚠️ 图层键**不在这里**：它已迁到页面级独立浮动键 `.nav-layer-btn`（原因见那一节的注释：
+      本栏整棵在 `.nav-map-wrap`(z0) 内部且自身 z20 ⇒ 键留在这里越不过面板 70）。
+      不要为了"看着整齐"把它加回来。 */
 .nav-brandbar__acts {
   grid-column: 3;
   justify-self: end;
@@ -5757,6 +5869,20 @@ html[data-sheet-dragging="on"] .nav-locate-fab {
   outline: none;
   border-radius: var(--radius-full);
   box-shadow: var(--focus-ring);
+}
+/**
+ * ★ R11（2026-11-21）：**疑似本车** —— 中置信匹配指向这辆，但证据不足以锁牌。
+ * 语义只有一条：**虚线 = 待确认**（实线/无环 = 已确认或纯环境参照）。
+ * ⚠️ 只用虚线环、**不加色块、不改涂装**：`data-state` 已经用了 4 种视觉修饰，
+ *    再叠一层实色会与「停靠中 / 总站待发 / 信号丢失」互相盖住。
+ * ⚠️ 环画在 44×44 命中盒上（不是 32px 图形上），与 `:focus-visible` 同框，不额外占位。
+ */
+.vbus-wrap[data-pending="1"] {
+  border-radius: var(--radius-full);
+  /* 只用虚线（`box-shadow` 不支持 dashed）；offset 为负 ⇒ 环画在 44px 命中盒**内**，
+     圈住 32px 图形、不额外占位、不推移相邻车辆 */
+  outline: 2px dashed var(--accent-deep);
+  outline-offset: -6px;
 }
 .vbus {
   display: block;
@@ -7044,6 +7170,30 @@ body[data-sheet="open"] .nav-searchbar {
   white-space: nowrap;
 }
 .nav-actions__sub { color: var(--muted); font-weight: 400; }
+/**
+ * ★ R11（2026-11-21）：**「确认这辆」一键确认键** —— 由 `.nav-actions__sub` 旁边那段文本升级而来。
+ * 为什么是"透明的按钮"而不是一个新 chip：它必须与「车牌待确认」**同一位置、同一排版**
+ * （用户看到的是"那行字能点了"，不是"多了一个控件"）；点错也不会毁掉什么 —— 它只做确认。
+ * ⚠️ 触摸目标：`.plate--sm` 本身才 ~60×18，**外面这层**给到 ≥44 高（`padding` 撑开），
+ *    否则拇指根本点不中（本项目 44px 规则的同一口径）。
+ * ⚠️ 不要给它加 `background`：一旦有底色，它会和 `.plate` 的黑底形成"两个块"，
+ *    与左槽的车牌语义打架。
+ */
+.nav-actions__confirm {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0 4px;
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.nav-actions__confirm .nav-actions__sub { color: var(--accent); text-decoration: underline; }
+.nav-actions__confirm:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
 .nav-actions .btn.is-emph { color: var(--accent); font-weight: var(--fw-announce); }
 .nav-actions__btnrow { display: flex; align-items: center; gap: 10px; }
 /* ★ 2026-11-03（负责人拍板）：底栏刷新键已删 ⇒ `.nav-actions__iconbtn` / `.nav-actions__cd` 两条
@@ -9689,29 +9839,44 @@ button.lp-stop__veh {
   width: 100%;
   min-height: var(--tqh-card-min-h);
   padding: var(--tqh-card-pad-y) var(--tqh-card-pad-x);
-  border: 0;
+  /**
+   * ★ 2026-11-20（用户口径 · R2）：**通琴号主题色较粗边框 + 白底 + 线路名项目蓝 + 其余黑字**。
+   *
+   * 改前：主题色实心面 `--tqh-accent` + 白字（`.tqh-trip` 白字 2.92:1，登记为已知偏差）。
+   * 改后：白底 `--surface` + 2px `--tqh-accent` 边框；文字分两层色（名=蓝、其余=黑），
+   *      对比度全部达标（蓝 7.6:1 / 黑 21:1），**原先那条"已知偏差"随之消失**。
+   * ⚠️ 边框走 `border` 而非 `box-shadow`：`box-sizing: border-box` ⇒ 卡片外高不变
+   *   （min-height 64 仍成立），只把内宽减 4px；80 条全称最坏 225px 仍 ≤ 余量。
+   * ⚠️ 只改 `.tqh-trip` 一族；`.rl-chip--tqh`（标号小按钮，7 列栅格）**一个字都不动**。
+   */
+  border: 2px solid var(--tqh-accent);
   border-radius: var(--radius-card);
-  background: var(--tqh-accent);
-  color: var(--tqh-on);
+  background: var(--surface);
+  color: var(--fg);
   text-align: left;
   cursor: pointer;
-  /* 白字面**不换色**表达状态：只叠状态层（--press-on-color @ .12）+ 形状通道 */
+  /* 白底可以用常规状态层表达按下（`--press-on-color` = --fg @0.12 会自然压暗） */
   transition: box-shadow var(--tqh-dur-switch) var(--ease-standard);
 }
-/* 正在地图上查看的那一班：外白环（形状通道，不动机身色） */
+/**
+ * 正在地图上查看的那一班：**形状通道**（外双环）。
+ * ⚠️ 改前的白环（`0 0 0 2px var(--tqh-on)`）在白底上完全不可见 ⇒ 改成
+ *    「主题色 2px + 浅底边界 4px」双环：与机身同色系、白底可辨，且不抢边框。
+ */
 .tqh-trip[data-selected="1"] {
-  box-shadow: 0 0 0 2px var(--tqh-on), 0 0 0 3px var(--tqh-deep);
+  box-shadow: 0 0 0 2px var(--tqh-accent), 0 0 0 4px var(--tqh-soft-line);
 }
 .tqh-trip__name {
   font-size: var(--text-md); /* 15px */
-  font-weight: var(--fw-announce); /* 700 —— 白字补偿手段之一 */
+  font-weight: var(--fw-announce); /* 700 */
   line-height: var(--leading-title);
   letter-spacing: var(--tracking-body);
   white-space: nowrap;
   /* 不省略：靠上面的宽度核算保证放得下；这里 overflow:hidden 只作溢出兜底，
      **不写 text-overflow: ellipsis**（写了就等于承认会省略） */
   overflow: hidden;
-  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.18);
+  /* ★ R2：线路名用**项目主题蓝**（白底 7.6:1）；不再需要白字补偿的 text-shadow */
+  color: var(--accent);
 }
 .tqh-trip__meta {
   display: flex;
@@ -9719,6 +9884,8 @@ button.lp-stop__veh {
   justify-content: space-between;
   gap: 8px;
   font-size: var(--text-xs);
+  /* ★ R2：方向/时刻用正文色（`--fg` 由父级继承，21:1） */
+  color: var(--fg);
 }
 .tqh-trip__dir {
   flex: 0 1 auto;
@@ -9727,14 +9894,12 @@ button.lp-stop__veh {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 600;
-  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.18);
 }
 .tqh-trip__time {
   flex: none;
   font-weight: var(--fw-announce);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.18);
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
@@ -10156,12 +10321,38 @@ button.lp-stop__veh {
   container-type: inline-size;
 }
 .lp-stop__namerow[data-side-row="1"] .lp-stop__name {
-  /* 27px = 标签宽（11px 单字 + 左右内距 4×2 ≈ 19）+ gap 4 + 4 缓冲 */
+  /* 27px = 标签宽（11px 单字 + 左右内距 4×2 ≈ 19）+ gap 4 + 4 缓冲
+     `--lp-name-chars` = **本行实际渲染的字符数**（`LineStopRow` 内联写入）：
+       · 澳门巴士 / 轻轨行 = 码 + 空格 + 名 的整串；
+       · 通琴号行 = **只算站名**（负责人：「通琴号没有站号，只有站名」⇒ 那一栏根本不渲染码，
+         所以不能为码预留预算 —— 上一版无条件按整串算，把 18 字长名压到 7.04px，实测不可读）。
+     ★ 2026-11-21：原先这里还减过一项 `--lp-code-chars * 0.5em`（平台码曾是一段独立小字，
+        要从名字的预算里让位）。码并进同一文本流后**没有独立宽度可言**，那一项已删除 ——
+        字符数直接进分母，让位由公式本身完成，不需要再打补丁。
+
+     ⚠️ 本规则只作用于 `[data-side-row="1"]`，而这类行现在**只有通琴号**
+        （`RouteStopsStop.side` 的契约：其余族传 null ⇒ 澳门行无 side ⇒ 不走本公式）。
+        ⇒ 实际生效值 = 只算站名；澳门行的 15px 来自 `.lp-stop__name` 的基准字号。 */
   font-size: min(var(--text-md), calc((100cqw - 27px) / var(--lp-name-chars, 12)));
   white-space: nowrap;
   overflow: hidden;
   text-overflow: clip;
 }
+/**
+ * ★ 2026-11-21：`.lp-stop__code` 已**整块删除**（含它那一大段让位推导），不再是"留一半"。
+ *
+ * ── 为什么删 ──────────────────────────────────────────────────────────────
+ *   上一版把平台码做成独立灰色小字（`--meta` / `--text-2xs` / `tabular-nums`），
+ *   那是抄了「导航信息行」（`NavDetailBody`）的样式。但负责人的判据是**导航纵条**：
+ *   `NavStrip.tsx` 里站号根本不是独立 span —— 它渲染 `s.label` 一整串，而巴士 label
+ *   本来就含站号前缀。⇒ 要"字号/字重/颜色一致"，唯一稳的做法就是**同一文本流**。
+ *
+ * ⚠️ 不要把它加回来做"更精致的做法"：一旦码是独立元素，就必须有第二套 font-size /
+ *    color / 让位量去和站名同步，而这三样正是这次返工要消灭的漂移源。
+ * ⚠️ 也不要用 `.lp-stop__name::before{content:attr(data-code)}` 这类伪元素绕过 ——
+ *    伪元素同样拿不到站名的字号公式（它是 `min()` + `cqw`，只能在元素上算），
+ *    且会被朗读软件当成装饰而跳过。
+ */
 .lp-stop__side,
 .nav-side-tag {
   flex: none;
@@ -11306,15 +11497,16 @@ button.lp-stop__veh {
    既有区块（表格区 `.tbl-*` 正在被别人重算轨道，插进去会让行号锚点漂移）。
 
    与站点圆点的关系：**不复用** `.nav-map__station`（那是 11/13px 的站点规格，
-   受「站标只有一套规格」门禁保护）。地标是 14px + 更重的边，语义也不同
+   受「站标只有一套规格」门禁保护）。地标是 16px（2026-11-21 由 14px 放大）+ 更重的边，语义也不同
    （`role="button"` + 「查看班次」），所以独立一套。
    视觉语言仍对齐：同样「白描边 + 1px 深外圈」，只是尺寸与层级不同。
    ══════════════════════════════════════════════════════════════════════════ */
 :root {
   /* 地标圆点直径 —— **必须与 `xborder-pins.ts#XB_PIN_SIZE` 同值**
      （聚合阈值 = 本值 + `XB_PIN_GAP`，即"两圆快撞上"的中心距；
-     两处不一致会导致"明明图标已经撞上了却不合并"）。改一处就要改两处。 */
-  --xb-pin-size: 14px;
+     两处不一致会导致"明明图标已经撞上了却不合并"）。改一处就要改两处。
+     ★ 2026-11-21（负责人）：14 → **16**（与 `XB_PIN_SIZE` 同批改）。 */
+  --xb-pin-size: 16px;
   /* 外圈深描边：与站点标同值（`--tqh-map-edge` 是同一颜色的历史 token），
      单列一条是为了地标日后独立调深浅时不动站点 */
   --xb-pin-edge: rgba(15, 23, 32, 0.42);
@@ -11325,24 +11517,62 @@ button.lp-stop__veh {
   width: var(--xb-pin-size);
   height: var(--xb-pin-size);
   border-radius: 50%;
+  /* ★ 2026-11-21：里面现在有图形了（`xbGlyphSvg()`，9px）⇒ 必须显式居中。
+     用 flex 而不是 `line-height`：svg 是替换元素，行高那套在它身上不可靠。
+
+     ── 可用直径（实测，别按名义值算）──────────────────────────────────────
+       `box-sizing: border-box` + 1.5px 白边 ⇒ 内容盒 = 16 − 2×边框。
+       **Chrome（桌面，DPR 1/2/8 三档都量过）把 1.5px 边框按 1px 计算**
+       （`getComputedStyle().borderTopWidth` = `1px`、`clientWidth` = 14，两处互证）
+       ⇒ 内容盒 **14px**，10px 图形两侧各 2px。
+       若某个浏览器真按 1.5px 渲染 ⇒ 内容盒 13px，10px 图形各留 1.5px —— 两种都放得下。
+       ⚠️ 所以注释里**不要**再写「16−3=13」这种按名义值推的数。 */
+  display: flex;
+  align-items: center;
+  justify-content: center;
   /* 白描边与站点标同口径（1.5px）—— 白是允许的例外值 */
   border: 1.5px solid #fff;
   box-shadow: 0 0 0 1px var(--xb-pin-edge);
   /* 地标要"能点"，但不要抢站点标的点击面积：cursor 由 AMap marker 容器承载 */
   cursor: pointer;
-  /* 位置由 AMap 的 offset 定（Pixel(-7,-7)），这里不写 transform，避免双重偏移 */
+  /* 位置由 AMap 的 offset 定（`XborderPinLayer.tsx` 里 `new amap.Pixel(-XB_PIN_SIZE/2, -XB_PIN_SIZE/2)`，
+     16px ⇒ (−8,−8)，**由常量派生**，别在这里再写一遍数字），这里不写 transform，避免双重偏移 */
 }
-/* 机场：主题强调色（青花蓝系）—— 与码头的区分靠**色相 + 图标语义**，不靠尺寸 */
+/* 机场 / 码头：**同一个底色，靠图形语义区分**（2026-11-21 负责人裁定码头反相）。
+   ★ 图形色走 `currentColor`：剪影路径不写死十六进制，由这两条给 ——
+     同一个 `d` 因此在 /cross-border 页（项目蓝图形）与地图（**反白**图形）都成立。 */
 .nav-map__xbpin--air {
   background: var(--accent);
+  color: #fff;
 }
-/* 码头：次级表面色底 + 强调色描边（比机场"轻"一档，因为机场是更强的心智锚点） */
+/* 码头：**与机场同底同色**（accent 实心 + 白船影）。
+ *
+ * ── 2026-11-21 负责人裁定：反相 ────────────────────────────────────────────
+ *   原先是「白底 `--surface` + accent 描边 + accent 船影」，理由是"码头比机场轻一档"。
+ *   负责人要求**和机场同一种做法**：`background: var(--accent)` + 图形 `#fff`。
+ *   ⇒ **区分只剩图形语义**（俯视机影 vs 侧视船影）。不要指望颜色再帮忙。
+ *
+ *   ⚠️ 因此把「为白底服务」的那套**一并删掉了**：
+ *      · `border-color: var(--accent)` —— 蓝底上的蓝描边没有意义，只会让边缘发脏；
+ *        现在用基类的 `border: 1.5px solid #fff`（与机场同一条），边缘是白圈；
+ *      · `inset 0 0 0 2px var(--accent)` 内环 —— 早在 16px 之前就因"装不下"删了，
+ *        反相之后更是彻底无意义（见下方历史注）。
+ *   ⚠️ **不要**把「轻一档」那套（白底 + 描边 + 蓝影）改回来：那是被负责人明确否掉的旧稿，
+ *      而且它会让两个 pin 的层级差回到"底色反相"，与现在的口径冲突。
+ *
+ * ── 历史：内环为什么被删（结论保留，但**现状与它无关**）──────────────────
+ *   2026-11-21 早先一次返工删掉了 `inset 0 0 0 2px`，理由是**装不下**（实测，真 Chrome 8×）：
+ *     · 内容盒 12px（当时 pin 14px），内环吃掉 2px×2 ⇒ 白色可见区只剩 **8px**；
+ *     · 剪影 ≥9px 才认得出船：7px 撞环被切、8px 仍相碰、9px + 内环融成一坨（白色残月伪影）；
+ *     · 9px + 无内环 ⇒ 白底 + accent 细边 + accent 船影，两个舷窗清晰可辨。
+ *   **16px + 反相之后，此段仅作历史记录**：底色已变成 accent，内环在语义上就不该存在
+ *   （蓝底蓝环），不是因为"放不下"。⇒ 别把它当成"等 pin 够大就能加回来"的待办。
+ *   ⚠️ 也不要为了别的理由去动 `--xb-pin-size` 或图形尺寸：pin 尺寸被聚合阈值钉死
+ *      （`XB_CLUSTER_MAX_PX = XB_PIN_SIZE + XB_PIN_GAP`），改它会让"两圆已撞上却不合并"复发。 */
 .nav-map__xbpin--pier {
-  background: var(--surface);
-  border-color: var(--accent);
-  box-shadow:
-    0 0 0 1px var(--xb-pin-edge),
-    inset 0 0 0 2px var(--accent);
+  background: var(--accent);
+  color: #fff;
+  box-shadow: 0 0 0 1px var(--xb-pin-edge);
 }
 
 /* 聚合点：多一个圆形底盘 + 计数，尺寸随内容（比单点大，暗示"这里有两个"） */
@@ -11525,9 +11755,29 @@ button.lp-stop__veh {
   width: 14px;
   height: 14px;
   border-radius: 3px;
-  background: var(--accent);
+  /**
+   * ★ 2026-11-20（用户口径）：**项目绿**；色值写死为 `--brand-green` 的浅色取值。
+   *   为什么不直接写 `var(--brand-green)`：该 token 在深色主题下翻成 `#6dd58c`，
+   *   白字对比度掉到 ≈1.7:1（不可读）；而**地图底图不随主题变**（AMap 瓦片恒为浅色），
+   *   所以这里与 `--tqh-map-solid` 同理，按"数据色/地图标"处理、不吃主题翻转。
+   */
+  background: #0b6e4f;
   color: #fff;
-  font-size: 9px;
+  /**
+   * ★ 2026-11-20（"WC 溢出"根治）：字号 9px → **6.2px**，字体显式指定无衬线族。
+   *
+   * ── 算术（内容区 = 14 − 2×1px 边框 = 12px）────────────────────────────
+   *   "WC" 的 advance 宽（Arial/Helvetica Bold）：W≈0.944em + C≈0.722em = **1.666em**
+   *   · 9px  ⇒ 15.0px  > 12px  ⇒ **溢出 3px**（用户看到的"字太大"就是这个）
+   *   · 6.2px ⇒ 10.33px ≤ 11px ⇒ 距边框每侧 **(12−10.33)/2 = 0.835px** ✓（要求 ≥0.5px）
+   *   · 6.6px ⇒ 11.00px ⇒ 余量恰好 0.5px（临界值，但换到更宽的字体族就会越界）
+   *   ⇒ 取 6.2px：即使回落到最宽的常见无衬线（"WC"≈1.78em）也只有 11.04px ⇒ 余量 0.48px
+   *     （亚像素，视觉上与 0.5px 无差）——这是"尽量大"与"不碰边框"的平衡点。
+   *   ⚠️ 不要再加 `letter-spacing`（负值等于压扁，用户明确不要）或 `transform: scale`。
+   * ⚠️ `line-height: 1` + flex 居中：避免基线/内部行距把字往下挤（否则底部先碰边框）。
+   */
+  font-family: Arial, "Helvetica Neue", Helvetica, "Noto Sans SC", sans-serif;
+  font-size: 6.2px;
   font-weight: var(--fw-announce);
   line-height: 1;
   letter-spacing: 0;

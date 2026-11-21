@@ -99,6 +99,16 @@ export interface NavTrackBarProps {
   matchPending?: boolean;
   /** ★ v3.7.0 S3：中置信车牌 —— **只展示、不驱动报站**（`plate` 仍为 null，进度走 GPS） */
   pendingPlate?: string | null;
+  /**
+   * ★ R11：**一键确认**用的车牌（连续 2 次 medium 同车牌才给）。
+   *   `null`/不同车牌 ⇒ 只渲染普通「车牌待确认」文本；相等 ⇒ 渲染成可点的按钮。
+   *   ⚠️ 点了才写库（`onConfirmPlate`）：medium 本身永远不锁牌。
+   */
+  confirmPlate?: string | null;
+  /** ★ R11：点击「确认这辆」—— 参数是 `confirmPlate`（不是 `pendingPlate`，两者可能不同步） */
+  onConfirmPlate?: (plate: string) => void;
+  /** ★ R11 观测值：`<帧序号>/<fast|slow>[/<放弃原因>]`，只写属性、不参与渲染 */
+  matchRetry?: string;
   onStart: () => void;
   onBoard: () => void;
   onAlight: () => void;
@@ -131,6 +141,9 @@ export default function NavTrackBar(props: NavTrackBarProps) {
     matchSource = "gps",
     matchPending = false,
     pendingPlate = null,
+    confirmPlate = null,
+    onConfirmPlate,
+    matchRetry = "",
     onStart,
     onBoard,
     onAlight,
@@ -239,7 +252,33 @@ export default function NavTrackBar(props: NavTrackBarProps) {
           */}
               {showCode && <BusCodeChip code={showCode} plate={plate} />}
             </>
+          ) : confirmPlate && onConfirmPlate ? (
+            /**
+             * ★ P1（2026-11-21 评审）：**「一键确认」的渲染条件只认 `confirmPlate`**，不再要求
+             *   `confirmPlate === pendingPlate`。
+             *
+             * ── 为什么必须改 ────────────────────────────────────────────────────
+             *   原来这个按钮嵌在 `pendingPlate ?` 分支里 ⇒ 低置信帧把 `pendingPlate` 清成 null 时，
+             *   即便 `confirmPlate` 还留着，**整分支也进不来** ⇒ 按钮跟着消失。
+             *   而契约是「**全程常驻**：保持到锁上牌 / 用户点掉 / 本段结束」。
+             *   ⇒ 现在：`confirmPlate` 一出现就一直有按钮，不依赖本帧是否还在 medium。
+             *
+             * ⚠️ 用 `confirmPlate` 自己当展示值（不是 `pendingPlate`）：
+             *   两者在低置信帧会分叉，用后者会渲染出"按钮里的车牌与本帧的判断不一致"。
+             * 仍不自动写库：medium 的全部权限到此为止，写库必须有人按下这一下。
+             */
+            <button
+              type="button"
+              className="nav-actions__confirm"
+              data-match-confirm="on"
+              aria-label={`确认乘坐 ${confirmPlate}`}
+              onClick={() => onConfirmPlate(confirmPlate)}
+            >
+              <span className="plate plate--sm">{confirmPlate}</span>
+              <span className="nav-actions__sub">确认这辆</span>
+            </button>
           ) : pendingPlate ? (
+            /* 中置信（本帧）：只展示，不可点 —— 连续两次同车牌才升级成上面那个按钮 */
             <>
               <span className="plate plate--sm">{pendingPlate}</span>
               <span className="nav-actions__sub">车牌待确认</span>
@@ -324,6 +363,8 @@ export default function NavTrackBar(props: NavTrackBarProps) {
       data-board-match={boardMatch}
       data-match-source={matchSource}
       data-match-pending={matchPending ? "1" : undefined}
+      /* ★ R11：重试节奏/放弃原因（只写不读；验收据此判断"降频有没有生效""为什么不再重试"） */
+      data-match-retry={matchRetry || undefined}
     >
       <div className="nav-actions__staterow">
         <span className="nav-actions__dot" aria-hidden="true" />

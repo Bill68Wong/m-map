@@ -3,7 +3,13 @@
 /**
  * 地图品牌栏（src/components/nav/NavBrandBar.tsx，2026-09-25 从 NavShell 拆出 · 07 §5.3）
  *
- * 单列（右栏竖排按钮组：图层 / 刷新 / 公共交通路线 / 定位 / M Map）。
+ * 单列（右栏竖排按钮组：刷新 / 公共交通路线 / 定位 / M Map）。
+ * ★ 2026-11-21（R5/R6 · 方案 A）：**图层键已移出本栏** ⇒ 页面级独立浮动键
+ *   `.nav-layer-btn`（`NavShell.tsx` 直接渲染，`globals.css` 负责位置与层级）。
+ *   理由只有一条且必须记住：`.nav-brandbar` 是 `z-index:20` 的**层叠上下文**，
+ *   且整棵挂在 `.nav-map-wrap`（`z-index:0`）**内部** ⇒ 键留在这里就永远越不过
+ *   站序弹窗 `.lst-sheet`（76）/ 面板 `.route-sheet`（70）⇒「满档仍可换图层」
+ *   （需求 5③）无从实现。详见 props 里那段长注释。
  * ★ 2026-11-11（负责人裁定）：**原中栏整块已删除** —— 换向键 + 线路标签（含
  *   「查看全部站点」「退出路线查看」两个小键）与左栏空占位一并移除；理由是与
  *   `RouteStopsSheet` 弹窗纵条功能重复，只保留弹窗。`grid-template-columns` 仍是
@@ -35,11 +41,12 @@ export interface NavBrandBarProps {
   onLocate: () => void;
   /** ★ v3.2.0（需求 10 / AC-84）：导航语境 ⇒ 隐藏「查看路线」与「M Map logo」 */
   navMode?: boolean;
-  /**
-   * ★ M4（需求 5）：图层面板入口（右栏最上）。
-   *   不传 ⇒ 不渲染（无地图上下文的调用方不受影响）；导航态一律隐藏（AC-84 同口径）。
-   */
-  onOpenLayers?: () => void;
+  /* ★ 2026-11-21（R5/R6 · 方案 A）：原 `onOpenLayers` 入口**已移出本组件** ——
+     图层键改为页面级独立浮动键 `.nav-layer-btn`（宿主 `NavShell.tsx` 直接渲染）。
+     病根：本栏 `.nav-brandbar` 是 `z-index:20` 的层叠上下文、且整棵挂在
+     `.nav-map-wrap`（`z-index:0`）内部 ⇒ 键在本组件里无论如何都越不过 `.lst-sheet`(76)/面板(70)。
+     ⚠️ **不要**把图层键加回 `__acts`：那会连「满档可见」（需求 5③）一起丢掉，
+        并且看起来"加了 z-index 却没反应"，是最难查的一类回归。 */
   /* ★ 2026-11-11：原 v3.6.1「查看全部站点」入口（`/line/[code]` 深链）已按负责人裁定移除 ——
      弹窗纵条 `RouteStopsSheet` 已覆盖同等功能；深链页面文件本身保留，仅 App 内不再有入口。
      中栏配套的四个 props（换向 / 退出线路 / 深链回调等）同步移除：
@@ -53,27 +60,12 @@ export default function NavBrandBar({
   onOpenLines,
   onLocate,
   navMode = false,
-  onOpenLayers,
 }: NavBrandBarProps) {
   return (
     <div className="nav-brandbar">
-      {/* 右栏：竖排按钮组（图层 → 刷新 → 公共交通路线 → M Map）※「定位」已移至页面级 `.nav-locate-fab` */}
+      {/* 右栏：竖排按钮组（刷新 → 公共交通路线 → 定位 → M Map）※「定位」在导航态移出到页面级 `.nav-locate-fab`
+          ★ 2026-11-21（R5/R6）：图层面板入口已**移出本栏**，成为页面级浮动键（见上方 props 注释）。 */}
       <div className="nav-brandbar__acts">
-        {/* ★ M4（需求 5）：图层面板入口 —— **右栏最上**（负责人指定），搜索框正上方。
-            导航语调整列隐藏（AC-84 同一口径）⇒ 导航中不可达（导航时不该换图层）。
-            图标沿用右栏同一套 20px / 1.8 描边规格，不新造视觉。 */}
-        {!navMode && onOpenLayers && (
-          <button
-            type="button"
-            className="nav-locate"
-            data-open-layers="on"
-            aria-label="图层"
-            title="图层"
-            onClick={onOpenLayers}
-          >
-            <Icon name="pin" size={20} />
-          </button>
-        )}
         {picked?.kind === "bus" && (
           <RefreshButton
             cooling={cooldownSec > 0}

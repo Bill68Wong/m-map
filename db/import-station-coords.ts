@@ -196,7 +196,36 @@ async function main() {
   try {
     await c.query("BEGIN");
     for (const x of updates) {
-      await c.query(`UPDATE stations SET lat = $2, lng = $3 WHERE code = $1`, [x.code, x.lat, x.lng]);
+      /**
+       * ★ 2026-11-21：**整行比较** `(lat, lng) IS DISTINCT FROM ($2, $3)`。
+       *
+       * 为什么必须加这个 WHERE（本文件之外的原因）：
+       *   `stations` 的每次 UPDATE 都会产生**新元组 ⇒ 新 ctid**，而 `/api/stations`
+       *   的「主码 → 选中站台」靠"扫描顺序最后一行胜出"决定 ⇒ ctid 顺序一变，
+       *   同一个站可能**换一个站台** ⇒ 坐标变 ⇒ 用户收藏的 key（含坐标，
+       *   见 `src/lib/favorites/v3.ts`）失联。不加条件时每次跑都会全量重写。
+       *
+       * 为什么是**整行比较**、不是 `lat IS DISTINCT FROM $2 AND lng IS DISTINCT FROM $3`：
+       *   后者是「两列都变了才写」⇒ DSAT 只修正经度精度（纬度不变）时会被静默跳过，
+       *   修正直接丢失、且不报错。整行比较逐分量判、任一分量不同即写，语义正确，
+       *   而且**写不出 AND 那个错**（静态检查 `scripts/check-station-writes.mjs` 的 D3）。
+       *
+       * ⚠️ 一个必须知道的边界：整行比较**不阻止「用 NULL 覆盖有效坐标」**
+       *   （`(22.1, 113.5) IS DISTINCT FROM (NULL, NULL)` 为真 ⇒ 会写入 NULL）。
+       *   当前安全：本文件三条构造路径都在 JS 侧挡住了 ——
+       *     · `:154-156` `!Number.isFinite(lat) || !Number.isFinite(lng)` ⇒ 跳过无效值；
+       *     · `:157` 已有坐标且差值 < 1e-6 ⇒ 跳过（无变化）；
+       *     · `:161-163` lrtRows 已有坐标不覆盖；
+       *     · `:54-56` `MISSING_BUS` 为空对象 ⇒ 该循环不执行。
+       *   ⇒ JS 侧判的是「现在」，这条 WHERE 判的是「将来」：万一有人改了上面某个判断，
+       *     SQL 层仍然不会全量重写。若将来放宽入参、允许 NULL 覆盖，须另加
+       *     `AND $2 IS NOT NULL AND $3 IS NOT NULL`。
+       */
+      await c.query(
+        `UPDATE stations SET lat = $2, lng = $3
+          WHERE code = $1 AND (lat, lng) IS DISTINCT FROM ($2, $3)`,
+        [x.code, x.lat, x.lng],
+      );
     }
     await c.query("COMMIT");
     say(`   ✅ 已更新 ${updates.length} 行`);

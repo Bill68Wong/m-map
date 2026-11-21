@@ -45,6 +45,8 @@ const STATES: LineStopVeh["state"][] = ["ready", "stop", "approach", "moving"];
 const noop = () => {};
 const noLines = new Map<string, string[]>();
 const etaOn = () => ({ phase: "on" as const, text: "3 分" });
+/** 通琴号无实时源 ⇒ 恒 idle（与 `LineStopsSheet` 的 `etaIdle` 同口径） */
+const etaIdle = () => ({ phase: "idle" as const, text: "" });
 
 const withVeh = renderToStaticMarkup(
   React.createElement(LineStopList, {
@@ -68,6 +70,38 @@ const noVeh = renderToStaticMarkup(
     registerEl: noop,
     linesOfStation: noLines,
     lineCode: "26",
+  } as never),
+);
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * ★ 2026-11-21（负责人）：「通琴号没有站号，只有站名」——第四列专测这条
+ * ════════════════════════════════════════════════════════════════════════
+ * 三行刻意构造：
+ *   ① 真实形态：`code` = 站 id 字符串（`"12"`），**非空** ⇒ 按"码是否为空"兜的实现会把
+ *      `12 站名` 直接画上屏（这正是不能用空值判据的原因）；
+ *   ② **长站名 + 长码**：压出字号折算公式的上限（上一版这里被压到 7.04px）；
+ *   ③ **对抗行**：`code` 故意写成站台码形态 `T373/2` ⇒ 断言必须仍然不出现前缀，
+ *      否则"有人把码加回来"只要数据长得像就会被放行。
+ */
+const tqhStops: LineStop[] = [
+  { seq: 1, code: "12", name: "澳門大學", kind: "bus", lat: null, lng: null, mileM: null },
+  { seq: 2, code: "345", name: "新濠鋒正門（澳城大/澳理大/澳旅大）", kind: "bus", lat: null, lng: null, mileM: null },
+  { seq: 3, code: "T373/2", name: "對抗行（碼長得像站台碼）", kind: "bus", lat: null, lng: null, mileM: null },
+];
+const tqhSideOf = () => "横琴" as const;
+
+const tqhList = renderToStaticMarkup(
+  React.createElement(LineStopList, {
+    stops: tqhStops,
+    color: "var(--tqh-accent)",
+    etaOf: etaIdle,
+    registerEl: noop,
+    linesOfStation: noLines,
+    lineCode: "",
+    sideOf: tqhSideOf,
+    plannedTimeOf: () => "08:30",
+    /* ★ 被测的那一个 prop：通琴号 ⇒ 只渲染站名 */
+    lineType: "tqh",
   } as never),
 );
 
@@ -102,6 +136,10 @@ const html = `<!doctype html>
   html,body{margin:0;padding:0;background:var(--surface)}
   .fx-row{display:flex;align-items:flex-start;gap:0}
   .fx-col{width:375px;flex:none;background:var(--surface)}
+  /* ★ R3（2026-11-21）：第三列 = 窄屏基准 320px。用于量「加平台码后站名还能不能单行」。
+     flex:none + 独立列 ⇒ 不改变 #with / #none 的布局与像素差坐标。
+     ⚠️ 本文件是模板字符串：CSS 注释里**不能出现反引号**（会截断字符串，esbuild 报 Expected ";"）。 */
+  .fx-col#narrow{width:320px}
   .fx-col h4{margin:0;padding:4px 8px;font:12px/1.4 monospace;color:#555}
   /* 图标层开关：只动 visibility（不参与布局），用于"有图标/无图标"两帧逐像素差 */
   body.hide-veh .lp-stop__veh{visibility:hidden}
@@ -111,6 +149,8 @@ const html = `<!doctype html>
 <div class="fx-row">
   <div class="fx-col" id="with"><h4>#with（四态图标）</h4><div class="lp-page" data-kind="bus">${withVeh}</div></div>
   <div class="fx-col" id="none"><h4>#none（无图标基准）</h4><div class="lp-page" data-kind="bus">${noVeh}</div></div>
+  <div class="fx-col" id="narrow"><h4>#narrow（320px 窄屏）</h4><div class="lp-page" data-kind="bus">${noVeh}</div></div>
+  <div class="fx-col" id="tqh"><h4>#tqh（通琴号：只有站名）</h4><div class="lp-page" data-kind="bus">${tqhList}</div></div>
 </div>
 </body></html>
 `;

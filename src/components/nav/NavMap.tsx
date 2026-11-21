@@ -24,6 +24,16 @@
  * ── 观测钩子（无副作用，供自动化验收）────────────────────────────────
  *   `data-nav-zoom` · `data-nav-z` · `data-station-count` · ★ `data-limit-bounds`(=on|off)
  *   · ★ `data-limit-bounds-src`(=district|fallback) · ★ `data-map-mask`(=on|off)
+ *   · ★ R8（2026-11-21）长断线自愈：`data-map-gl`(=lost|restored，canvas 容器上)
+ *     · `data-map-recover`(=soft|layout|rebuild|degrade) · `data-map-recover-src`(原因)
+ *     · `data-map-rebuild-count`(本滑窗已自动重建次数) · `data-map-dead`(=on，占位态)
+ *     · `data-map-probe` = **探针判了什么**（`ok|no-container|no-canvas|zero-size|gl-lost`）
+ *     · `data-map-diag` = **现场快照**（`zoom=12.3;canvas=1;ctx=ok|unknown|lost;size=390x300`，
+ *       `zoomend/moveend` 每次刷新；回答"canvas 没了 / ctx 丢了 / 容器塌了"）
+ *     · `data-map-probe-reason`(裁决原因，取值域 = `afterSoftAction` 的 reason 全集)
+ *       · `data-map-probe-n`(**【出结论】的累计次数**，`gl-grace` 不计)
+ *       · `data-map-probe-skip`(没跑的原因：`short-hidden|cooldown`；探到后自动摘除)
+ *     ⚠️ 这些属性**只用于观测**：任何逻辑都不得读它们（否则又造出"看着对其实假"的判据）。
  *
  * ⚠️ 坐标：`Geolocation({ convert:true })` 的 `position` **已是 GCJ-02，不再转换**。
  * ⚠️ 文案：界面文案一律**简体**（站名/线路名才用繁体）。
@@ -45,6 +55,20 @@ import {
   zoomForAcross,
 } from "./nav-map-fit";
 import { drawOverview } from "./nav-map-overview";
+/* ★ R8（2026-11-21）：地图长断线自愈 —— 判定/预算全部走纯函数模块（见该文件头注） */
+import {
+  afterSoftAction,
+  bumpBudget,
+  emptyBudget,
+  GL_LOST_GRACE_MS,
+  inCooldown,
+  probeMap,
+  readBudget,
+  shouldProbe,
+  SOFT_PROBE_MS,
+  type Budget,
+  type ProbeKind,
+} from "./map-recover";
 import {
   clearWalkGhosts,
   clearWalkLayers,
@@ -282,6 +306,37 @@ export interface NavMapProps {
    */
   lineStops?: ReadonlySet<string> | null;
   /**
+   * ★ R10（2026-11-20）：**该线该方向"实际站台"坐标表**（`主码 → { lng, lat }`，GCJ-02）。
+   *
+   * 语义：命中本表的站点标点，`position` 改用这里的坐标；未命中 ⇒ 回落
+   * `/api/stations` 的主码合成点。**marker 数量不变**（仍是一站一个点）。
+   *
+   * 三态：
+   *   · `null` / 缺省 ⇒ 完全不挪位（浏览态、方向未定、退出线路查看 —— 行为与改前一致）；
+   *   · 空 Map ⇒ 同样不挪位（防御：空表没有可用信息）；
+   *   · 非空 ⇒ 按表挪位。
+   *
+   * ⚠️ **必须记忆化**（调用方 `useMemo`）：本值进站点层 effect 依赖数组
+   *   （`:1694` 那条，坐标与"建/不建"、content 双色同属"创建时决定"），
+   *   引用每帧变 ⇒ 父级每次重渲染都 `clearAll()` + 全量重建 marker ⇒ 站点闪烁。
+   *   症状可观测：`data-station-gen` 会持续自增（见该钩子注释）。
+   * ⚠️ 坐标**已是 GCJ-02**，喂 `AMap.Marker` 前**禁止**再调 `wgs84ToGcj02()`。
+   */
+  platformOf?: ReadonlyMap<string, { lng: number; lat: number }> | null;
+  /**
+   * ★ 2026-11-21（真机验收 ③）：**导航态**的站台表（`主码 → {lng, lat}`，GCJ-02）。
+   *
+   * 与 `platformOf` 并列、**不覆盖**：`platformOf` 是"选中的线"（路线查看），
+   * 本值是"**当前腿**的线+方向"（导航）。命中顺序 `platformOf ?? platformNavOf`，
+   * 命中的来源写进 marker 的 `data-platform-src`（`sheet|nav|none`）——
+   * 那是本轮验收的读数入口，生产保留（一行字符串、不发请求、不参与任何判定）。
+   *
+   * ⚠️ 同样**必须记忆化**（调用方 `useMemo`）：本值进站点层 effect 依赖数组，
+   *   引用每帧变 ⇒ 1~2Hz 的导航帧会把全量 marker 重建一遍（症状：`data-station-gen` 持续自增）。
+   * ⚠️ 坐标**已是 GCJ-02**，喂 `AMap.Marker` 前**禁止**再调 `wgs84ToGcj02()`。
+   */
+  platformNavOf?: ReadonlyMap<string, { lng: number; lat: number }> | null;
+  /**
    * ★ v3.2.0（需求 7 / AC-80）：蓝点移动插值时长（ms，= 采样间隔）。
    *   `0`（缺省）= 瞬移；riding 1500 / 候车 1500（>5s 采样必为 0）。透传给 `UserDotLayer`。
    *   ⚠️ 语义变更（需求 9）：左下「回到我的位置」按钮已**彻底移除** ——
@@ -418,6 +473,10 @@ export default function NavMap({
   userFix = null,
   traveled = null,
   lineStops = null,
+  /* ★ R10：该线本方向实际站台坐标（`主码 → {lng,lat}`，GCJ-02）；null = 不挪位（原行为） */
+  platformOf = null,
+  /* ★ 2026-11-21（③）：导航态当前腿的站台表（与上面并列，不覆盖） */
+  platformNavOf = null,
   userDotSmoothMs = 0,
   userHeading = null,
   tqhStations = null,
@@ -476,9 +535,56 @@ export default function NavMap({
   const pendingLocateRef = useRef<{ pos: { lng: number; lat: number }; focus: boolean } | null>(null);
   /** 最近一次成功定位坐标（mepin 重建用） */
   const lastLocatePosRef = useRef<{ lng: number; lat: number } | null>(null);
+
+  /* ══ ★ R8（2026-11-21）：地图长断线自愈 ═══════════════════════════════════════
+     判定逻辑**一行都不在这里**：探针 / 预算 / 裁决全在 `map-recover.ts`（可单测）。
+     这里只持有三个运行时事实 + 一个 UI 态。 */
+  /**
+   * WebGL 上下文事件时间戳（`0` = 从未发生）。
+   * ⚠️ 只记时间戳、不记布尔：`lost` 与 `restored` 的**先后**决定是否失效
+   *   （`restoredAt < lostAt` 才算"丢了还没回来"），记布尔会丢掉这个顺序。
+   */
+  const glStateRef = useRef<{ lostAt: number; restoredAt: number }>({ lostAt: 0, restoredAt: 0 });
+  /**
+   * ★ P1（2026-11-21 评审）：**地图实例代际**。
+   *
+   * ── 为什么需要 ────────────────────────────────────────────────────────────
+   *   `createMapAt()` 每造一个新实例（首建 / 自动重建 / 人工重载）就把 `mapRef` 换掉，
+   *   并且 `setPhase("loading")` 走一遍完整 cleanup。**依赖 `[phase]` 的 effect 会重跑，
+   *   但依赖 `[routeLine]` 的不会** —— 彩色路线正是后者 ⇒ 重建完"地图回来了、导航线没了"，
+   *   要等用户切一次线路才回来。站点图层早有 `stationRebuildTick` 这个同类信号，路线没有。
+   * ⇒ 用一个单调代际号把"换了实例"这件事显式化，需要的 effect 依赖它。
+   *
+   * ⚠️ **不要**改依赖 `phase` 来省事：`phase` 每次 loading/ready 都变，
+   *    会让路线 effect 多跑一遍 `fetch("/api/route-shapes")`，且取景会跳一下。
+   */
+  const [mapGen, setMapGen] = useState(0);
+  /** ★ R8：探针结论累计次数（`data-map-probe-n`）—— 让"跑了 N 次都判无事"可读 */
+  const probeCountRef = useRef(0);
+  /** 重建预算（`sessionStorage` 是真源；此 ref 是同帧读取的副本，避免 setState 滞后一拍） */
+  const budgetRef = useRef<Budget>(emptyBudget(0));
+  /**
+   * `init()` 代次 —— 专治 R8-E 点名的双实例洞：
+   *   `await loadAMap(...)` 期间若组件已 cleanup（`jsKey` 变 / 卸载），`mapRef.current` 已是 null，
+   *   旧 cleanup 的 `destroy()` 空转；随后 `init()` 继续往下跑 ⇒ **新实例落到已卸载的容器上**。
+   *   每次 `init()` 自增，await 之后比对，不一致就整段放弃。
+   */
+  const initGenRef = useRef(0);
   /** 全量站点（一次拉取，ref 缓存）与已渲染标记（code → marker） */
   const stationsRef = useRef<StationPointLite[] | null>(null);
   const stationMarkersRef = useRef<Map<string, any>>(new Map());
+  /**
+   * ★ R10（2026-11-20）：**站点图层代次**（观测钩子 `data-station-gen` 的计数器）。
+   *
+   * 语义 = 「站点层 effect 的执行次数」（**含 `phase !== "ready"` 阶段**，因为自增点写在
+   * early return 之前）。用途：验收"`platformOf` 引用是否稳定"——
+   * 引用不稳 ⇒ 父级每次重渲染都让 effect 重跑 ⇒ 本计数持续自增；
+   * 反之用户拖动/缩放只调 `render()`、不重跑 effect ⇒ 本计数不变。
+   *
+   * ⚠️ 不要把它改成"render() 建点次数"：`render()` 由 `zoomend`/`moveend` 节流调用，
+   *   轻微拖动就会 +1 ⇒ 断言会**假红**（把正确实现判成引用不稳）。
+   */
+  const stationGenRef = useRef(0);
   /** ★ v3.6.0 S5：步行三线（done/now/ahead）的 Polyline 句柄 */
   const walkLayersRef = useRef<WalkLayers>({ donePath: null, nowPath: null, aheadPath: null });
   /** ★ 一条导航流：非当前段的步行走廊（ghost，按 key 增量 diff） */
@@ -591,6 +697,11 @@ export default function NavMap({
   }, []);
 
   const [phase, setPhase] = useState<"loading" | "ready" | "failed">("loading");
+  /**
+   * ★ R8：自动路径已用尽（或重建后 60s 内复发）⇒ **停自动**，只给占位 + 「重载地图」。
+   * 只影响"还画不画地图"这一件事，不参与任何判定（R8-B 明确 `phase`/状态位都不是失效证据）。
+   */
+  const [mapDead, setMapDead] = useState(false);
 
   /**
    * ★ M4（QA 钩子 · team-lead 已批准）：`window.__qa.setMapZoom(z)` —— 编程设定缩放。
@@ -727,15 +838,43 @@ export default function NavMap({
     [applyLocateView, onLocate, userFix],
   );
 
-  const init = useCallback(async () => {
-    setPhase("loading");
-    setNote("");
-    try {
-      if (!jsKey) throw new Error("缺少 AMAP_JS_KEY");
-      const AMap = await loadAMap(jsKey, ["AMap.Geolocation", "AMap.DistrictSearch"]);
-      amapRef.current = AMap;
-      if (!canvasRef.current) return;
-      // 先建图（放澳门中心，避免白屏）——边界就绪后再收敛视野。
+  /* ══ ★ R8-E：把「建图 / 限界 / 遮罩 / 取景」抽成**可重放**函数 ════════════════════
+     重建的前提是能原样再放一遍，否则只能"再 init 一次"，而 init 会把视野打回澳门全境
+     （用户会看到地图"跳回原点"，比白图更难受）。拆成两段：
+       · `createMapAt`        —— 只管 `new AMap.Map(容器, {center, zoom, ...opts})`；
+       · `applyLimitsAndMask` —— 限界 / 缩放收敛 / 域外遮罩 / 观测钩子，`fit` 控制**要不要**
+                                顺带把视野收敛到澳门全境（首屏 true / 重建 false）。
+     ⚠️ 边界数据**不在重建时重新请求**：`districtRef.current` 已有就复用（省一次
+        `DistrictSearch`，也让重建后立刻恢复遮罩，不会先白一片再压暗）。 */
+
+  /**
+   * 拆实例前**必须**把"地图对象句柄"清空（R8-E 的第五项；需求文字没列，但漏了会静默失效）。
+   *
+   * 站点层 / 路线层 / 总览层 / 步行三线 / 步行 ghost 都是**增量 diff** 的：
+   *   · 站点层：`if (stationMarkersRef.current.has(code)) continue;` ⇒ 句柄还在 ⇒ **一个点都不建**
+   *     （新地图上什么都没有，但不报错）—— 这是最恶劣的一种「重建后看起来更像坏了」；
+   *   · 路线 / 总览：`clearLines()` 的 remove 有 try/catch，死句柄静默失败，数组里仍留旧项；
+   *   · 步行三线 / ghost：`ensureWalkLayers` / `syncWalkGhosts` 见到旧句柄就**不再创建**。
+   * ⇒ 一律清成空，逼各层在新实例上从零重建。
+   */
+  const clearMapHandles = useCallback(() => {
+    maskRef.current = null;
+    boundsAppliedRef.current = false;
+    userMarkerRef.current = null;
+    destMarkerRef.current = null;
+    originMarkerRef.current = null;
+    stationMarkersRef.current.clear();
+    routePolylinesRef.current = [];
+    overviewPolylinesRef.current = [];
+    walkLayersRef.current = { donePath: null, nowPath: null, aheadPath: null };
+    walkGhostRef.current.clear();
+    // 新实例 ⇒ 上下文事件时间戳清零（沿用上一张图的 `lost` 会被判成"仍失效"）
+    glStateRef.current = { lostAt: 0, restoredAt: 0 };
+    canvasRef.current?.removeAttribute("data-map-gl");
+  }, []);
+
+  const createMapAt = useCallback(
+    (AMap: any, el: HTMLElement, center: [number, number], zoom: number) => {
       // ★ 2026-09-22 交互手感优化（用户反馈「操作要更丝滑舒适」）：
       //   · `rotateEnable:false` / `pitchEnable:false` —— 手机双指极易误触旋转与倾斜，
       //     转歪之后用户很难掰回来；这是公交导航，本就不需要 3D 视角 ⇒ 直接禁掉。
@@ -743,9 +882,9 @@ export default function NavMap({
       //     （在搜索框里按方向键会莫名挪地图）；移动端也用不到键盘操作 ⇒ 禁掉。
       //   · `animateEnable:true` / `jogEnable:true` —— 显式开启视图动画与惯性平移，
       //     拖拽后带惯性滑行，手感更顺。
-      const map = new AMap.Map(canvasRef.current, {
-        zoom: INIT_ZOOM,
-        center: [MACAU_CENTER.lng, MACAU_CENTER.lat],
+      const fresh = new AMap.Map(el, {
+        zoom,
+        center,
         viewMode: "2D",
         // ★ AC-16：隐藏底图自带的公交站点图标（走自定义样式）；未配置 ⇒ 用默认样式（降级安全）
         ...(mapStyleId ? { mapStyle: `amap://styles/${mapStyleId}` } : {}),
@@ -756,56 +895,100 @@ export default function NavMap({
         animateEnable: true,
         jogEnable: true,
       });
+      // ★ P1：新实例建成的唯一出口 ⇒ 在这里推进代际号（首建 / 重建 / 人工重载全覆盖）
+      setMapGen((g) => g + 1);
+      return fresh;
+    },
+    [mapStyleId],
+  );
+
+  const applyLimitsAndMask = useCallback(
+    (map: any, AMap: any, dist: MacauDistrict, fit: boolean) => {
+      const canvas = canvasRef.current;
+      const b = dist.bounds;
+      const bounds = new AMap.Bounds([b.minLng, b.minLat], [b.maxLng, b.maxLat]);
+      // ★ 2026-11-04：限界再外扩 0.05°（≈5.5km）。手机屏窄，原 1.3km 余量在海岸/角落放大时
+      //   视野会顶出界 ⇒ AMap 把缩放卡住（实测「某些角落放不大」）；外扩后域外仍由遮罩压暗。
+      const lb = padBounds(b, 0.05);
+      map.setLimitBounds(new AMap.Bounds([lb.minLng, lb.minLat], [lb.maxLng, lb.maxLat])); // ① 拖不出澳门
+      map.setZooms([MIN_ZOOM, MAX_ZOOM]); // ② 拉不远
+      // ③ 首屏 = 澳门全境（程序化，打标）。★ 重建时 fit=false —— 保住用户当时的视野与缩放（R8-E）
+      if (fit) applyCamera(() => map.setBounds(bounds));
+      boundsAppliedRef.current = true;
+      canvas?.setAttribute("data-limit-bounds", "on");
+      canvas?.setAttribute("data-limit-bounds-src", dist.source);
+      canvas?.setAttribute("data-nav-zoom", String(map.getZoom?.() ?? ""));
+
+      // ④ 域外遮罩（有大矩形 + 澳门官方环即画；填充恒为深色，见 `maskFill`）
+      const fill = maskFill();
+      if (dist.rings.length) {
+        try {
+          // ★ 2026-11-04：遮罩**只挖澳门主环**，不再挖横琴口岸 / 澳大横琴校区两块飞地。
+          //   用户反馈「横琴口岸和澳门大学右侧那一点点黑的」不美观 —— 飞地环与主环之间的
+          //   窄缝会露出小块暗斑；去掉飞地镂空后，整个域外压暗连成一片，视觉更干净。
+          //   飞地不受影响：站点 marker 在遮罩之上（zIndex 90+），定位判定仍用
+          //   `dist.exclaveRings`（见 `applyLocateView`）。
+          const path = [maskOuterRing(b), ...dist.rings];
+          maskRef.current = new AMap.Polygon({
+            path,
+            fillColor: fill,
+            fillOpacity: MASK_OPACITY,
+            strokeOpacity: 0,
+            zIndex: 50, // 低于站点/定位/目的地标记（90+），避免压住可点元素
+            bubble: false, // 不参与事件冒泡（镂空部分不触发事件）
+          });
+          map.add(maskRef.current);
+          canvas?.setAttribute("data-map-mask", "on");
+        } catch {
+          canvas?.setAttribute("data-map-mask", "off");
+        }
+      } else {
+        canvas?.setAttribute("data-map-mask", "off");
+      }
+    },
+    [applyCamera],
+  );
+
+  const init = useCallback(async () => {
+    /** ★ R8-E：本次 init 的代次；await 之后比对，防止"已卸载/已换代还继续建图" */
+    const gen = ++initGenRef.current;
+    setPhase("loading");
+    setNote("");
+    setMapDead(false);
+    try {
+      if (!jsKey) throw new Error("缺少 AMAP_JS_KEY");
+      const AMap = await loadAMap(jsKey, ["AMap.Geolocation", "AMap.DistrictSearch"]);
+      // ★ R8-E 的双实例洞：`await` 期间组件可能已 cleanup（`jsKey` 变 / 卸载），
+      //   那时 `mapRef.current` 已是 null、旧 cleanup 的 `destroy()` 空转；
+      //   若这里继续往下建图，新实例会落到**已脱离文档**的容器上（白烧一次加载配额）。
+      if (gen !== initGenRef.current) return;
+      amapRef.current = AMap;
+      const el = canvasRef.current;
+      if (!el) return;
+      // 重试 / 人工重载路径：容器里可能还压着上一张 canvas ⇒ 先拆干净再建
+      try {
+        mapRef.current?.destroy?.();
+      } catch {
+        /* ignore */
+      }
+      mapRef.current = null;
+      // 旧实例已拆 ⇒ 所有"地图对象句柄"作废（含 WebGL 事件时间戳），见 `clearMapHandles` 注释
+      clearMapHandles();
+
+      // 先建图（放澳门中心，避免白屏）——边界就绪后再收敛视野。
+      const map = createMapAt(AMap, el, [MACAU_CENTER.lng, MACAU_CENTER.lat], INIT_ZOOM);
       mapRef.current = map;
       setPhase("ready");
-      canvasRef.current?.setAttribute("data-nav-zoom", String(INIT_ZOOM));
+      el.setAttribute("data-nav-zoom", String(INIT_ZOOM));
 
       // ── ★ S1：澳门范围（限制 + 收敛 + 遮罩；异步，不阻塞）──
-      const canvas = canvasRef.current;
+      const canvas = el;
       void (async () => {
         try {
           const dist = await loadMacauDistrict(AMap);
           if (mapRef.current !== map) return; // 已卸载/重建 → 丢弃结果
           districtRef.current = dist;
-          const b = dist.bounds;
-          const bounds = new AMap.Bounds([b.minLng, b.minLat], [b.maxLng, b.maxLat]);
-          // ★ 2026-11-04：限界再外扩 0.05°（≈5.5km）。手机屏窄，原 1.3km 余量在海岸/角落放大时
-          //   视野会顶出界 ⇒ AMap 把缩放卡住（实测「某些角落放不大」）；外扩后域外仍由遮罩压暗。
-          const lb = padBounds(b, 0.05);
-          map.setLimitBounds(new AMap.Bounds([lb.minLng, lb.minLat], [lb.maxLng, lb.maxLat])); // ① 拖不出澳门
-          map.setZooms([MIN_ZOOM, MAX_ZOOM]); // ② 拉不远
-          applyCamera(() => map.setBounds(bounds)); // ③ 首屏 = 澳门全境（程序化，打标）
-          boundsAppliedRef.current = true;
-          canvas?.setAttribute("data-limit-bounds", "on");
-          canvas?.setAttribute("data-limit-bounds-src", dist.source);
-          canvas?.setAttribute("data-nav-zoom", String(map.getZoom?.() ?? ""));
-
-          // ④ 域外遮罩（有大矩形 + 澳门官方环即画；填充恒为深色，见 `maskFill`）
-          const fill = maskFill();
-          if (dist.rings.length) {
-            try {
-              // ★ 2026-11-04：遮罩**只挖澳门主环**，不再挖横琴口岸 / 澳大横琴校区两块飞地。
-              //   用户反馈「横琴口岸和澳门大学右侧那一点点黑的」不美观 —— 飞地环与主环之间的
-              //   窄缝会露出小块暗斑；去掉飞地镂空后，整个域外压暗连成一片，视觉更干净。
-              //   飞地不受影响：站点 marker 在遮罩之上（zIndex 90+），定位判定仍用
-              //   `dist.exclaveRings`（见 `applyLocateView`）。
-              const path = [maskOuterRing(b), ...dist.rings];
-              maskRef.current = new AMap.Polygon({
-                path,
-                fillColor: fill,
-                fillOpacity: MASK_OPACITY,
-                strokeOpacity: 0,
-                zIndex: 50, // 低于站点/定位/目的地标记（90+），避免压住可点元素
-                bubble: false, // 不参与事件冒泡（镂空部分不触发事件）
-              });
-              map.add(maskRef.current);
-              canvas?.setAttribute("data-map-mask", "on");
-            } catch {
-              canvas?.setAttribute("data-map-mask", "off");
-            }
-          } else {
-            canvas?.setAttribute("data-map-mask", "off");
-          }
+          applyLimitsAndMask(map, AMap, dist, true);
 
           // 边界就绪前已拿到的定位 → 此刻再决定是否居中
           if (pendingLocateRef.current) {
@@ -836,15 +1019,22 @@ export default function NavMap({
       // ── 定位（★ S1：范围内才居中；范围外如实落位、不移动地图）──
       runLocate();
     } catch (e) {
+      if (gen !== initGenRef.current) return; // 同上：换代后不要覆盖新一次的状态
       setPhase("failed");
       setNote((e as Error)?.message ?? "地图加载失败");
       onLocate?.(null);
     }
-  }, [jsKey, mapStyleId, runLocate, applyLocateView, onLocate, applyCamera]);
+  }, [jsKey, createMapAt, applyLimitsAndMask, clearMapHandles, runLocate, applyLocateView, onLocate]);
 
   useEffect(() => {
     void init();
     return () => {
+      /**
+       * ★ R8-E：**先**让在途的 `init()` 作废，再拆实例。
+       *   顺序不能反：`init()` 在 `await loadAMap` 之后才建图，若此时才作废，
+       *   会出现「旧实例已 destroy、新实例又被建出来」的双实例（旧代码的真实洞）。
+       */
+      initGenRef.current += 1;
       try {
         mapRef.current?.destroy?.();
       } catch {
@@ -866,6 +1056,526 @@ export default function NavMap({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jsKey]);
+
+  /* ══════════════════════════════════════════════════════════════════════════
+     ★ R8（2026-11-21）：**地图长断线后重建**
+     ══════════════════════════════════════════════════════════════════════════
+     ── 一句话策略 ──────────────────────────────────────────────────────────
+       只在「合法入口 + 后台够久 + 硬证据」三条同时成立时才动手；动手前**先轻修**
+       （resize + setZoom 原地重绘），轻修修不好才拆实例重建；全程受预算约束，
+       用尽即降级为占位 + 人工「重载地图」。判定与预算的**全部逻辑**在 `map-recover.ts`。
+
+     ── 为什么不能"探到白图就重建"（R8-B/C 逐条抄录，别再想新招）────────────────
+       `phase==="ready"` / `mapRef.current!=null` / `getZoom()` 可读 —— 实例坏掉时这三样
+       照样正常。`navigator.onLine` 只说明网络（而且页面隐藏时也会触发）。纯时间阈值同理。
+       **像素采样**（`toDataURL`）在未开 `preserveDrawingBuffer` 时恒返空白 ⇒ 假阴性 ⇒ 误重建。
+       **容器 0 尺寸**时重建只会再烧一轮瓦片（新实例还是 0 尺寸）⇒ 只走布局修复 + 提示。
+
+     ── 观测钩子 ────────────────────────────────────────────────────────────
+       `data-map-gl`（canvas 容器）      = `lost` | `restored`
+       `data-map-recover`（`.nav-map` 根）= `soft` | `layout` | `rebuild` | `degrade`
+       `data-map-recover-src`（根）       = 裁决原因（排障用，不参与逻辑）
+       `data-map-rebuild-count`（根）     = 当前滑窗内已自动重建次数
+     ⚠️ 这些属性**只是观测**：任何逻辑都不得读它们（否则又会造出"看着对其实假"的判据）。 */
+
+  /** 写观测钩子（统一出口，避免各处 `setAttribute` 拼错名字） */
+  const markRecover = useCallback((action: string, src: string) => {
+    const root = rootRef.current;
+    if (!root) return;
+    root.setAttribute("data-map-recover", action);
+    root.setAttribute("data-map-recover-src", src);
+    root.setAttribute("data-map-rebuild-count", String(budgetRef.current.count));
+  }, []);
+
+  /**
+   * ★ R8（2026-11-21 · 架构师提议）：**`data-map-diag`** = 现场快照（生产保留）。
+   *
+   *   ⚠️ 与 `data-map-probe`（探针判了什么，单值枚举）**是两个属性** —— 见下方「为什么必须分开」。
+   *   `zoom=12.3;canvas=1;ctx=ok|unknown|lost;size=390x300`
+   *
+   * ── 它要回答的问题（这是它存在的全部理由）──────────────────────────────────
+   *   「地图变白」这一整轮**无法归因**：到底是 canvas 没了？ctx 丢了？还是容器塌成 0 高？
+   *   三种的修法完全不同（重建 / 重建 / 修布局），而旧代码里一个字段都读不到。
+   *   ⇒ 把这四项放在**同一条字符串**里，报障时一眼能分诊。
+   *
+   * ── ⚠️ 为什么必须与 `data-map-probe` 分成两个属性（别再合并）────────────────
+   *   · `probe` = 「**探针判了什么**」（`ok|no-canvas|zero-size|gl-lost`），只在恢复路径写；
+   *   · `diag`  = 「**当时的现场长什么样**」（上面那段快照），每次地图移动都写。
+   *   写频率与语义都不同 ⇒ 合并成一个属性会**互相覆盖**：探针只在恢复路径写，
+   *   而用户报障时往往刚拖过地图 ⇒ 合并后"现场"会被一次探针结论顶掉，反之亦然。
+   *   （这条是 team-lead 2026-11-21 定的口径，别"优化"回去。）
+   *
+   * ── 刷新时机 ──────────────────────────────────────────────────────────────
+   *   · `zoomend` / `moveend`：环境事实会变（缩放变了、容器可能刚变过）；
+   *   · 每次探针跑完（`markProbe`）；
+   *   · `phase` 转 ready（新实例、新 canvas）。
+   *   ⚠️ 只写属性、不发请求、不涉隐私 ⇒ **生产保留**（线上用户报障时能直接读）。
+   */
+  const writeMapDiag = useCallback(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const el = canvasRef.current;
+    let zoom = "-";
+    try {
+      const z = mapRef.current?.getZoom?.();
+      if (typeof z === "number" && Number.isFinite(z)) zoom = z.toFixed(2);
+    } catch {
+      /* 实例坏掉时 getZoom 也可能抛 ⇒ 保留 "-"，这本身就是有用的信息 */
+    }
+    let canvas = 0;
+    let zero = false;
+    try {
+      const list = el ? Array.from(el.querySelectorAll("canvas")) : [];
+      canvas = list.length;
+      zero = list.some((c) => !c.width || !c.height);
+    } catch {
+      /* ignore */
+    }
+    const g = glStateRef.current;
+    // `unknown`：读不到事实（没有 canvas / 有 0 尺寸缓冲）⇒ 不冒充 ok
+    const ctx = canvas === 0 || zero ? "unknown" : g.lostAt > 0 && g.restoredAt < g.lostAt ? "lost" : "ok";
+    let size = "0x0";
+    try {
+      const r = el?.getBoundingClientRect();
+      if (r) size = `${Math.round(r.width)}x${Math.round(r.height)}`;
+    } catch {
+      /* ignore */
+    }
+    root.setAttribute("data-map-diag", `zoom=${zoom};canvas=${canvas};ctx=${ctx};size=${size}`);
+  }, []);
+
+  /**
+   * ★ R8（评审整改 · data-engineer 指出的一处真缺口）：**探针的结论也必须落痕**。
+   *
+   * ── 缺口的形态 ─────────────────────────────────────────────────────────────
+   *   原来只有 `markRecover()` 一个出口，而它**只在真的动了实例**（soft/layout/degrade/
+   *   rebuild）时才被调用 ⇒ 当 `data-map-recover` 为空时，无法区分：
+   *     (a) 探针根本没跑（`shouldProbe` 拦了 / 冷却中 / 没触发 `visibilitychange`）；
+   *     (b) 探针跑了、判成 `no-hard-evidence`、**按设计什么都不做**。
+   *   而 (b) 正是 R8-A④ 那条"轻修作为判定"要补的漏报 —— **补偿机制自己是哑的，就等于没补**。
+   *   ⇒ 「漏报」和「正常」长得一模一样，A① 承认的那条漏报风险永远测不出来。
+   *
+   * ── 与 R8-B 不冲突（这点必须先说清，否则会被当成违规）──────────────────────
+   *   本钩子写的是**探针的结论**（一次观察的输出），**不是**"地图健康"的断言。
+   *   R8-B 禁的是后者（`phase==="ready"` 之类"看起来像活着"的信号）；而"这一次探针返回了
+   *   `no-canvas`"是事实，跟"地图能画"是两件事。
+   */
+  /**
+   * @param opts.counts `-n` 是否 +1。**只有"出了结论"才计数**（默认 true）：
+   *   `gl-grace`（丢了但未到宽限期）是「探到了、确定地不下判」⇒ 它**不计入** `-n`，
+   *   否则「`-n` 一直涨 = 一直判无事」这条验收判据就被它污染了（data-engineer 评审提出）。
+   */
+  const markProbe = useCallback((probe: string, reason?: string, opts: { counts?: boolean } = {}) => {
+    const root = rootRef.current;
+    if (!root) return;
+    if (opts.counts !== false) probeCountRef.current += 1;
+    /**
+     * ★ `data-map-probe` = **探针判了什么**（单值枚值），与 `data-map-diag`（现场快照）分开。
+     *   取值域：`ok | no-container | no-canvas | zero-size | gl-lost`（= `ProbeKind`）。
+     */
+    root.setAttribute("data-map-probe", probe);
+    // 探针出结论后顺手刷新一次现场快照：`data-map-diag`（`zoom=..;canvas=..;ctx=..;size=..`）
+    // 由 `writeMapDiag()` 写，**与 `data-map-probe` 是两个属性**（写频率不同，合并会互相覆盖）。
+    // 完整理由只在 `writeMapDiag` 上方那段，**此处不重复** —— 重复就是下次漂移的源头。
+    writeMapDiag();
+    root.setAttribute("data-map-probe-n", String(probeCountRef.current));
+    root.setAttribute("data-map-probe-at", String(Date.now()));
+    if (reason) root.setAttribute("data-map-probe-reason", reason);
+    else root.removeAttribute("data-map-probe-reason");
+    // 摘 `-skip` 必须连它的时间戳一起摘：只摘值会留下孤立的 `-skip-at`，
+    // 读的人会以为"最近一次尝试是跳过"（而实际上刚才真的探过了）
+    root.removeAttribute("data-map-probe-skip");
+    root.removeAttribute("data-map-probe-skip-at");
+  }, [writeMapDiag]);
+
+  /**
+   * 探针**没跑**的原因（`data-map-probe-skip`）。
+   * 与 `markProbe` 分开是因为两者语义相反：一个"观察到了什么"，一个"没观察"。
+   * 混用会让 `data-map-probe-n` 的含义漂移（把"跳过"也算一次探针）。
+   */
+  const markProbeSkip = useCallback((why: string) => {
+    const root = rootRef.current;
+    if (!root) return;
+    root.setAttribute("data-map-probe-skip", why);
+    /**
+     * ★ 契约定稿（2026-11-21）：`-skip-at` 存在的**唯一目的**是回答「谁更晚」。
+     *   现场「`-probe` 有值 + `-skip` 有值 + `-n` 不涨」有两种处置完全相反的原因：
+     *     ① 上一次结论就够不着硬证据（`no-hard-evidence`）⇒ 该动 `shouldProbe`/判据；
+     *     ② 这几次被重建后的 30s 冷却挡了 ⇒ 什么都不用动，等冷却。
+     *   判据：`skipAt > probeAt` ⇒ 最近一次尝试是**跳过**（即②）。
+     * ⚠️ 不要改成"写进 `-skip` 的值里"（如 `cooldown@123`）：值域被污染后
+     *   任何按等值匹配的断言都会静默失效。
+     */
+    root.setAttribute("data-map-probe-skip-at", String(Date.now()));
+  }, []);
+
+  /**
+   * 预算**从 `sessionStorage` 取**（R8-D）：内存计数会被"用户手动刷新"清零，
+   * 而刷新本身已经花掉一次加载 ⇒ 内存计数等于「刷新即可无限重试」。
+   * 只读一次（挂载时）；之后的写一律经 `bumpBudget()` 立刻落盘。
+   */
+  useEffect(() => {
+    budgetRef.current = readBudget(Date.now());
+    rootRef.current?.setAttribute("data-map-rebuild-count", String(budgetRef.current.count));
+  }, []);
+
+  /**
+   * **重建**：保持当前视野与缩放（R8-E 的硬要求 —— 否则用户会看到地图"跳回澳门全境"）。
+   *
+   * 五步，顺序不可换：
+   *   ① 读走 center/zoom（**必须在 destroy 之前**）；
+   *   ② `setPhase("loading")` —— 借文件既有的生命周期开关，让**所有**图层/标记 effect
+   *      用**还活着**的实例完成 cleanup（各图层的 cleanup 都有 try/catch，但能不死就别死）；
+   *   ③ 下一帧再拆建 —— 保证 ② 的 cleanup 已经 commit 完；
+   *   ④ 拆前清 `maskRef` / `boundsAppliedRef`（R8-E 点名），边界数据 `districtRef` **保留**；
+   *   ⑤ 建新实例 → 只重放"限界 + 遮罩 + 收敛"（`fit=false`）、**不跑 `runLocate()`**：
+   *      重跑定位会把相机拽到用户位置，等于把 ① 保存的视野白读。
+   */
+  const rebuildMap = useCallback(() => {
+    const AMap = amapRef.current;
+    const el = canvasRef.current;
+    const map = mapRef.current;
+    if (!AMap || !el || !map) return false;
+
+    let center: [number, number] = [MACAU_CENTER.lng, MACAU_CENTER.lat];
+    let zoom = INIT_ZOOM;
+    try {
+      const c = map.getCenter?.();
+      const lng = c?.getLng?.() ?? c?.lng;
+      const lat = c?.getLat?.() ?? c?.lat;
+      if (typeof lng === "number" && typeof lat === "number") center = [lng, lat];
+      const z = map.getZoom?.();
+      if (typeof z === "number") zoom = z;
+    } catch {
+      /* 读不到就回落到澳门全境（比"不重建"好） */
+    }
+
+    setPhase("loading");
+    window.requestAnimationFrame(() => {
+      try {
+        map.destroy?.();
+      } catch {
+        /* 已经是坏实例，destroy 抛错是预期内的 */
+      }
+      mapRef.current = null;
+      // 旧实例已拆 ⇒ 所有「地图对象句柄」作废（含 WebGL 事件时间戳与步行/站点/路线图层句柄），
+      // 理由见 `clearMapHandles` 上方那段注释（漏清会让各增量层**静默不重建**）。
+      clearMapHandles();
+
+      let fresh: any = null;
+      try {
+        fresh = createMapAt(AMap, el, center, zoom);
+      } catch {
+        setPhase("failed");
+        setNote("地图重建失败");
+        return;
+      }
+      mapRef.current = fresh;
+      el.setAttribute("data-nav-zoom", String(zoom));
+      const dist = districtRef.current;
+      if (dist) {
+        try {
+          applyLimitsAndMask(fresh, AMap, dist, false); // fit=false：保住视野
+        } catch {
+          /* 限界/遮罩失败不影响底图（与首屏同一降级原则） */
+        }
+      }
+      setPhase("ready");
+      const now = Date.now();
+      budgetRef.current = bumpBudget(budgetRef.current, now);
+      markRecover("rebuild", "hard-evidence");
+    });
+    return true;
+  }, [createMapAt, applyLimitsAndMask, clearMapHandles, markRecover]);
+
+  /**
+   * **降级**：自动路径到此为止，只给占位 + 人工「重载地图」。
+   * ⚠️ 不 `destroy()` 实例 —— 它可能只是上下文丢了，销毁反而让「用户手动重载」多一次阻塞。
+   */
+  const degradeMap = useCallback(
+    (src: string) => {
+      markRecover("degrade", src);
+      setMapDead(true);
+      // 降级有自己的 cover（文案更准：不是"加载不出来"，而是"自动恢复次数用完了"）
+      // ⇒ 不再写 `note`：`noteText` 只在 ready 态渲染，写了也不会显示（死数据）
+      setPhase("failed");
+    },
+    [markRecover],
+  );
+
+  /**
+   * 人工「重载地图」：**仍然计数**（R8-D 原文：人工仍计数）。
+   * 计数在点击时就落盘，避免"点了没成功 ⇒ 白嫖一次"。
+   */
+  const manualReload = useCallback(() => {
+    const now = Date.now();
+    budgetRef.current = bumpBudget(budgetRef.current, now);
+    markRecover("degrade", "manual-reload");
+    setMapDead(false);
+    void init();
+  }, [init, markRecover]);
+
+  /** ★ R8：环境事实变化（缩放/平移）时刷新 `data-map-diag`；`phase` 转 ready 时也刷一次（新实例） */
+  useEffect(() => {
+    if (phase !== "ready") return;
+    const map = mapRef.current;
+    if (!map) return;
+    const onCam = () => writeMapDiag();
+    try {
+      map.on("zoomend", onCam);
+      map.on("moveend", onCam);
+    } catch {
+      /* 实例方法缺失（降级形态）⇒ 只保留 phase 转 ready 那一次写入 */
+    }
+    writeMapDiag();
+    return () => {
+      try {
+        map.off("zoomend", onCam);
+        map.off("moveend", onCam);
+      } catch {
+        /* 实例已销毁（重建路径）⇒ off 抛错是预期内的 */
+      }
+    };
+  }, [phase, writeMapDiag]);
+
+  /**
+   * ① `webglcontextlost` / `webglcontextrestored`：给容器内**所有** canvas 挂，
+   *    并用 MutationObserver 兜住"之后才创建/被替换的 canvas"（高德在 resize 时会换画布）。
+   *
+   * ⚠️ 漏报风险（需求原文）：若实际走 canvas2d（`viewMode:"2D"` 的某些实现），
+   *    这两个事件**永不触发** ⇒ 这是**漏报**，不是误报；所以它只是"硬证据之一"，
+   *    而不是唯一判据（canvas 不存在 / 0 尺寸 + 轻修不干净 仍能覆盖到）。
+   */
+  useEffect(() => {
+    const el = canvasRef.current;
+    if (!el) return;
+    const onLost = (e: Event) => {
+      try {
+        // 不 preventDefault 的话部分浏览器会永久放弃该上下文（连 restored 都不会来）
+        (e as Event & { preventDefault?: () => void }).preventDefault?.();
+      } catch {
+        /* ignore */
+      }
+      glStateRef.current.lostAt = Date.now();
+      el.setAttribute("data-map-gl", "lost");
+    };
+    const onRestored = () => {
+      glStateRef.current.restoredAt = Date.now();
+      el.setAttribute("data-map-gl", "restored");
+    };
+    const bound = new WeakSet<HTMLCanvasElement>();
+    const bind = () => {
+      try {
+        el.querySelectorAll("canvas").forEach((c) => {
+          if (bound.has(c as HTMLCanvasElement)) return;
+          bound.add(c as HTMLCanvasElement);
+          c.addEventListener("webglcontextlost", onLost);
+          c.addEventListener("webglcontextrestored", onRestored);
+        });
+      } catch {
+        /* ignore */
+      }
+    };
+    bind();
+    let mo: MutationObserver | null = null;
+    try {
+      mo = new MutationObserver(bind);
+      mo.observe(el, { childList: true, subtree: true });
+    } catch {
+      /* 老浏览器没有 MutationObserver ⇒ 只覆盖首屏那两张 canvas */
+    }
+    // 兜底：高德建 canvas 的时刻不确定，1000ms 后再扫一次
+    const t = window.setTimeout(bind, 1000);
+    return () => {
+      window.clearTimeout(t);
+      mo?.disconnect();
+      // 不逐个 removeEventListener：canvas 会随 map.destroy() 一起被丢掉，WeakSet 也随之失效
+    };
+  }, []);
+
+  /**
+   * ③④ 触发入口 + 轻修 + 裁决。
+   *
+   * 入口**只有两个**：`visibilitychange` → visible、`pageshow`。
+   * `online` 一律不触发（R8-B/D：它只说明网络，且页面隐藏时也会触发）。
+   */
+  useEffect(() => {
+    if (phase !== "ready") return; // ★ 只是"能不能跑恢复逻辑"的门，**不是**健康判据（R8-B）
+    const el = canvasRef.current;
+    if (!el) return;
+
+    let hiddenAt: number | null = null;
+    const timers: number[] = [];
+    let disposed = false;
+    /** ★ P1：宽限期复探**只排一次**（见 `settle()` 的 gl-grace 分支） */
+    let graceRetryPlanned = false;
+
+    /** `lost` 已发生、`restored` 未到 —— **原始事实**（不看时间） */
+    const glLostRaw = () => {
+      const g = glStateRef.current;
+      return g.lostAt > 0 && g.restoredAt < g.lostAt;
+    };
+    /** 同上且已过 `GL_LOST_GRACE_MS` ⇒ 才算**硬证据**（R8-A①） */
+    const glLostExpired = () => {
+      const g = glStateRef.current;
+      return glLostRaw() && Date.now() - g.lostAt >= GL_LOST_GRACE_MS;
+    };
+
+    /** 轻修之后按裁决执行 */
+    const settle = (probe: ProbeKind) => {
+      if (disposed) return;
+      if (probe === "gl-lost" && !glLostExpired()) {
+        // 「丢了但还没到 30s 宽限期」= 探到了、确定地**不下判** ⇒ 留痕，但**不计入 `-n`**
+        markProbe(probe, "gl-grace", { counts: false });
+        /**
+         * ── P1（2026-11-21 评审）：这里原来只 `return`，而**上一行注释自己描述了风险**──
+         *   「用户不切后台就没有下一次 `visible` ⇒ 坏图会一直挂着」。
+         *   30s 宽限期到了之后，**没有任何东西再来看一眼** ⇒ 注释描述的那个后果真的会发生。
+         *
+         * ⇒ 排一次**一次性复探**：等到 `lostAt + GL_LOST_GRACE_MS` 再过 1s 余量，
+         *   走**同一条** `softThenProbe()` 路径 —— 这样它天然继承后面的全部闸门
+         *   （`inCooldown` 静默期 + `afterSoftAction` 的预算/间隔），**不会**变成
+         *   "用户担心的频发调 API 打到限额"。
+         * ⚠️ 只排一次（`graceRetryPlanned`）：不加这个标志，每次 settle 都排一个，
+         *   30s 后同时醒来 N 个复探 = 自己制造抖动。
+         * ⚠️ 定时器必须进 `timers`：`phase` 一变/组件卸载就随 dispose 一起清掉，
+         *   否则会在新实例上跑一次针对旧实例的复探。
+         */
+        if (!graceRetryPlanned) {
+          graceRetryPlanned = true;
+          const lostAt = glStateRef.current.lostAt;
+          const wait = Math.max(0, GL_LOST_GRACE_MS - (Date.now() - lostAt)) + 1_000;
+          timers.push(
+            window.setTimeout(() => {
+              if (disposed) return;
+              /**
+               * 与入口**同一道冷却闸**：刚重建完的 30s 静默期内不许打扰新实例。
+               * 冷却中就直接放弃这一次 —— 它是"补看"，不是"必须看"。
+               */
+              if (inCooldown(budgetRef.current, Date.now())) return;
+              // 新取值 `gl-grace-retry`：明确区分"宽限期内不下判"与"宽限期到点后的复探"
+              markProbe("gl-lost", "gl-grace-retry", { counts: false });
+              softThenProbe();
+            }, wait),
+          );
+        }
+        return;
+      }
+      const now = Date.now();
+      const v = afterSoftAction(probe, budgetRef.current, now);
+      /**
+       * ★ 一处留痕，覆盖所有分支（含 `no-hard-evidence` 这条"什么都不做"的路径）。
+       *   `data-map-probe` = 探针结论；`data-map-probe-reason` = 裁决原因。
+       *   验收据此可读出「探了 N 次、每次都 no-hard-evidence ⇒ 坏图没修」，
+       *   而不是只能读"`data-map-recover` 为空"再猜。
+       */
+      markProbe(probe, v.reason);
+      if (v.action === "none") {
+        if (v.reason === "soft-fixed") {
+          // 轻修已自愈 ⇒ **不动实例**，只留痕（R8-A④）
+          markRecover("soft", v.reason);
+          setNote("");
+        }
+        // `no-hard-evidence`：探针看到异常但够不上硬证据 ⇒ 什么都不动、也不留痕，
+        // 留给下一次合法入口再判（此路径**绝不**回退成"按时间猜"）
+        return;
+      }
+      if (v.action === "layout") {
+        // R8-C①：0 尺寸**禁止重建**。这里只再试一次布局修复 + 留痕（真正的修复在尺寸变化时）
+        try {
+          mapRef.current?.resize?.();
+        } catch {
+          /* ignore */
+        }
+        markRecover("layout", v.reason);
+        return;
+      }
+      if (v.action === "degrade") {
+        degradeMap(v.reason);
+        return;
+      }
+      if (!rebuildMap()) degradeMap("rebuild-failed");
+    };
+
+    /** ④ 轻修 → +300ms 首探 → 不干净立刻升级；干净则 +600ms 复探 */
+    const softThenProbe = () => {
+      const map = mapRef.current;
+      if (!map) return;
+      try {
+        map.resize?.();
+        const z = map.getZoom?.();
+        if (typeof z === "number") map.setZoom(z);
+      } catch {
+        /* 轻修本身失败也继续探——探针不依赖它 */
+      }
+      timers.push(
+        window.setTimeout(() => {
+          if (disposed) return;
+          // ★ 探针用**原始事实**（`glLostRaw`），宽限期只在 `settle` 里作裁决门槛：
+          //   否则「刚丢 5 秒」会被探成 `ok` ⇒ 误判"已自愈"。
+          const p1 = probeMap(el, glLostRaw());
+          if (p1 !== "ok") {
+            settle(p1);
+            return;
+          }
+          timers.push(
+            window.setTimeout(() => {
+              if (disposed) return;
+              settle(probeMap(el, glLostRaw()));
+            }, SOFT_PROBE_MS[1] - SOFT_PROBE_MS[0]),
+          );
+        }, SOFT_PROBE_MS[0]),
+      );
+    };
+
+    const run = (trigger: "visible" | "pageshow") => {
+      if (disposed) return;
+      const now = Date.now();
+      const hiddenMs = hiddenAt == null ? null : now - hiddenAt;
+      hiddenAt = null;
+      // 驻留够久才值得探（`hiddenMs === null` 按放行，见 `shouldProbe` 的注释）
+      if (!shouldProbe(trigger, hiddenMs)) {
+        // `shouldProbe` 只在「时长已知且不足 60s」时返 false ⇒ 这里必是 short-hidden
+        markProbeSkip("short-hidden");
+        return;
+      }
+      // 刚重建完的静默期：连探针都不跑（新实例正在拉瓦片，resize/setZoom 只会帮倒忙）
+      if (inCooldown(budgetRef.current, now)) {
+        markProbeSkip("cooldown");
+        return;
+      }
+      softThenProbe();
+    };
+
+    const onVisibility = () => {
+      if (disposed) return;
+      if (document.visibilityState === "hidden") {
+        if (hiddenAt == null) hiddenAt = Date.now();
+        return;
+      }
+      /**
+       * ★ R8-A③：**不要求 `hiddenAt` 必须存在**。部分机型 `resume` 先到、`visibilitychange`
+       *   迟到 14s，`hidden` 事件根本没走过 ⇒ 若在这里 `if (hiddenAt == null) return`，
+       *   恰好会在最需要自愈的那批机型上永久静默。时长缺失 → 交给 `shouldProbe` 放行。
+       */
+      run("visible");
+    };
+    const onPageShow = (e: PageTransitionEvent) => {
+      // bfcache 恢复一定值得探；初次加载的 pageshow 不探（`init()` 正在做同一件事，别抢）
+      if (!e.persisted && hiddenAt == null) return;
+      run("pageshow");
+    };
+
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("pageshow", onPageShow);
+
+    return () => {
+      disposed = true;
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("pageshow", onPageShow);
+      for (const t of timers) window.clearTimeout(t);
+    };
+  }, [phase, rebuildMap, degradeMap, markRecover, markProbe, markProbeSkip]);
 
   // ── 容器尺寸变化（全屏化 / 横竖屏）→ 地图 resize（防白屏/错位，风险 #2）──
   useEffect(() => {
@@ -1297,6 +2007,19 @@ export default function NavMap({
 
   // ── ★ 巴士站点图层（仅阈值内、仅视野内）──
   useEffect(() => {
+    /**
+     * ★ R10（2026-11-20）：**代次钩子**（无副作用观测属性，与 `data-nav-zoom`(:667) /
+     * `data-nav-z`(:1325) / `data-station-count`(:1580) 同一传统，读写都用 `setAttribute`）。
+     *
+     * 位置刻意在 `phase !== "ready"` 的 early return **之前** ⇒ 语义 = 「本 effect 执行次数」。
+     * 首帧 `canvasRef.current` 可能未挂载 ⇒ 必须 `?.`（计数已自增，DOM 下轮补写）。
+     *
+     * 验收用法（判 `platformOf` 引用是否稳定）：
+     *   选线 → 放大到 `data-station-count > 0` 且方向已定 → 连读两次本值相等记为基线
+     *   → 连开/关图层面板 3~5 次（间隔 ≥100ms）→ 再读，**必须等于基线**。
+     */
+    stationGenRef.current += 1;
+    canvasRef.current?.setAttribute("data-station-gen", String(stationGenRef.current));
     if (phase !== "ready") return;
     const AMap = typeof window !== "undefined" ? window.AMap : undefined;
     const map = mapRef.current;
@@ -1523,9 +2246,42 @@ export default function NavMap({
             (tqhActiveBusCodes.has(s.code) || tqhActiveBusCodes.has(stationMain(s.code)));
           const tripCls = tqhOnTrip ? " nav-map__station--tqh-onroute" : "";
           const cls = `nav-map__station${isLrt ? " nav-map__station--lrt" : ""}${cutCls}${routeCls}${sharedCls}${tripCls}`;
+          /**
+           * ★ R10（2026-11-20）：**把本线经过的站点标点挪到"该线该方向实际站台"**。
+           *
+           * ── 只改位置，不改数量 ────────────────────────────────────────────
+           *   地图标点仍是「一个主码一个 marker」（用户硬约束：同站只显示一个标点）。
+           *   `platformOf` 命中 ⇒ 用站台坐标；未命中（非本线 / 该方向无此站 / 缺坐标）
+           *   ⇒ 回落到 `/api/stations` 的合成点，行为与改前**逐字节一致**。
+           *
+           * ── 为什么 offset 不用改 ─────────────────────────────────────────
+           *   `offset` 只与 marker 自身尺寸有关（见下方 Pixel 注释），与坐标无关
+           *   ⇒ 换坐标不会让标记"偏半个身位"。
+           *
+           * ⚠️ 坐标顺序：`platformOf` 给的是 `{ lng, lat }`，而 AMap `position` 要
+           *    `[lng, lat]` —— 与 `LineStop` 的 `lat, lng` **相反**，写反会整体跑到境外且不报错。
+           * ⚠️ `platformOf` 的坐标**已是 GCJ-02**，禁止再转（`:108` 同款纪律）。
+           */
+          /**
+           * ★ 2026-11-21（真机验收 ③）：**两张表并列取，并把"命中了哪张"写进 DOM**。
+           *
+           *   顺序 `platformOf（路线查看）?? platformNavOf（导航当前腿）?? 回落 /api/stations`。
+           *   `data-platform-src` 是**验收读数入口**（生产保留）：
+           *     · `sheet` = 路线查看那张表命中（R10 的既有行为，逐字节未变）；
+           *     · `nav`   = 导航当前腿那张表命中（本轮新增）；
+           *     · `none`  = 都没命中 ⇒ 用的是 `/api/stations` 的合成点（该接口按主码去重，
+           *                 通常落在 `/1` —— **这正是这次 bug 的现场**）。
+           *   ⚠️ 别把 `none` 当成"正常"：导航态下本线站点大面积 `none` 就说明腿/方向没解出来。
+           */
+          const fromSheet = platformOf?.get(stationMain(s.code)) ?? null;
+          const fromNav = fromSheet ? null : (platformNavOf?.get(stationMain(s.code)) ?? null);
+          const platform = fromSheet ?? fromNav;
+          const platformSrc = fromSheet ? "sheet" : fromNav ? "nav" : "none";
+          const markerPos: [number, number] = platform ? [platform.lng, platform.lat] : [s.lng, s.lat];
+          const platformAttr = ` data-platform-src="${platformSrc}"`;
           const marker = new AMap.Marker({
-            position: [s.lng, s.lat],
-            content: `<div class="${cls}" data-code="${esc(s.code)}"${onRouteAttr}${tqhShared ? ' data-tqh-shared="1"' : ""}${tqhOnTrip ? ' data-tqh-on-trip="1"' : ""}${styleAttr} title="${esc(s.name)}"></div>`,
+            position: markerPos,
+            content: `<div class="${cls}" data-code="${esc(s.code)}"${onRouteAttr}${tqhShared ? ' data-tqh-shared="1"' : ""}${tqhOnTrip ? ' data-tqh-on-trip="1"' : ""}${platformAttr}${styleAttr} title="${esc(s.name)}"></div>`,
             /**
              * ★ v2.10.1：站点盒尺寸**分类型**（巴士 11px / 轻轨 13px，见 globals.css）
              *   ⇒ 居中偏移各取一半（-5.5 / -6.5），否则小圆点会偏离真实坐标约 1px。
@@ -1690,8 +2446,16 @@ export default function NavMap({
      * ★ 2026-11-06（修复批 #6 · P0）：再补 `tqhBusWhitelist` —— 它是**另一个白名单入口**
      *   （通琴号班次模式接管过滤），且优先级高于 `lineStops`；不进依赖 ⇒ 进出班次查看
      *   模式时巴士层不会重建 ⇒ 该隐藏的巴士站留着（正是本次 P0 的形态之一）。
+     * ★ R10（2026-11-20）：再补 `platformOf` —— **坐标也是创建时写进 marker 的**
+     *   （与上面「建/不建」「content 双色」完全同机理）⇒ 平台表变化必须重建才生效。
+     *   ⚠️ 这条依赖把「引用稳定性」变成硬约束：调用方若每次渲染新建 Map，本 effect 会
+     *      每帧重跑（`clearAll()` + 全量建点 + 重绑 `zoomend`/`moveend`）⇒ 站点闪烁。
+     *      验收抓手 = `data-station-gen`（本 effect 执行次数）。
+     * ★ 2026-11-21（真机验收 ③）：再补 `platformNavOf` —— 同一条机理（坐标是创建时写死的）。
+     *   导航态换腿 / 站序到位 ⇒ 这张表变 ⇒ 必须重建，否则"腿换了但点还停在上一腿的站台"。
+     *   ⚠️ 同样的引用稳定性硬约束：`NavShell` 已把它 `useMemo`（只在换腿/站序变时产出新 Map）。
      */
-  }, [phase, stationRebuildTick, lineStops, tqhSharedBusCodes, tqhActiveBusCodes, tqhBusWhitelist]);
+  }, [phase, stationRebuildTick, lineStops, tqhSharedBusCodes, tqhActiveBusCodes, tqhBusWhitelist, platformOf, platformNavOf]);
 
   /**
    * ★ 2026-09-22：**路线查看模式** —— 画线 + 站点区分 + 自动装下整条线。
@@ -1914,7 +2678,8 @@ export default function NavMap({
     return () => {
       cancelled = true;
     };
-  }, [routeLine, applyCamera]);
+    // ★ P1：`mapGen` = 实例代际。缺了它，重建后彩色路线不会自己回来（见 `mapGen` 的注释）
+  }, [routeLine, applyCamera, mapGen]);
 
   /**
    * ★ 2026-09-23：**路线总览绘制**（详情 pane）。
@@ -2149,6 +2914,8 @@ export default function NavMap({
          H4 data-userdot（蓝点存在性）/ H9 data-vehicle-shown（在显车辆数）。 */
       data-userdot={userFix ? "blue" : "none"}
       data-vehicle-shown={String(vehicles.length)}
+      /* ★ R8：自动重建预算用尽 ⇒ 占位态（`data-map` 同时变 failed，语义即"地图不可用"） */
+      data-map-dead={mapDead ? "on" : undefined}
     >
       <div ref={canvasRef} className="nav-map__canvas" />
       {/*
@@ -2240,7 +3007,21 @@ export default function NavMap({
           <BrandRouteLoader active size={48} slot="map-cover" label={locating ? "定位中…" : "地图加载中…"} />
         </div>
       )}
-      {phase === "failed" && (
+      {/**
+       * ★ R8-D：自动重建用尽 / 重建后 60s 内复发 ⇒ **只给占位 + 人工「重载地图」**。
+       * `!mapDead` 是必须的：降级时 `phase` 也是 "failed"，两块 cover 会同时出现（两个按钮）。
+       * 文案刻意与通用失败区分：这里不是"加载不出来"，而是"自动恢复次数用完了"。
+       */}
+      {mapDead && (
+        <div className="nav-map__cover nav-map__cover--fail">
+          <p className="h-title">地图需要重新加载</p>
+          <p className="t-label t-muted">本会话自动恢复次数已用尽 · 搜索与路线结果不受影响</p>
+          <button className="btn btn--outline btn--sm" type="button" data-map-reload="on" onClick={manualReload}>
+            重载地图
+          </button>
+        </div>
+      )}
+      {phase === "failed" && !mapDead && (
         <div className="nav-map__cover nav-map__cover--fail">
           <p className="h-title">地图暂不可用</p>
           <p className="t-label t-muted">搜索与路线结果不受影响</p>

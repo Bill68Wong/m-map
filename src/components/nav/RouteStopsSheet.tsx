@@ -763,6 +763,11 @@ export default function RouteStopsSheet({
             sideOf={sideOf}
             vehOf={vehOf}
             onOpenBusCard={openBusCard}
+            /* ★ 2026-11-21（负责人）：「通琴号没有站号，只有站名；站标号只有澳门公共交通的站」。
+               **类型信号就取本组件自己的 `kind`**（`bus | lrt | tqh`，本来就区分三族）——
+               不要改成"看 `stop.code` 里有没有 `/`"：通琴号的 `code` 是站 id（`"12"`），
+               那种判据现在会放行、将来数据补码时又会变，两头都不靠谱。 */
+            lineType={kind === "tqh" ? "tqh" : "macau"}
           />
         ) : (
           <p className="lst-sheet__empty">暂无站序数据</p>

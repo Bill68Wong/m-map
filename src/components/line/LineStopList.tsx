@@ -50,6 +50,15 @@ export interface LineStopListProps {
    *   `RouteStopsSheet` 零回归）。
    */
   plannedTimeOf?: (stop: LineStop) => string | null | undefined;
+  /**
+   * ★ 2026-11-21（负责人）：「**通琴号没有站号，只有站名**；站标号只有澳门公共交通的站」。
+   *   本 prop 是**线路类型**（不是"有没有码"），逐行透传给 `LineStopRow.lineType`：
+   *     · `macau`（缺省）= 澳门巴士 / 轻轨 ⇒ 站名行 = 平台码 + 空格 + 站名；
+   *     · `tqh` = 通琴号 ⇒ 只渲染站名。
+   *   ⚠️ 用类型而不是「`stop.code` 是否为空」：通琴号的 `code` 是**站 id 字符串**
+   *      （如 `"12"`，非空）⇒ 按空值判会把 `12 站名` 直接画上屏。
+   */
+  lineType?: "macau" | "tqh";
 }
 
 /** 换乘列最多显示的线路条数（设计 §2.8：最多列 3 条） */
@@ -66,6 +75,7 @@ export default function LineStopList({
   vehOf,
   onOpenBusCard,
   plannedTimeOf,
+  lineType = "macau",
 }: LineStopListProps) {
   return (
     <ol className="lp-list">
@@ -90,6 +100,7 @@ export default function LineStopList({
             veh={veh}
             plannedTime={plannedTimeOf?.(stop) ?? null}
             onOpenBusCard={veh && onOpenBusCard ? (v) => onOpenBusCard(stop, v) : null}
+            lineType={lineType}
           />
         );
       })}
