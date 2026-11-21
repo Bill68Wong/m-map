@@ -73,8 +73,13 @@ const ICONS = [
      断言必须分开写，否则这条会永远红（我第一版就是这么写错的）。 */
   { name: "crossBorderIcon", filled: false },
   { name: "crossBorderFilledIcon", filled: true },
-  { name: "ferryIcon", filled: false },
-  { name: "planeIcon", filled: false },
+  /* ★ 2026-11-21（R1 接线）：`ferryIcon` / `planeIcon` 由 **Tabler 线描**改为**项目内联实心剪影**
+     （`.verify/design/icon-airport.svg` / `icon-ferry.svg` 落地）。这里把 `filled` 从 false 翻成 true
+     ——**这是"断言钉旧行为"后的改判据，不是修 bug**：它们本来钉的是"走线性口径（stroke=2/butt cap）"，
+     换实心件后那个断言必红，而红得对。
+     ⚠️ 保留这句"曾经是线描"，否则下一个人会以为是漏改、顺手把 filled 改回 false。 */
+  { name: "ferryIcon", filled: true },
+  { name: "planeIcon", filled: true },
 ] as const;
 for (const { name, filled } of ICONS) {
   const html = renderToStaticMarkup(<Icon name={name} size={20} />);

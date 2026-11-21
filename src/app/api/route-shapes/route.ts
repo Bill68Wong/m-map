@@ -85,7 +85,8 @@ export async function GET(req: Request) {
            FROM route_shapes WHERE route_code = $1 ORDER BY dsat_dir`,
         [code],
       ),
-      pool.query(`SELECT code, kind, color FROM routes WHERE code = $1 LIMIT 1`, [code]),
+      // ★ 2026-11-21：`AND is_active` —— 停运线路不得按码直取（见下方 404 判据）
+      pool.query(`SELECT code, kind, color FROM routes WHERE code = $1 AND is_active LIMIT 1`, [code]),
       // ★ 2026-09-22：本线**站点码集合**（供地图做「本线站点 vs 其他站点」的样式区分）
       //   ⚠️ 只返回**主码**（去站台后缀）——地图上同名站台合成一个点
       pool.query(
@@ -124,6 +125,29 @@ export async function GET(req: Request) {
 
     const rows = shapesRes.rows as Row[];
     const route = routeRes.rows[0] as { code: string; kind: string; color: string | null } | undefined;
+
+    /**
+     * ★ 2026-11-21：**停运线路 ⇒ 404**，不是 200 + `shapes: []`。
+     *
+     *   为什么是 404 而不是 200 空结果：`shapes: []` 在本接口的语义已经**被占用**了 ——
+     *   它是 `note: "no_shape"` 那条「走向还没抓，跑一次 `fetch:route-shapes` 就补上」的
+     *   **可修复状态**（见上方 `EMPTY_HEADER` 的注释）。停运线路的空结果永远补不回来，
+     *   塞进同一条 200 通路等于让运维去追一个不存在的采集缺口；而 404 是本仓既定的
+     *   「线路不存在 / 已停运 ⇒ **不可恢复**」契约（`src/app/line/[code]/LineClient.tsx:152`）。
+     *   完整论证（含反例与「查询失败不得判 404」）：`src/lib/routes/active-gate.ts` 文件头。
+     *
+     *   ⚠️ 保留 `shapes: []` 数组形状：三个消费方都是 `j.shapes ?? []`（不看 `r.ok`），
+     *      形状消失不会被 tsc 抓到，只会在真机上白屏。
+     *   ⚠️ **不带** `note: "no_shape"` —— 那会让停运线路显示成「数据管道抓了一半」。
+     *   ⚠️ `Cache-Control: no-store`：404 不得被 CDN 记住（线路恢复后用户会一直看到空态）。
+     */
+    if (!route) {
+      return NextResponse.json(
+        { shapes: [], error: API_ERROR.bad_request },
+        { status: 404, headers: { "Cache-Control": "no-store" } },
+      );
+    }
+
     /** 站台码 → 主码（客户端 `mainCodeOf` 同口径的简化版：剥 `/N` 后缀） */
     const stopMain = (raw: string) => raw.replace(/\/\d+$/, "");
     const stops = [...new Set((stopsRes.rows as { code: string }[]).map((r) => stopMain(r.code)))];

@@ -257,6 +257,10 @@ export default function LineClient({ initial }: LineClientProps) {
         registerEl={registerEl}
         linesOfStation={linesOfStation}
         lineCode={code}
+        /* ★ 2026-11-21（负责人）：「站标号只有澳门公共交通的站」——本页只服务澳门巴士/轻轨
+           （`/line/[code]` 的码来自 `routes`，通琴号不走这里），显式传便于下一个人看清类型，
+           不依赖缺省值（缺省也是 `macau`，两者等价）。 */
+        lineType="macau"
       />
 
       <p className="lp-foot">

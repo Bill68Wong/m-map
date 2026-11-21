@@ -175,10 +175,14 @@ const setPad = (px) =>
     document.getElementById("probe").textContent = p ? `.lp-stop{padding-left:${p}px}` : "";
   }, px);
 
-/** 读 `#with` 里第 i 行的几何（页坐标） */
-async function rects(i) {
-  return page.evaluate((idx) => {
-    const row = document.querySelectorAll("#with .lp-stop")[idx];
+/**
+ * 读某一列里第 i 行的几何（页坐标）。
+ * @param {string} rootSel 列选择器：`#with`（默认，四态夹具）/ `#none` / `#narrow`（320px）
+ * ★ R3（2026-11-21）：加了 `#narrow` 窄屏基准列 ⇒ 取数必须能换根，否则窄屏那条量不到。
+ */
+async function rects(i, rootSel = "#with") {
+  return page.evaluate(([idx, sel]) => {
+    const row = document.querySelectorAll(`${sel} .lp-stop`)[idx];
     const q = (sel) => {
       const el = row.querySelector(sel);
       if (!el) return null;
@@ -195,6 +199,11 @@ async function rects(i) {
     return {
       row: { left: rr.left, right: rr.right, top: rr.top, bottom: rr.bottom, width: rr.width, height: rr.height },
       dot: q(".lp-stop__dot"),
+      /* ★ 2026-11-21（真机验收返工 ②）：平台码已**并入** `.lp-stop__name` 的同一文本流
+         （`LineStopRow` 里 `{stop.code} {stop.name}`），独立元素 `.lp-stop__code` 已删除。
+         ⇒ 「文字区起点」就是 `.lp-stop__name` 的左沿，不再有"有码取码、无码取名"的分支。
+         `.lp-stop__code` 的查询同时保留在这条注释里作为**历史坐标**：下一版若有人想把它
+         加回来，这里的几何口径会立刻失配（见 [3b] 的结构断言，它会直接红）。 */
       name: q(".lp-stop__name"),
       eta: q(".lp-stop__eta"),
       veh: q(".lp-stop__veh"),
@@ -204,8 +213,15 @@ async function rects(i) {
       glyphState: svg?.getAttribute("data-glyph-state") ?? null,
       prevName: box(row.previousElementSibling?.querySelector(".lp-stop__name")),
       nextName: box(row.nextElementSibling?.querySelector(".lp-stop__name")),
+      /** 行高（px，计算值）—— 用于判「站名有没有被挤成两行」（不写死字号/行高常量） */
+      nameLH: (() => {
+        const el = row.querySelector(".lp-stop__name");
+        if (!el) return null;
+        const lh = Number.parseFloat(getComputedStyle(el).lineHeight);
+        return Number.isFinite(lh) ? lh : null;
+      })(),
     };
-  }, i);
+  }, [i, rootSel]);
 }
 
 /** 只把第 i 行图标隐藏再还原，两帧逐像素差 ⇒ 该图标实际着墨 bbox（页坐标） */
@@ -254,6 +270,13 @@ async function sweep() {
       inkRightInRow: ink.right - m.row.left,
       gapRight: m.name.left - ink.right,
       gapLeft: ink.left - m.row.left,
+      /**
+       * ★ 2026-11-21：`textLeft` = 站名行文字区起点 = `.lp-stop__name` 的左沿
+       *   （平台码已在同一元素内，码宽**包含**在这一栏里）。
+       *   `dotToName` 与 `nameWidth` 都以它为准 —— **阈值一个都没动**
+       *   （[2] 仍 ≥4px、[3] 仍 ≥180px）。
+       */
+      textLeft: m.name.left,
       dotToName: m.name.left - m.dot.right,
       nameWidth: m.eta.left - m.name.left,
     });
@@ -314,6 +337,128 @@ ok("[2] 圆点与站名之间 ≥ 4px（不紧贴）", worstDot >= 4, `最差 ${
 const minNameW = Math.min(...cur.map((r) => r.nameWidth));
 console.log(`\n[3] 站名可用宽度 最窄 ${r1(minNameW)}px`);
 ok(`[3] 站名可用宽度 ≥ ${MIN_NAME_W}px（防止"为不压字把名字挤没"）`, minNameW >= MIN_NAME_W, `最窄 ${r1(minNameW)}px`);
+
+/* ── [3b] ★ 2026-11-21 返工：平台码与站名**同一文本流** ───────────────────
+   上一版这里断言的是「码.right ≤ 名.left」（码是独立 flex 兄弟）。负责人真机验收否掉了
+   那个设计：他要的是**导航纵条**的样子，而导航纵条里站号与站名是同一串、同字号同色。
+   ⇒ 断言对象变了，**这是"故意改判据"，不是漏改**：
+
+     · 旧判据「码不压名」在新结构里**恒真且无意义**（同一个文本节点没有两个盒子），
+       留着只会变成一条永远 PASS 的空断言 —— 那比没有更糟（它假装在守一件事）。
+     · 新判据直接钉**结构**：码必须由同一元素承载、以**一个真实空格**分隔，
+       且文档里**不得**再出现独立的码元素。漂移源（第二套字号/颜色/让位量）由此被堵死。
+     · 几何侧保留原来那条真断言（名字右沿不得越过报站列），**阈值仍是 ≤0，没放宽**。 */
+const flow = await page.evaluate((sel) => {
+  const names = [...document.querySelectorAll(`${sel} .lp-stop__name`)].map((el) => el.textContent);
+  return {
+    names,
+    codeEls: document.querySelectorAll(`${sel} .lp-stop__code`).length,
+    allCodeEls: document.querySelectorAll(".lp-stop__code").length,
+  };
+}, "#with");
+const flowBad = flow.names.filter((t) => !/^\S+ .+$/.test(t || ""));
+console.log(`\n[3b] 同一文本流：${flow.names.length} 行；独立码元素 ${flow.allCodeEls} 个`);
+console.log(`     样例 ${JSON.stringify(flow.names[0] ?? "")}`);
+ok(
+  "[3b] 每行站名文本都是「码 + 一个空格 + 站名」（不允许没有码、也不允许没有空格）",
+  flow.names.length > 0 && flowBad.length === 0,
+  flowBad.length ? `不符 ${flowBad.length} 行：${JSON.stringify(flowBad.slice(0, 3))}` : `全部 ${flow.names.length} 行合规`,
+);
+ok(
+  "[3b] 文档里**不得**再出现独立的 `.lp-stop__code` 元素（码必须在同一文本流里）",
+  flow.allCodeEls === 0,
+  `实际 ${flow.allCodeEls} 个`,
+);
+
+const worstNameOver = Math.max(...cur.map((r) => r.m.name.right - r.m.eta.left));
+ok(
+  "[3b] 站名右沿不得越过报站列左沿（码并进文字流后没把名字顶出本行）",
+  worstNameOver <= 0,
+  `最差超出 ${r1(worstNameOver)}px`,
+);
+
+/* ── [3c] ★ R3 窄屏（320px）：加码后站名还能不能单行 ───────────────────────
+   这是负责人明确点名的复核点（"320px 站名可用宽约 125px，加码后要复核截断"）。
+   夹具第三列 `#narrow` 就是 320px 基准；取数与 [3b] 同一套几何，只是换根。
+   ⚠️ 阈值不引入新数字：三条判据都是**结构性**的（不重叠 / 不越界 / 仍单行），
+      "站名还剩多宽"只**打印**不判定 —— 要不要为窄屏隐藏平台码是**产品决定**，
+      不该由这里偷偷用一个数字替产品拍板。 */
+console.log("\n[3c] 窄屏 320px（#narrow）");
+const narrow = [];
+for (let i = 1; i <= 4; i++) {
+  const m = await rects(i, "#narrow");
+  if (!m.name) continue;
+  narrow.push({
+    i,
+    nameW: m.eta.left - m.name.left,
+    over: m.name.right - m.eta.left,
+    lines: m.nameLH ? m.name.height / m.nameLH : null,
+  });
+}
+if (narrow.length) {
+  const minNW = Math.min(...narrow.map((r) => r.nameW));
+  const maxOver = Math.max(...narrow.map((r) => r.over));
+  const maxLines = Math.max(...narrow.map((r) => (r.lines == null ? 0 : r.lines)));
+  const narrowFlow = await page.evaluate(() => ({
+    bad: [...document.querySelectorAll("#narrow .lp-stop__name")].filter((el) => !/^\S+ .+$/.test(el.textContent || "")).length,
+    codeEls: document.querySelectorAll("#narrow .lp-stop__code").length,
+  }));
+  console.log(
+    `   文字区可用宽度（码已在流内）最窄 ${r1(minNW)}px ｜ 行数 ≤ ${maxLines.toFixed(2)} ｜ 独立码元素 ${narrowFlow.codeEls}`,
+  );
+  ok(
+    "[3c] 320px：码与名仍是同一文本流（「码 + 空格 + 名」，且无独立码元素）",
+    narrowFlow.bad === 0 && narrowFlow.codeEls === 0,
+    `不符 ${narrowFlow.bad} 行 / 独立码元素 ${narrowFlow.codeEls}`,
+  );
+  ok("[3c] 320px：站名右沿不越过报站列（码没把名字顶出去）", maxOver <= 0, `最差超出 ${r1(maxOver)}px`);
+  ok("[3c] 320px：站名仍是**单行**（没有被挤成两行）", maxLines > 0 && maxLines <= 1.05, `实测 ${maxLines.toFixed(2)} 行`);
+} else {
+  ok("[3c] 320px 夹具列存在（否则本节无效）", false, "夹具里没有 #narrow 列 ⇒ 窄屏判据无法执行");
+}
+
+/* ── [3d] ★ 2026-11-21 负责人：「通琴号没有站号，只有站名」──────────────────
+   判据设计（为什么不能只判"某个 class 不存在"）：
+     只判 `.lp-stop__code` 不存在 ⇒ 有人把码**并进站名文本**（或改用伪元素、或换个类名）时
+     依然全绿，而屏幕上又出现 `12 站名`。⇒ 必须直接判**渲染出来的文字**的形态：
+       · 开头不得是「数字 id」或「站台码」+ 空白（`12 ` / `T373/2 ` 两种都算）；
+       · 夹具第 3 行是**对抗行**（`code` 故意写成站台码形态）⇒ 它也必须干净，
+         否则"数据长得像码就放行"的实现会被放过。
+   另一半（澳门行**必须**有码）由上面 [3b] 的 `^\S+ .+$` 钉住，两者合起来才是双向判据。 */
+console.log("\n[3d] 通琴号行：只有站名，不得出现站号前缀");
+const tqh = await page.evaluate(() => {
+  const rows = [...document.querySelectorAll("#tqh .lp-stop")];
+  return {
+    hasCol: !!document.querySelector("#tqh .lp-stop"),
+    texts: rows.map((r) => r.querySelector(".lp-stop__name")?.textContent ?? ""),
+    sideRows: rows.filter((r) => r.querySelector('.lp-stop__namerow[data-side-row="1"]')).length,
+    macauSideRows: document.querySelectorAll('#with .lp-stop__namerow[data-side-row="1"]').length,
+  };
+});
+/** 「码 + 空白」的两种真实形态：纯数字站 id（通琴号现状）/ 站台码（`T373/2`） */
+const CODE_PREFIX = /^(?:\d+|[A-Za-z]*\d+\/\d+)\s/;
+const tqhBad = tqh.texts.filter((t) => CODE_PREFIX.test(t));
+console.log(`  ${tqh.texts.length} 行，样例 ${JSON.stringify(tqh.texts)}`);
+ok("[3d] 通琴号夹具列存在（否则本节无效）", tqh.hasCol === true);
+ok(
+  "[3d] 通琴号每行文本开头**不得**是「数字 id / 站台码 + 空白」（含对抗行 `T373/2`）",
+  tqh.texts.length > 0 && tqhBad.length === 0,
+  tqhBad.length ? `违规 ${JSON.stringify(tqhBad)}` : `全部 ${tqh.texts.length} 行干净`,
+);
+ok(
+  "[3d] `data-side-row` 钩子仍在通琴号行输出（`side` 的传值点没被删）",
+  tqh.sideRows === tqh.texts.length && tqh.texts.length > 0,
+  `${tqh.sideRows}/${tqh.texts.length}`,
+);
+/* 反向对照：澳门行**不带** side（`RouteStopsStop.side` 契约：其余族传 null）
+   ⇒ `--lp-name-chars` 公式不作用于澳门行 ⇒ 澳门行的 15px 来自基准字号，不是折算出来的。
+   这条同时是上面 CSS 注释里那个不变量的守卫。 */
+ok(
+  "[3d] 反向对照：澳门行（#with）不带 `data-side-row`（公式只作用通琴号，澳门 15px 来自基准）",
+  tqh.macauSideRows === 0,
+  `实际 ${tqh.macauSideRows} 行带该属性`,
+);
+
 
 /* ── [4] 纵向：不压任何一行的站名 ───────────────────────────────────────
    判据**分态**：ready/stop/approach 的 frac=0 ⇒ 必须完全落在本行；

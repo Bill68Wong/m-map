@@ -143,8 +143,23 @@ export async function loadRouteStops(
   const mileArr = mileageAlong(stops, miles);
 
   const items: LineStop[] = stops.map((s, i) => {
-    const lat = Number(s.lat);
-    const lng = Number(s.lng);
+    /**
+     * ★ R10 修复（2026-11-20）：**NULL 坐标不得被 `Number()` 吃成 0**
+     *
+     * 旧写法是 `const lat = Number(s.lat)`：`Number(null) === 0`，而
+     * `Number.isFinite(0) === true` ⇒ 站表里 4 行缺坐标（`C688` / `C690` /
+     * `M182/2` / `M8/1`）被输出成 `lat: 0, lng: 0`（几内亚湾），而
+     * `LineStop.lat/lng` 的类型与注释都承诺「缺坐标时为 `null`」
+     * ⇒ 消费方（`LineMapPane` 的 `s.lat != null` 过滤）**永远放行**，
+     *   在包围盒之外画一个游离点，且类型与实现互相矛盾（下一个读代码的人会按
+     *   null 写分支）。
+     *
+     * ⇒ 这里**先显式判空**再转数值；非有限值同样落 `null`。
+     *   `StopRow.lat/lng` 的类型本来就是 `number | null`，判空不打折。
+     */
+    const hasCoord = s.lat != null && s.lng != null;
+    const lat = hasCoord ? Number(s.lat) : Number.NaN;
+    const lng = hasCoord ? Number(s.lng) : Number.NaN;
     // ★ 出口一律 GCJ-02（库里是 WGS84）
     const gcj = Number.isFinite(lat) && Number.isFinite(lng) ? wgs84ToGcj02({ lat, lng }) : null;
     return {

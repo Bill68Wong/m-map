@@ -39,7 +39,15 @@ export interface LineStop {
   /** 站名（繁体原文，**不做简繁转换**） */
   name: string;
   kind: LineKind;
-  /** GCJ-02；缺坐标时为 `null`（站表未补坐标） */
+  /**
+   * 坐标（**GCJ-02**，服务端已转）；**站表未补坐标时必须是 `null`**。
+   *
+   * ⚠️ 这条是**契约**，不是描述：`Number(null) === 0` 且 `Number.isFinite(0)` 为真，
+   *   2026-11 之前出口用 `Number(s.lat)`，把 4 个缺坐标站（`C688`/`C690`/`M182/2`/`M8/1`）
+   *   输出成 `lat:0,lng:0`（几内亚湾），而注释一直写着"缺坐标时为 null" ⇒ **注释在说谎**。
+   *   现在出口（`load-route-stops.ts`）显式判空；**消费方仍应只认 `!= null`**，
+   *   不要为了"防 0"再写一套 `!== 0`（那会让契约重新变模糊）。
+   */
   lat: number | null;
   lng: number | null;
   /** 沿线里程（米）；**null 表示无数据，不得参与计算** */

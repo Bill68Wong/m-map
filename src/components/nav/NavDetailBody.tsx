@@ -1121,8 +1121,11 @@ export default function NavDetailBody({
         </div>
         <div className="rc-dhead__r">
           {/* ★ v3.3.0（AC-102）：与推荐卡**逐字同构** —— 每段 = 主干线 + 段内并行线（`parallelRoutes`）
-              （改前只给主干线 ⇒ 推荐卡显示 `25/26`、进导航变 `25`，两处不一致）。 */}
-          <RouteStack segments={routeSegments} colors={colors} size="sm" />
+              （改前只给主干线 ⇒ 推荐卡显示 `25/26`、进导航变 `25`，两处不一致）。
+              ★ R9（2026-11-20）：**导航模式头部不折叠**（`fold={false}`）。
+                用户口径：推荐卡上第 4 条起显示 `+1` 可接受（卡片窄），但导航里空间足够，
+                要求**所有线路完整显示线名**。默认值仍是折叠 ⇒ 推荐卡两处零影响。 */}
+          <RouteStack segments={routeSegments} colors={colors} size="sm" fold={false} />
           {/* ★ v3.3.0（AC-115）：**导航弹窗内不设收藏入口**（用户明确）——
               原「收藏键」`<FavoriteButton kind="plan" entry="detail" …/>` 已删除。
               删除后 detail 头部右区仅剩线路标签（本总览栏）。收藏入口只在：

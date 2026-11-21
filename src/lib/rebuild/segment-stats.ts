@@ -605,6 +605,14 @@ export async function rebuildSegmentStats(
      *   `both`    → 排除法（历史口径，行为与 v1.3.0~v4.1.x 完全一致）
      *   `track`   → 白名单：只放行 `source = 'track'`（生产口径）
      *   `samples` → 全表（诊断/对拍，会把 `source='timer'` 的手工留档行也读进来）
+     *
+     * ★ v4.4.0（2026-11-20 负责人裁定）：**不做堵车标记**。
+     *   原先的 `run_jam` 列探测与「`AND NOT run_jam`」过滤已移除 —— 用户要的是
+     *   「正常记录站间行驶时长」，不是「给堵车样本打标签再排除」。20~45 分的长时样本
+     *   由派生端（`scripts/track-derive.mjs` R14′）**正常收录**，聚合侧不做二次筛选；
+     *   真正的离群值仍由入库前的同键护栏（p50×3 且 +2 分，n≥5）剔除，原值可回溯。
+     *   ⇒ 将来若要做「堵车时更宽的 ETA 区间」，应在**查询侧**按 minutes/p50 比值另算一档，
+     *     不要反过来在聚合里排除样本（那等于把证据从统计里抹掉）。
      */
     const whereSql =
       sampleFrom === "both"

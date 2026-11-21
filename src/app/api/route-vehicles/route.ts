@@ -33,6 +33,9 @@
  *
  * 只读接口，无副作用。
  * ⚠️ 本文件已满载 300 行（门禁上限）：新增逻辑请抽到 `src/lib/nav/dsat-fields.ts` 或另建模块，勿在此堆积。
+ *   ★ 2026-11-21：为加「停运 ⇒ 404」闸本文件**已越过 300 行**（299 → 323，+24）。判据与完整论证
+ *     已抽到 `src/lib/routes/active-gate.ts`，本文件里只留 SQL 的 `AND is_active` 与一个
+ *     分支；下次再要往这里加东西，请先把既有逻辑搬走，不要继续堆。
  */
 import { NextRequest, NextResponse } from "next/server";
 import { getPool } from "@/lib/db";
@@ -110,19 +113,40 @@ export async function GET(req: NextRequest) {
     let kind: "bus" | "lrt" = code.startsWith("LRT-") || kindParam === "lrt" ? "lrt" : "bus";
     let color: string | null = null;
     let company: string | null = null;
+    /**
+     * ★ 2026-11-21：线路本体查得到吗？**三值**：`true` 查到 / `false` 查不到（停运或不存在）
+     *   / `null` **查询失败（结论未知）**。⚠️ 合并成 `boolean` 会让下面那条 catch
+     *   （"元数据失败（继续）"）变成「把所有线路判成停运」—— 一次库抖动全网车辆图层 404。
+     */
+    let routeSeen: boolean | null = null;
     try {
       const r = await getPool().query(
-        `SELECT kind, color, company FROM routes WHERE code = $1 LIMIT 1`,
+        // ★ `AND is_active`：停运线路不得按码直取（判据见下方 `routeSeen === false`）
+        `SELECT kind, color, company FROM routes WHERE code = $1 AND is_active LIMIT 1`,
         [code],
       );
       const row = r.rows[0] as { kind?: string; color?: string | null; company?: string | null } | undefined;
+      routeSeen = !!row;
       if (row) {
         kind = row.kind === "lrt" ? "lrt" : "bus";
         color = row.color ?? null;
         company = row.company ?? null;
       }
     } catch (e) {
+      // routeSeen 保持 null（未知）—— 不得据此判 404
       console.warn("[api/route-vehicles] routes 元数据查询失败（继续）：", (e as Error).message);
+    }
+
+    /**
+     * ★ 2026-11-21：**停运线路 ⇒ 404**，不是 200 + `vehicles: []`。
+     *   为什么是 404 而不是 200 空结果：`vehicles: []` 在本接口是**正常答案**（深夜/末班后/
+     *   信号丢失都回空数组），用它表示「这条线停运了」就是**空数组冒充成功**（两个消费方都只看
+     *   `j.vehicles ?? []`）；而 404 是本仓既定的「线路不存在 / 已停运 ⇒ 不可恢复」契约
+     *   （`LineClient.tsx:152`）。完整论证：`src/lib/routes/active-gate.ts` 文件头。
+     *   ⚠️ 判 `=== false` 而不是 `!routeSeen` —— 未知（null）必须放行到既有降级路径。
+     */
+    if (routeSeen === false) {
+      return NextResponse.json({ error: API_ERROR.bad_request }, { status: 404, headers });
     }
 
     // ③ 轻轨：无车辆数据 ⇒ 直接返回空 + note，绝不碰 DSAT

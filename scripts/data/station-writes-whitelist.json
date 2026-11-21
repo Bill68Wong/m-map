@@ -1,0 +1,62 @@
+{
+  "_comment": [
+    "check-station-writes.mjs 的白名单（外部数据，不写死在检查逻辑里）。",
+    "",
+    "分类口径：按「调用方是否已去重」分类，**不是**按「SQL 有没有 WHERE」。",
+    "只看 SQL 会把「JS 侧已经判过值是否变化」的路径误报成红，然后有人为了让它变绿去改错地方。",
+    "",
+    "每条必须有可核查的理由（file:line 或可复现判据），不许写「历史原因」。",
+    "D4 过期检测：若某条 detect 在其 file 里已经找不到 ⇒ 脚本报「已失效，请移除」。",
+    "  这条是为了防止白名单随修复推进慢慢僵化（修好了还挂着 ⇒ 门永远开一条缝）。",
+    "  detect 必须取**最短唯一片段**，否则无关重构会让它误判失效。"
+  ],
+  "expected": {
+    "red": 0,
+    "white": 7,
+    "note": "仅作打印提示，不参与退出码（改了数字也不会让检查通过）。2026-11-20 R12 把 db/sync-all-routes.ts 与 db/sync-routes.ts 两处 stations upsert 修好之后，红从 2 变 0；这两条路径已不在白名单里，属正常收敛。"
+  },
+  "entries": [
+    {
+      "file": "db/migrate-v171.ts",
+      "detect": "regexp_replace\\(name_tc, '站\\$', ''\\)",
+      "category": "天然等价（改完即不再匹配）",
+      "why": "UPDATE stations SET name_tc = regexp_replace(name_tc,'站$','') WHERE kind='lrt' AND name_tc LIKE '%站' ⇒ 命中的行改完后不再以「站」结尾，第二次跑自然匹配不到任何行，等价于「值不变则不写」。实测当前 0 行命中（v171 已执行过：SELECT count(*) FROM stations WHERE kind='lrt' AND name_tc LIKE '%站' → 0）。"
+    },
+    {
+      "file": "db/seed.ts",
+      "detect": "INSERT INTO stations \\(code, name_tc, kind, dsat_synced, note\\)",
+      "category": "数据源干净（不引入新脏值）",
+      "why": "站名来自本地 seed 数据（非 DSAT 实时接口），且 seed.ts 内 .trim() 计数为 0 —— 但实测常量本身无首尾空格，当前库内这些站名亦无脏值。属「未规范化但不产生脏数据」，加 trim 可延后，不阻塞 R12。"
+    },
+    {
+      "file": "db/migrate-v060.ts",
+      "detect": "INSERT INTO stations \\(code, name_tc, kind, dsat_synced, note\\)",
+      "category": "数据源干净（不引入新脏值）",
+      "why": "站名为硬编码常量，已扫（匹配首尾带空白的字符串字面量）无命中 ⇒ 不引入新脏值。加 trim 可延后。"
+    },
+    {
+      "file": "db/migrate-v070.ts",
+      "detect": "INSERT INTO stations \\(code, name_tc, kind, dsat_synced, note\\)",
+      "category": "数据源干净（不引入新脏值）",
+      "why": "同上：硬编码常量已扫无首尾空格。"
+    },
+    {
+      "file": "db/migrate-v071.ts",
+      "detect": "INSERT INTO stations \\(code, name_tc, kind, dsat_synced, note\\)",
+      "category": "数据源干净（不引入新脏值）",
+      "why": "同上：维护轻轨站序，站名硬编码已扫无首尾空格。"
+    },
+    {
+      "file": "db/migrate-v130.ts",
+      "detect": "INSERT INTO stations \\(code, name_tc, kind, dsat_synced, note\\)",
+      "category": "数据源干净（不引入新脏值）",
+      "why": "同上：硬编码常量已扫无首尾空格。"
+    },
+    {
+      "file": "db/migrate-v160.ts",
+      "detect": "INSERT INTO stations \\(code, name_tc, kind, dsat_synced, note\\)",
+      "category": "数据源干净（不引入新脏值）",
+      "why": "同上：站名来自本地结构化数据，已扫无首尾空格。"
+    }
+  ]
+}

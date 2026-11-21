@@ -39,6 +39,7 @@ export default function RouteStack({
   colors,
   size = "md",
   className = "",
+  fold = true,
 }: {
   /** 旧入参：**单段**线路码（同段并列）；与 `segments` 二选一（给了 `segments` 以它为准） */
   codes?: (string | null | undefined)[];
@@ -57,8 +58,24 @@ export default function RouteStack({
   colors?: Record<string, string> | null;
   size?: "sm" | "md";
   className?: string;
+  /**
+   * ★ R9（2026-11-20）：段内并列**是否折叠**为 `+N` 尾块。
+   *
+   * - `true`（**默认**）= 现有行为：段内最多 3 块，第 4 条起显示 `+N`。
+   *   窄位置（推荐卡头部 / 时间线行内）必须保留，否则挤爆卡片。
+   * - `false` = 全列线名，不折叠、不出 `+N`。目前**只有导航模式头部**用它
+   *   （`NavDetailBody`：那里空间足够，用户明确要求"所有线路完整显示线名"）。
+   *
+   * ⚠️ 默认值刻意保持 `true`：所有既有调用点**零改动、零视觉变化**；
+   *   新增行为只发生在显式传 `fold={false}` 的那一处。
+   * ⚠️ 不折叠时若线名过多会依赖外层 `flex-wrap` 换行（`.rc-dhead__r` 已有 wrap）
+   *   ⇒ 行高可能增加，属可接受代价；不要为此去动 `.rc-dhead__r` 的 `max-width`。
+   */
+  fold?: boolean;
 }) {
   const resolve = colorOf ?? (colors ? (c: string) => colors[c] : undefined);
+  /** ★ R9：段内并列上限。`fold === false` ⇒ 不设上限（全列） */
+  const parallelLimit = fold ? MAX_PARALLEL : Number.POSITIVE_INFINITY;
 
   // 规范化：优先 segments；否则把 codes 视作单段。段内排序 = 轻轨在前 + 自然序（已有）。
   const rawSegs: RouteSegment[] = segments && segments.length ? segments : [{ codes: codes ?? [] }];
@@ -84,7 +101,7 @@ export default function RouteStack({
           <span className="route-stack__group">
             {/* ★ v3.2.0（需求 13）：同段并列 = 块间 **「/」形负空间留白缝**（`margin-right:-5px`
                 咬合 + `clip-path` 斜切；**不是 `/` 字符、不是黑块**）—— 详见 globals.css B2 段。 */}
-            {list.slice(0, MAX_PARALLEL).map((c) => (
+            {list.slice(0, parallelLimit).map((c) => (
               <span
                 key={c}
                 className="route-stack__seg"
@@ -94,7 +111,7 @@ export default function RouteStack({
                 {lineNameOf(c)}
               </span>
             ))}
-            {list.length > MAX_PARALLEL && (
+            {fold && list.length > MAX_PARALLEL && (
               <span
                 className="route-stack__more"
                 title={list.slice(MAX_PARALLEL).map(lineNameOf).join(" / ")}

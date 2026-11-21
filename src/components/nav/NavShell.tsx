@@ -91,6 +91,13 @@ const CATCH_LIVE_IDLE: { tier: CatchTier | null; text: string; seq: number } = {
   text: "",
   seq: 0,
 };
+
+/**
+ * ★ R10：站序的**稳定空数组**（`stopsSheet` 为 null 时用它兜 `platformOf` 的依赖）。
+ * 为什么不能写 `stopsSheet?.stops ?? []`：那每次渲染都是一个新数组 ⇒ `useMemo` 依赖恒变
+ * ⇒ 平台表恒重建 ⇒ `NavMap` 站点层每帧全量重建（站点闪烁、`data-station-gen` 狂涨）。
+ */
+const EMPTY_STOPS: RouteStopsOk["stops"] = [];
 import RouteLinesSheet from "./RouteLinesSheet";
 import LineStopsSheet from "./LineStopsSheet";
 /** ★ 2026-11-06（修复批 #4/#5a）：澳门巴士 / 轻轨的线路站序三档弹窗（前端 C 产出） */
@@ -169,6 +176,8 @@ import {
 } from "./sheet-detents";
 import { unionBox } from "@/lib/nav/route-overview";
 import { mainOf } from "@/lib/nav/track";
+/** ★ 2026-11-21（真机验收 ③）：导航态「主码 → 本腿实际站台坐标」的纯折叠函数 */
+import { buildPlatformMap } from "@/lib/nav/platform-of";
 /** ★ 修复批 #7：线路标签统一口径（巴士 `26` / 轻轨官方繁体 `氹仔線`，都不带中文后缀） */
 import { lineNameOf } from "@/lib/route-label";
 import { useCombos } from "@/lib/favorites/useCombos";
@@ -187,6 +196,21 @@ import LayerSheet from "./LayerSheet";
 import PublicToiletCard from "./PublicToiletCard";
 
 const MY_LOCATION = "我的位置";
+/**
+ * ★ R11（2026-11-21）：**车辆匹配（未锁车牌定期重试）的灰度开关**。
+ *
+ * ── 为什么在调用点显式传，而不是改 `match-params.ts:15` 的 `MATCH_VEHICLE_ENABLED` ──
+ *   那个常量是**全局默认值 + 回滚闸**，改它等于"全仓默认打开"，回滚时要动库里的文件；
+ *   显式传参则是"这一个页面开"，回滚只需把这里改回 `false`（一行、可 review、无副作用）。
+ *   `useRideTracking` 的入参注释也写明：缺省读常量，显式传入优先。
+ *
+ * ── 为什么现在是 `false` ────────────────────────────────────────────────────
+ *   误锁的后果**不可逆**：报站错位 → 提前/延后下车提醒 → 最重是坐过站。
+ *   而整条匹配链路（`match-vehicle` / `match-retry`）在本地环境无法运行时验证
+ *   （无 AMap Key / 无车辆帧），只能证纯逻辑与接线 ⇒ 必须灰度，不能默认开。
+ *   ⚠️ 打开前请先读 `match-retry.ts` 头部那六条放弃条件与双帧确认的取舍。
+ */
+const MATCH_ENABLED = false;
 /**
  * 「从 `/line` 返回时重开搜索层」的一次性标记（与 `SearchSheet.SS_RETURN` **同一个 key**）。
  * 只有一个消费点：下面 `stage` 的 `useState` 初始化函数（读到即删）。
@@ -440,12 +464,32 @@ export default function NavShell({
     };
   }, [tqhTrip]);
 
-  /** 面板打开期间隐藏搜索框（200ms 淡出，`prefers-reduced-motion` 瞬切） */
+  /**
+   * 路线查看模式 = 已选中巴士/轻轨线路（`rv.picked`），或正在看通琴号班次（`tqhTrip`）。
+   * 与 `navPhase` 正交：这两态都可在 `rsOpen === false`（相位 off）下存在。
+   * ⚠️ 选线弹窗 `lineSheet` **不算**路线查看模式（负责人 2026-11-11 裁定）。
+   *
+   * ★ 2026-11-20（R4）：**提前到搜索框隐藏 effect 之前定义** —— 那个 effect 要读它
+   *   （见下），原来它定义在 2400 行之后，只能在这里再抄一遍表达式（两份真相）。
+   */
+  const routeViewOn = !!rv.picked || !!tqhTrip;
+
+  /**
+   * 面板 / 线路查看期间隐藏顶部搜索框（200ms 淡出，`prefers-reduced-motion` 瞬切）。
+   *
+   * ★ R4（2026-11-20）：判定由 `rsOpen` 扩成 **`rsOpen || routeViewOn`**。
+   *   改前线路查看模式**不写** `data-sheet` ⇒ 顶部搜索框一直浮在站序弹窗之上；
+   *   满档时面板顶边（`--sheet-top-full` ≈101px）还会与搜索框底（64px + safe-top）交叠。
+   *   ⇒ 用派生值扩判定，**不新造第二个 body 属性**（`globals.css` 里
+   *   `body[data-sheet="open"] .nav-searchbar` 的选择器已就位，CSS 零改动）。
+   * ⚠️ 布局无副作用：`.nav-searchbar` 是 `position: fixed`，只变 opacity/pointer-events，
+   *   不参与文档流 ⇒ 隐藏后不塌陷、不留白。
+   */
   useEffect(() => {
-    if (rsOpen) document.body.setAttribute("data-sheet", "open");
+    if (rsOpen || routeViewOn) document.body.setAttribute("data-sheet", "open");
     else document.body.removeAttribute("data-sheet");
     return () => document.body.removeAttribute("data-sheet");
-  }, [rsOpen]);
+  }, [rsOpen, routeViewOn]);
 
   const onLocate = useCallback((pos: { lng: number; lat: number } | null) => setUserPos(pos), []);
 
@@ -829,6 +873,12 @@ export default function NavShell({
      *   （拒权 → 去设置 / 无信号 → 走两步 / 超时 → 再等），不参与任何判定。
      */
     geo: userFixR.geo,
+    /**
+     * ★ R11：车辆匹配开关（灰度）。默认 `false` —— 见模块级 `MATCH_ENABLED` 的注释。
+     * 不传则回落到 `MATCH_VEHICLE_ENABLED`（同样是 false），但**显式传**才能让
+     * "谁开的、在哪开的"在调用点一眼可见。
+     */
+    matchEnabled: MATCH_ENABLED,
   });
 
   /** 阶段镜像（GPS 节流用；避免 userFix↔ride 循环依赖） */
@@ -1015,8 +1065,23 @@ export default function NavShell({
     const legs = ov.body?.legs ?? [];
     if (!legs.length || !to) return { out: null, in: null };
     const startPt = fromPoint ?? walkStart;
-    const firstBoard = legs[0]?.board;
-    const lastAlight = legs[legs.length - 1]?.alight;
+    /**
+     * ★ 2026-11-21（真机验收 ③ 续）：**步行段端点必须落在本腿实际站台**。
+     *
+     *   旧写法直接取 `legs[0].board` / `legs[last].alight` —— 那是 `detail-body` 的
+     *   `coordOf()` 给的**主码合成点**（`/api/stations` 按主码去重，通常是 `/1`）。
+     *   ⇒ 首段步行的终点、末段步行的起点都画在 `/1`，与彩段/站标不在同一点，
+     *     地图上就是「步行线多一截 / 少一截」（负责人同一批反馈的第 2 条）。
+     *
+     *   `ov.legs[i].boardPoint / alightPoint` 是 `buildColoredLegs` 按 `legPointOf`
+     *   解析出来的**唯一端点真相**（含 `src` 标记：`platform` / `main`）。
+     *   取不到（该腿降级 / 无站序）⇒ 回落到 `legs[i]` 的主码坐标 ⇒ 与改前逐位相同。
+     */
+    const colored = ov.legs ?? [];
+    const fbPoint = colored[0]?.boardPoint ?? null;
+    const laPoint = colored[colored.length - 1]?.alightPoint ?? null;
+    const firstBoard = fbPoint ?? legs[0]?.board ?? null;
+    const lastAlight = laPoint ?? legs[legs.length - 1]?.alight ?? null;
     /** 起终点重合（< 1m）⇒ 视为「无需步行」，不发请求（见上方注释） */
     const tooClose = (a: { lng: number; lat: number }, b: { lng: number; lat: number }) =>
       distM([a.lng, a.lat], [b.lng, b.lat]) < WALK_ZERO_M;
@@ -1031,10 +1096,38 @@ export default function NavShell({
           : null,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ov.body?.legs, to?.lng, to?.lat, fromPoint?.lng, fromPoint?.lat, walkStart?.lng, walkStart?.lat]);
+  }, [ov.body?.legs, ov.legs, to?.lng, to?.lat, fromPoint?.lng, fromPoint?.lat, walkStart?.lng, walkStart?.lat]);
 
   /** 预取首/末两段（AC-08a：预取只有这 2 次；重算另有 2 次预算，见文件头） */
   const walkRoute = useWalkRoute(walkOds);
+
+  /**
+   * ★ 2026-11-21（真实施工 ③ 续 · D）：端点来源观测值（写进 `.nav-map-wrap` 的 data-*）。
+   *   纯派生、零副作用；用的是 `ColoredLeg.boardPoint/alightPoint` 的 `src` 标记 ——
+   *   与几何**同一个来源**，不是另算一遍（另算就会漂）。
+   */
+  const endpointSrc = useMemo(() => {
+    const colored = ov.legs ?? [];
+    const legs = ov.body?.legs ?? [];
+    const srcOf = (p: { src: "platform" | "main" } | null | undefined): "platform" | "main" =>
+      p?.src === "platform" ? "platform" : "main";
+    if (!colored.length) {
+      /* 还没有彩段（shapes 未到）⇒ 全部走主码坐标 ⇒ 与改前一致 */
+      const any = legs.length > 0;
+      return {
+        colored: any ? "main" : "none",
+        coloredBoard: any ? "main" : "none",
+        walkOut: any ? "main" : "none",
+        walkIn: any ? "main" : "none",
+      };
+    }
+    return {
+      colored: colored.map((l) => srcOf(l.boardPoint)).join(","),
+      coloredBoard: srcOf(colored[0]?.boardPoint),
+      walkOut: srcOf(colored[0]?.boardPoint),
+      walkIn: srcOf(colored[colored.length - 1]?.alightPoint),
+    };
+  }, [ov.legs, ov.body?.legs]);
   /**
    * ★ 2026-11-12（P1-b）：独立步行导航的取数实例 —— 与上面的「方案内步行段」互不干扰。
    *
@@ -2231,6 +2324,16 @@ export default function NavShell({
     code: string;
     color: string | null;
     directionLabel: string;
+    /**
+     * ★ R10（2026-11-20）：**本次站序实际所属的方向**（= `RouteStopsOk.dir`）。
+     *
+     * 为什么必须存下来：`/api/route-stops` 会被请求**两次**（首次不带 `dir`，
+     * 服务端回落默认方向；`pickedDir` 到位后带 `dir` 再取一次）。两次响应都合法，
+     * 但方向可能不同 ⇒ 若把首帧那批站台坐标当"该线实际站台"去挪地图点位，
+     * 会先按**错误方向**的站台跳一下，再跳到正确位置（视觉上是"点先跳错再跳对"）。
+     * 故 `platformOf`（见下方 useMemo）**只认这里存的 `dir`**：空串 ⇒ 不产出平台表。
+     */
+    dir: string;
     stops: RouteStopsOk["stops"];
   } | null>(null);
   const [stopsDetent, setStopsDetent] = useState<Detent>("half");
@@ -2295,6 +2398,8 @@ export default function NavShell({
       code: p.code,
       color: p.color || null,
       directionLabel: "方向待定",
+      /* ★ R10：方向未定 ⇒ 空串。`platformOf` 只在它非空时产出（见 useMemo 注释） */
+      dir: "",
       stops: [],
     });
     if (prevKey !== key) setStopsDetent("half"); // 换线 / 重开 ⇒ 回默认档；同线换向 ⇒ 不动档位
@@ -2320,6 +2425,9 @@ export default function NavShell({
             ? {
                 ...prev,
                 directionLabel: ok?.label ? `往 ${ok.label.to}` : "方向待定",
+                /* ★ R10：写回**本次响应**的方向（不是 `pickedDir`）—— 它是这批站序的真实方向，
+                   首帧（未带 dir）写回的是服务端默认方向，`platformOf` 据此判断能不能用 */
+                dir: ok?.dir ?? "",
                 stops: ok?.stops ?? [],
               }
             : prev,
@@ -2332,6 +2440,140 @@ export default function NavShell({
       alive = false;
     };
   }, [pickedCode, pickedDir]);
+
+  /**
+   * ═══════════════════════════════════════════════════════════════════════════
+   * ★ R10（2026-11-20）：**该线「本方向实际站台」坐标表** → 交给 `NavMap` 挪站点标点
+   *
+   * ── 它解决什么 ─────────────────────────────────────────────────────────
+   *   地图站点标的路由来自 `/api/stations`（**主码粒度的"合成点"**，坐标由 `byMain`
+   *   覆盖决定、不可复现）。用户要求：进入线路查看时，该线经过的站点标点要落在
+   *   **该线该方向实际停靠的那个站台**上。这里就产出那份 `主码 → 站台坐标`。
+   *
+   * ── 数据从哪来（零新增请求）─────────────────────────────────────────────
+   *   就是上面 ② 那个 effect 已经取回的 `stopsSheet.stops`（`/api/route-stops?code&dir`
+   *   逐方向返回「站台码 + GCJ-02 坐标」）。本函数只做折叠，不发请求。
+   *
+   * ── 为什么键必须是 (route, dir, seq) 而不是 (route, dir, main) ───────────
+   *   实测有 **33 组**「同一线路+同一方向+同一主码对应两个不同站台」（例：`50` 路
+   *   `T355/2`@seq14 与 `T355/1`@seq28，0 组相邻）。用主码当键会让两行互相覆盖、
+   *   结果取决于遍历顺序（随机）。⇒ 逐行按 `seq` 扫，折叠到主码时**取 seq 最小那一次**
+   *   （= "第一次经过"的那一站台，与 `stops-veh-marks.ts:266 gateRows` 的
+   *   「同一主码只画首次出现行」同源）。这同时满足用户 ① 的"仍用其中一个站台位置"。
+   *
+   * ── 方向未定 ⇒ 返回 null（这条是防假绿的关键）──────────────────────────
+   *   `/api/route-stops` 会取两次：首次不带 `dir`（服务端回落默认方向），`pickedDir`
+   *   到位后再取一次。首帧那批坐标**方向可能是错的** ⇒ 只认 `stopsSheet.dir`（响应里的
+   *   `RouteStopsOk.dir`），空串一律不产出。`null` 是**稳定引用**，`NavMap` 的依赖比较
+   *   不会因此抖动。
+   *
+   * ── 引用稳定性（硬约束）─────────────────────────────────────────────────
+   *   本值进 `NavMap` 站点层 effect 的依赖数组：一旦引用每帧变，父级每次重渲染
+   *   （导航态 ETA/车辆帧/冷却计时都是 1~2Hz）都会 `clearAll()` + 全量重建 marker。
+   *   故：① 三个依赖都是**原始值或稳定引用**（含下面的 `EMPTY_STOPS`）；
+   *       ② 只在 `code / dir / stops` 三者真变时产出新 Map。
+   *
+   * ⚠️ 坐标**已是 GCJ-02**（`load-route-stops.ts` 出口转好）——**禁止**再调
+   *    `wgs84ToGcj02()`，否则整体偏移几百米且只在真地图上看得出来。
+   */
+  const stopsCodeKey = stopsSheet?.code ?? "";
+  const stopsDirKey = stopsSheet?.dir ?? "";
+  const stopsRowsKey = stopsSheet?.stops ?? EMPTY_STOPS;
+  const platformOf = useMemo<ReadonlyMap<string, { lng: number; lat: number }> | null>(() => {
+    if (!stopsCodeKey || !stopsDirKey || stopsRowsKey.length === 0) return null;
+    /**
+     * ★ 线路已退出 / 已换线 ⇒ **旧快照必须立即失效**。
+     *   `stopsSheet` 关闭时刻意**不清空**（要留最后一帧给收起动画），所以它的
+     *   `code/dir/stops` 会在退出路线查看后继续留在 state 里。若照旧产出平台表，
+     *   `NavMap` 会拿"上一条线"的站台去挪当前屏幕上的站点（导航态尤其明显：
+     *   白名单已换成当前乘车段的站，表却还是旧线的）⇒ 静默错位、不报错。
+     *   判据用 `pickedCode`（= `rv.picked?.code`）：清线时它先变 null。
+     */
+    if (!pickedCode || pickedCode !== stopsCodeKey) return null;
+    /**
+     * ⚠️ 两个类型的字段顺序**相反**：`LineStop` 是 `lat, lng`（`line-shared.ts`），
+     *    而 `StationPointLite`/AMap 是 `lng, lat`。这里统一产出 `{ lng, lat }` 并显式
+     *    写出键名（不靠数组顺序），`NavMap` 再拼 `[lng, lat]` 喂 `AMap.Marker`。
+     *    写反的症状：点位整体跑到境外，**不报错**。
+     */
+    const byMain = new Map<string, { lng: number; lat: number; seq: number }>();
+    for (const st of stopsRowsKey) {
+      /* 缺坐标站不参与（契约：`lat/lng` 为 null = 站表未补坐标，绝不参与任何计算） */
+      if (st.lat == null || st.lng == null) continue;
+      /* 主码归一：与 `/api/stations` 的 `mainCodeOf`、`NavMap` 的 `stationMain` 同一正则族
+         （`/^[A-Za-z]+\d+/` + 原文兜底）⇒ 两边主码口径一致，否则匹配不上、静默不挪位 */
+      const main = mainOf(st.code);
+      const prev = byMain.get(main);
+      if (!prev || st.seq < prev.seq) byMain.set(main, { lng: st.lng, lat: st.lat, seq: st.seq });
+    }
+    if (!byMain.size) return null;
+    const out = new Map<string, { lng: number; lat: number }>();
+    for (const [main, v] of byMain) out.set(main, { lng: v.lng, lat: v.lat });
+    return out;
+  }, [stopsCodeKey, stopsDirKey, stopsRowsKey, pickedCode]);
+
+  /**
+   * ═══════════════════════════════════════════════════════════════════════════
+   * ★ 2026-11-21（真机验收 ③）：**导航态的站台坐标**（与上面 `platformOf` 并列的第二张表）
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * 上面那张表只服务**路线查看**：它的原料 `stopsSheet` 由 `pickedCode` 驱动，而
+   * 导航是从推荐卡直接进的，`rv.picked` 未必有值 ⇒ 导航态下 `platformOf` 基本为 `null`
+   * ⇒ `NavMap` 回落 `/api/stations` 的合成点（该接口**按主码去重**，只留 `/1`）
+   * ⇒ 屏幕上站点画在 `T373/1`，而这一趟停的是 `T373/2`（实测相距 43.2m，分居马路两侧）。
+   *
+   * ── 为什么另起一张表，而不是去修 `platformOf` ─────────────────────────────
+   *   ① 数据源不同：站序表要的是「**当前腿**」这条线这个方向（多腿时不同腿可能停
+   *      同一主码的不同站台），而 `stopsSheet` 是"选中的那条线"，与腿无关；
+   *   ② 生命周期不同：`stopsSheet` 关弹窗时刻意不清空（留给收起动画），而腿一张嘴就换；
+   *   ③ 硬把两者塞进一个 memo，会让"这份坐标是哪来的"在代码里消失 —— 那正是这次事故的形状。
+   *
+   * ── 方向从哪来（不新增推断）──────────────────────────────────────────────
+   *   `ov.legs[legIndex].dir` 是 `buildColoredLegs` 用 route-shapes 的站序排出来的
+   *   **已定方向**（同一个值在喂 `/api/route-vehicles?dir=`），这里直接复用，不自己再推一遍。
+   *   `dir` 为空 ⇒ 不产出（宁可回落 `/1`，也不要按错方向的站台乱挪）。
+   *
+   * ── 为什么这里允许**一次**请求 ─────────────────────────────────────────────
+   *   `strips[].stops[]` 只带平台码、**不带坐标**（`StripStop` 没有 lat/lng），而
+   *   `/api/stations` 按主码塌成一个点 ⇒ 想要"平台码 → 坐标"只能问 `/api/route-stops`
+   *   （静态数据、`s-maxage=3600`，且与路线查看用的是同一条）。只在导航态、只在换腿时各发一次。
+   */
+  const navLeg = navActive ? (ov.legs[ride.legIndex] ?? null) : null;
+  const navLegKey = navLeg?.dir ? `${navLeg.route}|${navLeg.dir}` : "";
+  const [navLegStops, setNavLegStops] = useState<{ key: string; rows: RouteStopsOk["stops"] } | null>(null);
+  useEffect(() => {
+    if (!navLegKey) return;
+    let alive = true;
+    const [code, dir] = navLegKey.split("|");
+    void (async () => {
+      try {
+        const r = await fetch(`/api/route-stops?${new URLSearchParams({ code, dir })}`, { cache: "no-store" });
+        /* 404 = 该线该方向不存在（或已停运）⇒ **不产出**，让地图回落既有行为。
+           其它状态码同理：拿不到站序不该让站点"消失"，只是挪不准。 */
+        if (!r.ok) return;
+        const j = (await r.json()) as RouteStopsResp;
+        if (!alive) return;
+        /* 与上面 ② 同口径：只认 `ok: true`（`RouteStopsErr` 没有 `stops`，不能当空数组用） */
+        setNavLegStops({ key: navLegKey, rows: j.ok ? j.stops : [] });
+      } catch {
+        /* 网络失败 ⇒ 保持上一份（key 不匹配 ⇒ 不产出）⇒ 地图回落，不影响导航主流程 */
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [navLegKey]);
+
+  const platformNavOf = useMemo<ReadonlyMap<string, { lng: number; lat: number }> | null>(() => {
+    /* ⚠️ key 必须与当前腿**逐字相等**：换腿后旧响应即使晚到也不会被当成新腿的站台 */
+    if (!navLegKey || !navLegStops || navLegStops.key !== navLegKey) return null;
+    const strip = ov.body?.strips?.[ride.legIndex] ?? null;
+    if (!strip) return null;
+    return buildPlatformMap(
+      strip.stops.map((s) => s.code),
+      navLegStops.rows,
+    );
+  }, [navLegKey, navLegStops, ov.body, ride.legIndex]);
 
   /**
    * ═══════════════════════════════════════════════════════════════════════════
@@ -2348,10 +2590,8 @@ export default function NavShell({
    *   ⇒ 弹窗画在哪，取景槽就避到哪。本文件因此**不出现任何档位像素常量**。
    */
   const stopsSheetOn = !!rv.picked && !navActive && !lineSheet;
-  /** 路线查看模式 = 已选中巴士/轻轨线路，或正在看通琴号班次。
-   *  与 navPhase 正交：这两态都可在 rsOpen === false（相位 off）下存在。
-   *  ⚠️ 选线弹窗 `lineSheet` **不算**路线查看模式（负责人 2026-11-11 裁定）。 */
-  const routeViewOn = !!rv.picked || !!tqhTrip;
+  /* ★ R4：`routeViewOn` 已在文件上部（搜索框隐藏 effect 之前）定义 —— 这里不再重复定义，
+     否则同一作用域内重复声明直接编译错；两份真相也会在将来只改一处时静默分叉。 */
   const stopsSheetTopsPx = useMemo(
     () => tqhDetentTopsPx(winH || 844, safeTop, safeBottom),
     [winH, safeTop, safeBottom],
@@ -2517,7 +2757,30 @@ export default function NavShell({
         包一层 Provider 若要全局重排缩进，会把整块 300 行 JSX 变成"全文件改动"，
         审查时看不出真正的语义改动。结构仍以标签为准：Provider > section > … */}
     <section className="nav-shell nav-shell--full">
-      <div className="nav-map-wrap">
+      {/**
+       * ★ 2026-11-21（真机验收 ③ 续 · D）：**端点坐标来源的只读观测钩子**（生产保留）。
+       *
+       * 为什么挂在这一层而不是 `NavMap` 里：端点坐标是**本层（+ `route-overview`）决定的**，
+       *   `NavMap` 只是照着画。挂在决策层，读到的就是"决定"本身；也免得再往下加 4 个 prop
+       *   （prop 扩散是上一轮 `data-platform-src` 之后我们才刚收住的东西）。
+       *
+       * 取值：`platform` = 命中本腿 `(dir, seq)` 站台；`main` = 回落主码合成点（`/1`）；
+       *      `none` = 该腿没有彩段 / 没有对应步行段。
+       *   · `data-colored-src`      逐腿逗号串（**覆盖每一条腿**，长度 = 乘车腿数）
+       *   · `data-colored-board-src` 首腿 board 来源（负责人原话里那条）
+       *   · `data-walk-end-src`     首段步行**终点**来源（= 首腿上车站）
+       *   · `data-walk-start-src`   末段步行**起点**来源（= 末腿下车站）
+       *
+       * ⚠️ 只读、一行字符串、不发请求、不参与任何判定。若大面积是 `main`，说明
+       *    `platforms` / 站序没到位（此时画面与改前一致，不是"改坏了"）。
+       */}
+      <div
+        className="nav-map-wrap"
+        data-colored-src={endpointSrc.colored}
+        data-colored-board-src={endpointSrc.coloredBoard}
+        data-walk-end-src={endpointSrc.walkOut}
+        data-walk-start-src={endpointSrc.walkIn}
+      >
         <NavMap
           jsKey={jsKey}
           mapStyleId={mapStyleId}
@@ -2573,6 +2836,24 @@ export default function NavShell({
           }}
           /* ★ v2.10.0：路线查看模式 + 实时车辆；★ 2026-09-23：detail pane 打开时让位给总览 */
           routeLine={detailActive ? null : rv.picked}
+          /**
+           * ★ R10：该线**本方向实际站台**坐标表（`主码 → {lng, lat}`，已是 GCJ-02）。
+           * 只在「线路查看 + 方向已定」时非 null；`NavMap` 据此把白名单内站点标的 marker
+           * 挪到该站台位置（marker 数量不变，仍是一站一个点）。
+           * ⚠️ 本值已 `useMemo`，引用稳定；`NavMap` 把它放进站点层 effect 依赖，
+           *    引用抖动会导致整层每帧重建（见本文件 `platformOf` 的注释）。
+           */
+          platformOf={platformOf}
+          /**
+           * ★ 2026-11-21（真机验收 ③）：**导航态**的站台表（`主码 → {lng, lat}`，已是 GCJ-02）。
+           * 与 `platformOf` 是**两张并列的表**，不是覆盖关系：
+           *   · `platformOf` 来自"选中的线"（路线查看），导航态基本为 null；
+           *   · 本值来自"**当前腿**的线+方向"（导航），路线查看态恒为 null。
+           * `NavMap` 的取舍顺序是 `platformOf ?? platformNavOf`，并把命中的来源写进
+           * `data-platform-src`（`sheet|nav|none`）—— 那是本轮真机验收的读数入口，生产保留。
+           * ⚠️ 同样已 `useMemo`，引用只在「换腿 / 站序到位」时变；不要把它内联成新 Map。
+           */
+          platformNavOf={platformNavOf}
           onRouteDirs={rv.reportDirs}
           /* ★ 2026-11-06（#5a 收尾）：站序弹窗打开时，取景避开它盖住的那半屏（关闭 ⇒ null = 原行为） */
           stopsInsetTop={stopsInsetTop}
@@ -2677,8 +2958,9 @@ export default function NavShell({
           onLocate={() => setLocateTick((t) => t + 1)}
           /* ★ v3.2.0（需求 10 / AC-84）：导航语境（data-nav-phase ≠ off）⇒ 隐藏「查看路线」与「M Map logo」 */
           navMode={navPhase !== "off"}
-          /* ★ M4（需求 5）：图层面板入口（右栏最上；导航态由 NavBrandBar 内部隐藏） */
-          onOpenLayers={() => setLayerSheet(true)}
+          /* ★ 2026-11-21（R5/R6 · 方案 A）：图层面板入口**已搬出品牌栏** ——
+             原来的 `onOpenLayers` 在这里下发，现在由下方「图层键（页面级浮动）」自己渲染。
+             ⚠️ 不要再把入口传回本组件：品牌栏的层叠上下文越不过面板（见下方长注释）。 */
         />
 
         {/* 顶置搜索条 + 提示条槽（★ v3.6.0 AC-54：收藏带入横幅及其专用 props 已删除） */}
@@ -2689,6 +2971,51 @@ export default function NavShell({
           onOpenSearch={() => openSearch("dest")}
         />
       </div>
+
+      {/* ══ ★ R5/R6（2026-11-21 · 方案 A）：**图层键 = 页面级独立浮动键** ═══════════════
+          ── 为什么必须离开品牌栏（这是本次唯一的结构性改动，不是"顺手挪个位置"）────────
+           `.nav-brandbar` 是 `position:fixed; z-index:20` ⇒ **自成层叠上下文**；更要命的是
+           它整棵挂在 `.nav-map-wrap`（`.nav-shell--full .nav-map-wrap` = `fixed; z-index:0`）
+           **内部**（wrap 从 `:2631` 一直开到上面这个 `</div>`）⇒ 键在栏里写任何 z-index，
+           都被 **20（外层还有 0）** 夹住，永远低于路线查看真正的宿主 `.lst-sheet`（z76）与
+           面板 `.route-sheet`（z70）⇒ 需求 5③「满档也看得见、点得到」无从谈起。
+           ⇒ 只能把键提到**页面层** —— 与 `.nav-locate-fab` 同级（`<section>` 直接子元素，
+           在 wrap 之外），这样它才第一次真正参与根层叠上下文的比较。
+
+          ── 位置与层级（驱动量只有一个派生值 `routeViewOn && !lineSheet`，CSS 只认 `data-layer-pos`）──
+            · 默认地图（`map`）：`top: 72 + safe-top` = 搜索框底（12+52）+ 8 间隙，右 16px；
+              此时它是**普通控件**（z21，高于搜索框/品牌栏 20、低于定位浮层 24）。
+            · 路线查看（`route`）：`top: 12 + safe-top` —— R4 已把搜索框藏掉（`data-sheet`），
+              顶部整条空出来，键正好顶到搜索框原位；z 抬到 77（本轮唯一层级例外）。
+            · **导航态不渲染**：与原 `navMode` 门同一口径（AC-84「导航中不该换图层」）。
+
+          ── ⚠️ 三条红线（改这键之前先读 `globals.css` 的 `.nav-layer-btn` 注释）────────
+            ① 77 **只给这一个元素**，不许写成 `.nav-brandbar__acts{z-index:77}` 一类容器规则
+               （那会把整列键都抬上来，面板就白做了）；
+            ② 只有 `routeViewOn` 时才抬层级，默认地图下它仍是普通控件（z21）；
+            ③ 新增任何浮动控件都要重新评估层级，**不得默认继承 77**。
+            ※ 为什么不是「面板 70 + 1 = 71」：路线查看态的遮挡物是**站序弹窗 `.lst-sheet`（z76）**，
+              不是 `.route-sheet`（70）⇒ 71 会输 5 层，满档时键底被盖掉（safeTop 47 机型重叠 1.72px、
+              灵动岛机型重叠 12px，推导写在 CSS 常量注释里）。取 77 = 76 + 1，仍低于卡片 90 / 横幅 94。 */}
+      {navPhase === "off" && (
+        <button
+          type="button"
+          className="nav-locate nav-layer-btn"
+          data-open-layers="on"
+          /**
+           * ⚠️ `!lineSheet` 不能省：选线弹窗 `.rl-sheet` 是**全屏**（z70），而本键在路线查看态
+           *   被抬到 77（> 70）⇒ 若此时仍报 `route`，会出现「全屏选线弹窗之上飘着一个图层键」。
+           *   选线是用户的**当前唯一任务**，键该被盖住（这也是改动之前的既有表现）。
+           *   ⇒ 选线弹窗开着时回落到 `map`（z21 + 顶部 72），被弹窗正常覆盖，关掉即恢复。
+           */
+          data-layer-pos={routeViewOn && !lineSheet ? "route" : "map"}
+          aria-label="图层"
+          title="图层"
+          onClick={() => setLayerSheet(true)}
+        >
+          <Icon name="layers" size={20} />
+        </button>
+      )}
 
       {/* ★ v3.2.0（需求 11 / AC-85）+ v3.3.0（AC-100）：**定位两模式**（`data-locate-pos` 冻结钩子）
           · `off`（首页默认地图）⇒ **不渲染浮动层**，定位按钮在品牌栏右列原位（`bar`）；

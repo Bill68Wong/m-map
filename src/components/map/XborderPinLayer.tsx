@@ -25,6 +25,28 @@
 
 import { useEffect, useRef } from "react";
 import { groupXbPins, XB_PIN_SIZE, xbPinById, type XbPinKind } from "./xborder-pins";
+import { xbGlyphSvg, XB_GLYPH_FERRY, XB_GLYPH_PLANE } from "@/components/ui/xb-glyphs";
+
+/**
+ * ★ 2026-11-21：pin 内剪影的边长（px）。
+ *
+ * 预算：`--xb-pin-size`(16) − 2×边框。**边框按实测算**：Chrome 把 1.5px 按 1px 渲染
+ * ⇒ 内容盒 **14px**（详见 globals.css `.nav-map__xbpin` 那段实测注）。
+ *
+ * 为什么取 **10**（2026-11-21 真 Chrome 8× 逐个截图比对 9/10/11/12 四档）：
+ *   | 图形 | 单边留白 | 观察 |
+ *   |---|---|---|
+ *   | 9  | 2.5px | 机影偏小，16px 圆里显得空 |
+ *   | **10** | **2px** | 机影三要素（机身/后掠翼/尾翼）清晰，四周仍有可见蓝边；**船的两个舷窗仍是两个独立方孔** |
+ *   | 11 | 1.5px | 机头/机尾/翼尖**顶到圆边**，读成"填满"，船体下沿贴近边框 |
+ *   | 12 | 1px  | 明显溢出感，不满足"留 1px 呼吸"的下限 |
+ *   ⇒ 取 10：既放大了（旧的 14px pin 用 9），又保住留白。**不要再往上调**；
+ *     真要更大，先调 `--xb-pin-size`（同时 `XB_PIN_SIZE` 与聚合阈值一起变），不要偷偷改这里。
+ *
+ * ⚠️ 这是**图形**尺寸，不是 **pin** 尺寸。pin 尺寸被聚合阈值钉死
+ *   （`XB_CLUSTER_MAX_PX = XB_PIN_SIZE + XB_PIN_GAP`），改它会让聚合失效。
+ */
+const XB_PIN_GLYPH_PX = 10;
 
 interface XborderPinLayerProps {
   /** AMap.Map 实例（`NavMap` 就绪后传入；未就绪传 null） */
@@ -114,10 +136,33 @@ export default function XborderPinLayer({ map, amap, enabled, visibleKinds = nul
          */
         const pos: [number, number] = isCluster ? [g.lng, g.lat] : [pins[0].lng, pins[0].lat];
 
+        /**
+         * ★ 2026-11-21（真机验收 ①）：**pin 里现在有图形了**。
+         *
+         *   改前这里是一个**空 div** —— 地标只有 CSS 画的圆（`--air` 实心 accent、
+         *   `--pier` 空心），所以"机场和码头图标没变"是必然的：上一版改的是
+         *   `Icon.tsx`（`/cross-border` 页那套），地图这里一个像素都没动。
+         *
+         *   · 尺寸：`XB_PIN_GLYPH_PX = 10`。内容盒 = 16px 圆 − 2×边框；**边框按实测算**
+         *     （Chrome 把 1.5px 渲染成 1px，`getComputedStyle` 与 `clientWidth` 互证）
+         *     ⇒ 内容盒 **14px**，10px 图形两侧各留 2px。**不要**为了"看得更清"去放大 pin：
+         *     `--xb-pin-size` 与 `XB_PIN_GAP` 之和 = 聚合阈值（`XB_CLUSTER_MAX_PX`），
+         *     改尺寸会让"两圆已经撞上了却不合并"复发（见文件头与 CSS 那里两处注释）。
+         *   · 图形：`xbGlyphSvg()`，与 `<Icon name="planeIcon|ferryIcon">` **同一份 `d`**
+         *     （`src/components/ui/xb-glyphs.ts` 是真源，不许在这里另抄一份）。
+         *   · 颜色：路径是 `currentColor`，**机场与码头都是白图形**（码头 2026-11-21 反相成蓝底白影），
+         *     由 CSS 给（见 globals.css）；两者靠图形语义区分。
+         *   · 聚合点**不塞图形**（22px 圆里已经有计数，再叠个剪影会读成"一个小图标"，
+         *     而聚合的语义是"这里有两个地标"）。
+         */
+        const glyph = isCluster
+          ? ""
+          : xbGlyphSvg(pins[0].kind === "airport" ? XB_GLYPH_PLANE : XB_GLYPH_FERRY, XB_PIN_GLYPH_PX);
+
         const marker = new amap.Marker({
           position: pos,
           content: `<div class="${cls}"${attr} role="button" tabindex="-1" aria-label="${esc(label)}" title="${esc(pins.map((p) => p.name).join(" / "))}">${
-            isCluster ? `<span class="nav-map__xbpin__count">${pins.length}</span>` : ""
+            isCluster ? `<span class="nav-map__xbpin__count">${pins.length}</span>` : glyph
           }</div>`,
           /* 圆点居中：offset 取半径的相反数（与 CSS 的 --xb-pin-size 一致，见其注释） */
           offset: new amap.Pixel(-XB_PIN_SIZE / 2, -XB_PIN_SIZE / 2),

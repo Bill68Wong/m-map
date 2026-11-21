@@ -79,10 +79,31 @@ async function main() {
         if (!st.staCode) continue;
         // 站点表里没有的站自动补录（如 M268 等途经站）
         await pool.query(
+          /**
+           * ★ 2026-11-21：站名 `.trim()` + upsert 加「整行比较」的 WHERE。
+           *
+           * ① 为什么 trim：DSAT 的 `staName` 原值带尾随空格（实测 `M117`
+           *    = "羅理基/馬六甲街   "、`M84/2` = "高士德/培正 "）。不 trim 的话
+           *    每次同步都会把空格写回去 —— 而 `stations.name_tc` 是 `TEXT NOT NULL`，
+           *    空串/空白完全合法，下游 `label` 判据用真值性会把空串静默降级成 null。
+           *    另外"用站名字符数驱动布局"的写法（如 `LineStopRow` 的 `--lp-name-chars`
+           *    用 `[...name].length`）会被尾随空格算错。
+           *
+           * ② 为什么加 WHERE：每次 UPDATE 都产生新元组 ⇒ 新 ctid ⇒ `/api/stations`
+           *    的「主码 → 选中站台」结果可能漂移 ⇒ 用户收藏（key 含坐标）失联。
+           *    加条件后"值没变就不写"，ctid 稳定。
+           *
+           * ③ 为什么是整行比较而不是 `a IS DISTINCT FROM x OR b IS DISTINCT FROM y`：
+           *    多列必须用整行形式（静态检查 `scripts/check-station-writes.mjs` 的 D3），
+           *    这样写不出「AND 分列 ⇒ 单列变化被静默跳过」那个错。
+           *    `dsat_synced` 在 INSERT 里恒为 `true`，故 `EXCLUDED.dsat_synced` 等价于 `true`。
+           */
           `INSERT INTO stations (code, name_tc, kind, dsat_synced)
            VALUES ($1, $2, 'bus', true)
-           ON CONFLICT (code) DO UPDATE SET name_tc = EXCLUDED.name_tc, dsat_synced = true`,
-          [st.staCode, st.staName ?? st.staCode],
+           ON CONFLICT (code) DO UPDATE SET name_tc = EXCLUDED.name_tc, dsat_synced = true
+           WHERE (stations.name_tc, stations.dsat_synced)
+                 IS DISTINCT FROM (EXCLUDED.name_tc, EXCLUDED.dsat_synced)`,
+          [st.staCode, (st.staName ?? st.staCode).trim()],
         );
         seq++;
         await pool.query(

@@ -68,6 +68,12 @@ export interface VehicleMatcher {
   run: (args: RunArgs) => MatchResult;
   /** 本段最近一次结果（`null` = 还没跑过） */
   last: () => MatchResult | null;
+  /**
+   * ★ R11：本段**已累积排除的车牌数**（只读）。
+   * 用途只有一个：`match-retry.ts` 的放弃条件⑤「本段已累积排除 ≥3 辆」。
+   * ⚠️ 不要拿它做任何判据推导（比如"排除了几辆 ⇒ 置信度更高"）—— 它只是计数器。
+   */
+  excludedCount: () => number;
   /** 换段 / 重置时清空（排除名单与历史一起清 — 它们只对本段有效） */
   reset: () => void;
 }
@@ -140,6 +146,8 @@ export function createVehicleMatcher(): VehicleMatcher {
     },
 
     last: () => lastResult,
+
+    excludedCount: () => excluded.length,
 
     reset() {
       userHist = [];

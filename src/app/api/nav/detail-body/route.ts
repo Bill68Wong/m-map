@@ -40,6 +40,7 @@ import { wgs84ToGcj02 } from "@/lib/amap/coord";
 import type { RecommendCard } from "@/lib/recommend/types";
 import type { PlatformCand } from "@/lib/nav/route-overview";
 import { API_ERROR, errorResponse } from "@/lib/http/errors";
+import { activeGateOf } from "@/lib/routes/active-gate";
 import {
   DSAT_BUCKET_CAPACITY,
   DSAT_QPS,
@@ -77,8 +78,16 @@ type Coord = { lng: number; lat: number };
  *    leg 上另附「主码 → 按 (dir, seq) 的站台候选」（`platforms`，可选，仅巴士环线用得上）；
  * ④ 坐标 WGS84 → GCJ-02（与 /api/stations、/api/route-vehicles 同源）。
  * 任一查询失败**只降级该段字段**（color / board / alight → null），**绝不抛错**。
+ *
+ * ★ 2026-11-21：额外回报 `found` —— 请求涉及的线路码里**哪些在库中仍在线**
+ *   （`AND is_active`，由 ② 那条色查询顺带得到，**不加查询、不改并行结构**）。
+ *   调用方据此判「卡里引用了已停运线路 ⇒ 404」（判据：`src/lib/routes/active-gate.ts`）。
+ *   `found: null` = 该查询失败 ⇒ **结论未知**，调用方须放行（不得判 404）。
  */
-async function buildOverviewLegs(pool: Pool, rides: RecommendCard["rides"]): Promise<OverviewLeg[]> {
+async function buildOverviewLegs(
+  pool: Pool,
+  rides: RecommendCard["rides"],
+): Promise<{ legs: OverviewLeg[]; found: string[] | null }> {
   // ① 收集（去重）
   const routeCodes = [...new Set(rides.map((r) => r.route))];
   const mains = new Set<string>();
@@ -89,7 +98,7 @@ async function buildOverviewLegs(pool: Pool, rides: RecommendCard["rides"]): Pro
   const mainCodes = [...mains];
 
   // ② 两条批量查询并行；各自 try/catch 降级
-  const [byPlatform, colorMap, seqByRoute] = await Promise.all([
+  const [byPlatform, colorRes, seqByRoute] = await Promise.all([
     // ── 站坐标（WGS84；**按完整站台码**保留，供环线多次停靠按站序取点）──
     (async (): Promise<Map<string, Coord>> => {
       const m = new Map<string, Coord>();
@@ -124,25 +133,32 @@ async function buildOverviewLegs(pool: Pool, rides: RecommendCard["rides"]): Pro
       return m;
     })(),
     // ── 线路主题色（数据；勿硬编码）──
-    (async (): Promise<Map<string, string>> => {
-      const m = new Map<string, string>();
-      if (!routeCodes.length) return m;
+    //    ★ 2026-11-21：同一条查询**顺带**回答「这些线路还在线吗」，为 404 闸提供判据
+    //      （不额外发一次查询 ⇒ 本接口的并行结构一行没动）。
+    (async (): Promise<{ colorMap: Map<string, string>; found: string[] | null }> => {
+      const colorMap = new Map<string, string>();
+      if (!routeCodes.length) return { colorMap, found: [] };
       try {
         const res = await pool.query(
-          `SELECT code, color FROM routes WHERE code = ANY($1::text[])`,
+          `SELECT code, color FROM routes WHERE code = ANY($1::text[]) AND is_active`,
           [routeCodes],
         );
+        /** ★ **在线即计入**，与 `color` 是否为空无关 —— 一条在线但没配色的线路不得被当成停运 */
+        const found: string[] = [];
         for (const row of res.rows as { code: string; color: string | null }[]) {
+          found.push(String(row.code));
           const color = row.color != null ? String(row.color).trim() : "";
-          if (color) m.set(String(row.code), color);
+          if (color) colorMap.set(String(row.code), color);
         }
+        return { colorMap, found };
       } catch (e) {
         console.warn(
           "[api/nav/detail-body] 线路色查询失败（color 置 null，客户端回落）：",
           (e as Error).message,
         );
+        // ★ `found: null` = **结论未知**：不得据此判 404（否则一次库抖动让详情弹窗对全员 404）
+        return { colorMap, found: null };
       }
-      return m;
     })(),
     // ── 本线各方向的站序（供环线「同一主码多次停靠」按 seq 定位站台）──
     (async (): Promise<Map<string, { dir: string; seq: number; code: string }[]>> => {
@@ -221,14 +237,15 @@ async function buildOverviewLegs(pool: Pool, rides: RecommendCard["rides"]): Pro
       ...(platforms.length ? { platforms } : {}),
     };
   };
-  return rides.map((r, i) => ({
+  const legs = rides.map((r, i) => ({
     index: i,
     route: r.route,
     kind: r.kind,
-    color: colorMap.get(r.route) ?? null,
+    color: colorRes.colorMap.get(r.route) ?? null,
     board: coordOf(r.route, r.board),
     alight: coordOf(r.route, r.alight),
   }));
+  return { legs, found: colorRes.found };
 }
 
 export async function POST(req: Request) {
@@ -268,7 +285,26 @@ export async function POST(req: Request) {
     const wantFold =
       body?.fold === true || new URL(req.url).searchParams.get("fold") === "1";
     // ★ 静态索引与 leg 几何互相独立 ⇒ 并行（缩短 p95）；leg 内部查询也各自降级
-    const [st, legs] = await Promise.all([loadStatics(pool), buildOverviewLegs(pool, card.rides)]);
+    const [st, overview] = await Promise.all([loadStatics(pool), buildOverviewLegs(pool, card.rides)]);
+
+    /**
+     * ★ 2026-11-21：卡里引用了**已停运 / 不存在**的线路 ⇒ 404，而不是 200 + 该段 color=null。
+     *
+     *   为什么是 404 而不是 200 空结果：这张卡点进来时就带着一条已经没了的线路 ⇒
+     *   整张卡**不可恢复**（重试还是同一张废卡）。本仓既有契约把这两种情况分得很清：
+     *   `src/app/line/[code]/LineClient.tsx:152`「404 = 该方向不存在（或线路已停运）⇒ 不可恢复，
+     *   与『服务故障』分开报」。回 200 会让 `useDetailBody` 走 `phase:"ready"`，
+     *   把「线路停了」渲染成「这一段画不出来」，用户点重试永远重试同一张死卡。
+     *   完整论证（含「未知不得判 404」）：`src/lib/routes/active-gate.ts` 文件头。
+     *
+     *   ⚠️ `activeGateOf` 收到 `found === null`（色查询失败）时返回 `unknown` ⇒ 放行到既有降级
+     *      路径，**不会**把一次库抖动变成对全员的 404。
+     *   ⚠️ 放在 `nowBucket` / `fold` 之前：判死就不必再花那两次查询。
+     */
+    if (activeGateOf(card.rides.map((r) => r.route), overview.found) === "absent") {
+      return errorResponse(API_ERROR.bad_request, 404);
+    }
+    const legs = overview.legs;
     const nowMs = Date.now();
     const nowBucket = await nowBucketOfHolidayAware(pool, nowMs);
     const strips = buildStrips(card, {

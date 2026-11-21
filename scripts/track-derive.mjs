@@ -90,7 +90,28 @@ const CFG = {
 };
 
 const MIN_MINUTES = 0.1;
-const MAX_MINUTES = 20;
+/**
+ * ★ R14′（2026-11-20 负责人裁定）：长时行驶**不做堵车标记**，按「正常记录」收录。
+ *
+ * 用户原话：「不需要特别说明是堵车，只需要正常记录站间行驶时长」。
+ * ⇒ 与上一版（候选池 + 跨车判定 + `runJam` 标记）相比，本版只保留一条丢弃规则：
+ *   `< 0.1 分` 过短丢弃、`> 45 分` 超硬上限丢弃，**其余全部按正常样本收录**。
+ *
+ * 为什么上限是 45：跨海段正常 10~12 分，堵车 3~4 倍 ≈ 40 分；超过 45 分大概率是
+ *   车辆从响应里消失 / 长时间驻站 / 回场（不是"行驶"），计入会污染 p50。
+ *
+ * ⚠️ 本条**不再判断**"这条长样本是不是堵车" ⇒ 没有 `runJam` 字段，也没有
+ *   「同键多样本」「与历史 p50 比值」这两条门槛 —— 它们唯一的作用是给"是否堵车"
+ *   下结论，结论不需要了，门槛也就不需要了。
+ *
+ * 数据质量的兜底仍在**下游**：`flagOutliers`（同键 p50×3 且 +2 分，n≥5 启用）
+ *   会把"某段 p50 只有 1.5 分却出现 40 分"这类极端值从聚合里剔掉（原值保留可回溯）。
+ *   ⇒ 20~45 分这一段：**入库、可查、参与聚合**；真正的离群值由同键护栏剔除。
+ */
+/** 长时样本的**报告**阈值（仅用于统计打印，不参与丢弃判定） */
+const LONG_SAMPLE_MIN = Number(arg("long-sample-min", "20"));
+/** 绝对上限：超过一律丢弃（车辆消失/驻站/回场，不是行驶） */
+const MAX_MINUTES_HARD = Number(arg("hard-max", "45"));
 
 // ★ 批 2 · U-05：丢弃/截断诊断的**三域原因码**（唯一真相源，任何诊断记录必带其一）。
 //   为什么必须分三域（批 1 查明的教训）：批 1 实跑证明「370 秒天花板」是**数据源侧**把车从
@@ -121,7 +142,7 @@ const assertReason = (r) => {
 
 // ── 长时间停站（dwell）参数（v1.2.0，2026-10 长停站调研后新增）────────────
 // 背景：离开口径 t(离B) − t(离A) = run(A→B) + **dwell_B**，即差里含的是**终点站**的停站。
-//   ⇒ 终点站是总站/司机休息点时，dwell_B 可达数分钟，单靠 `MAX_MINUTES=20` 拦不住
+//   ⇒ 终点站是总站/司机休息点时，dwell_B 可达数分钟，单靠时长上限拦不住
 //     （实测 26 路 C654 聯生圓形地總站 dwell 最大 7.75 分，对应段 C656→C654 42% 样本 ≥3 分）。
 //   本脚本**不再猜**：从状态机直接量出每段的 dwell_B（= 到达首帧 → 离开首帧），
 //   随样本一起落盘（`dwellMin` / `longStop`），由聚合层决定排除或单列。
@@ -299,7 +320,14 @@ function segments(evs, { withDwell = false } = {}) {
         rec.dwellMin = Math.round(dwellMin * 100) / 100;
         rec.longStop = dwellMin >= LONG_STOP_MIN;
       }
-      if (minutes < MIN_MINUTES || minutes > MAX_MINUTES) { dropDur.push({ ...rec, reason: minutes < MIN_MINUTES ? `过短 ${minutes.toFixed(2)} 分` : `过长 ${minutes.toFixed(2)} 分` }); continue; }
+      // ★ R14′：两档 —— 过短/超硬上限丢弃；其余（含 20~45 分的长时行驶）**正常收录**
+      if (minutes < MIN_MINUTES || minutes > MAX_MINUTES_HARD) {
+        dropDur.push({
+          ...rec,
+          reason: minutes < MIN_MINUTES ? `过短 ${minutes.toFixed(2)} 分` : `超硬上限 ${minutes.toFixed(2)} 分`,
+        });
+        continue;
+      }
       ok.push(rec);
       continue;
     }
@@ -314,8 +342,16 @@ function segments(evs, { withDwell = false } = {}) {
         spanned_stations: d - 1,
         minutes, t: a.t,
       };
-      if (minutes < MIN_MINUTES || minutes > MAX_MINUTES) {
-        dropDur.push({ ...rec, reason: minutes < MIN_MINUTES ? `过短 ${minutes.toFixed(2)} 分` : `过长 ${minutes.toFixed(2)} 分` });
+      /**
+       * ★ R14 边界说明：**跨站段不适用「多样本放宽」**。
+       *   它是纯诊断流（`arrive_kind='spanned'`，**不进** depart/arrive 主口径聚合，
+       *   见文件内 spannedSamples 的注释），不参与 ETA ⇒ 放宽它对用户没有收益。
+       *   且 `minutes` 是"跨 N 站的总时长"，20 分门槛本身对它就不合理 —— 但那是
+       *   另一个问题（需要按站数缩放阈值），不在 R14 范围。此处保持原行为不动。
+       */
+      // ★ R14′：跨站段是**纯诊断流**（不进主口径），门槛同样放宽到硬上限 —— 长时跨站更该留证
+      if (minutes < MIN_MINUTES || minutes > MAX_MINUTES_HARD) {
+        dropDur.push({ ...rec, reason: minutes < MIN_MINUTES ? `过短 ${minutes.toFixed(2)} 分` : `超硬上限 ${minutes.toFixed(2)} 分` });
         continue;
       }
       spanned.push(rec);
@@ -554,6 +590,8 @@ async function main() {
   let termNoArrive = 0;            // 有 spec 但该车没有末站到达事件（数据缺失，跳过）
   let termHasDepart = 0;           // 非环线末站有 depart ⇒ 已由离开口径覆盖，不重复造样本
   const allGaps = [], allDropAdj = [], allDropDur = [];
+  /** ★ R14′：长时样本计数（仅用于报告"20~45 分这一段确实进来了"，不参与判定） */
+  let longSampleN = 0;
   /** ★ 批 2 · U-05：被「同 idx 1→0」护栏丢弃的 depart（诊断用） */
   const allSameIdxDepart = [];
   /** ★ v4.1.1：跨站段样本（`arrive_kind='spanned'`）—— 纯增量，**不进** depart/arrive 主口径聚合 */
@@ -589,7 +627,10 @@ async function main() {
     if (seqLen && s[0].idx >= seqLen) allGaps.push({ route, plate: k.split("|")[2], at: s[0].main, idx: s[0].idx, nextMain: "(站序越界)", t: s[0].t });
     for (const [evs, sink, tag] of [[depart, depSamples, "depart"], [arrive, arrSamples, "arrive"]]) {
       const { ok, spanned, dropAdj, dropDur, wrap, reverse } = segments(evs, { withDwell: tag === "depart" });
-      for (const r of ok) sink.push({ route, dir, plate: k.split("|")[2], ...r, kind: tag });
+      for (const r of ok) {
+        if (r.minutes > LONG_SAMPLE_MIN) longSampleN++;
+        sink.push({ route, dir, plate: k.split("|")[2], ...r, kind: tag });
+      }
       // ★ v4.1.1：跨站段保留为独立诊断流（src 标出它来自 depart 还是 arrive 事件序列）
       for (const r of spanned) spannedSamples.push({ route, dir, plate: k.split("|")[2], ...r, kind: "spanned", src: tag });
       for (const r of wrap) allWrap.push({ route, dir, plate: k.split("|")[2], kind: tag, ...r });
@@ -610,13 +651,16 @@ async function main() {
         const raw = terminalSegments(arrive, depart, spec);
         if (!raw.length) termNoArrive++;
         for (const r of raw) {
-          if (r.minutes < MIN_MINUTES || r.minutes > MAX_MINUTES) {
+          // ★ R14′：与邻接段同口径 —— 过短/超硬上限直接丢，其余正常收录
+          if (r.minutes < MIN_MINUTES || r.minutes > MAX_MINUTES_HARD) {
             allDropDur.push({
               route, plate: k.split("|")[2], kind: "terminal", ...r,
-              reason: r.minutes < MIN_MINUTES ? `过短 ${r.minutes.toFixed(2)} 分` : `过长 ${r.minutes.toFixed(2)} 分`,
+              reason: r.minutes < MIN_MINUTES ? `过短 ${r.minutes.toFixed(2)} 分` : `超硬上限 ${r.minutes.toFixed(2)} 分`,
             });
             continue;
           }
+          // ★ R14′：20~45 分同样正常收录（与邻接段同口径，不再判"是否堵车"）
+          if (r.minutes > LONG_SAMPLE_MIN) longSampleN++;
           termSamples.push({ route, dir, plate: k.split("|")[2], ...r, kind: "terminal" });
           termCovered.add(`${route}|${dir}`);
         }
@@ -637,6 +681,18 @@ async function main() {
   L(`末站口径（v1.4.0，纯增量）：${termSamples.length} 段 · 覆盖 ${termCovered.size}/${termSpecs.size} 个线路方向` +
     `（末站已有 depart → 不重复造 ${termHasDepart} 车次 · 无末站到达事件 ${termNoArrive} 车次）`);
   L(`丢弃：站序不邻接 ${allDropAdj.length} · 时长越界 ${allDropDur.length}`);
+
+  /* ★ R14′（2026-11-20 负责人裁定）：长时行驶**不判定、不标记**，20~45 分按正常样本收录。
+   *   这里只打一行计数，证明"这一段确实进来了"（报告与验收的唯一证据）。
+   *   ⚠️ 若将来要恢复"区分堵车与数据错误"，不要恢复旧的两条门槛（同键多样本 / 与历史 p50 比值）——
+   *      它们把结论写进了数据（runJam 标记），而用户要的只是"正常记录时长"；正确的做法是
+   *      在**查询侧**按需过滤（例如 minutes > k × p50 时另算一档），库里的原始样本保持中立。 */
+  const truth = await loadTruth();
+  L(
+    `🕐 长时样本（>${LONG_SAMPLE_MIN} 分且 ≤${MAX_MINUTES_HARD} 分）：${longSampleN} 条 —— 已按正常记录收录` +
+      `（不再判定/标记；真正的离群值由下游同键护栏剔除）`,
+  );
+
   const longStopSamples = depSamples.filter((s) => s.longStop).length;
   L(`长停站：dwell_B ≥ ${LONG_STOP_MIN} 分的段 ${longStopSamples}/${depSamples.length}` +
     `（含终到站休息；status='1' 长停 ${longStops.length} 处 · status='0' 长挂载 ${longAttaches.length} 处）`);
@@ -691,7 +747,7 @@ async function main() {
   }
 
   // ── 与真值对照 ──
-  const truth = await loadTruth();
+  // ★ R14：`truth` 已在 R14 判定处提前载入（那里 R2 需要它），此处不再重复调用。
   const compares = [];
   if (truth) {
     const seen = new Map(); // route|from|to -> {mins:[], truth:[]}
@@ -839,6 +895,18 @@ async function main() {
       ...(rec.detail ? { detail: rec.detail } : {}),
       ...(rec.kind ? { kind: rec.kind } : {}),
       ...(rec.lastT !== undefined ? { lastT: rec.lastT } : {}),
+      /**
+       * ★ R14：**时长越界类丢弃必须能复盘** —— 补 4 个字段。
+       *   此前 `guard.durationOutOfRange` 的记录只有 route/dir/plate/kind，
+       *   看不出「是哪个段、多长、为什么丢」，导致 2026-11-20 晚三轮的 28 条
+       *   丢样本无法复盘（只能猜是跨海段）。
+       *   ⚠️ 用 `durationReason` 而不是 `reason`：本函数第一个形参就叫 `reason`
+       *     （值域是 DISCARD_REASONS 三域枚举），两个语义混名会让后人读错。
+       */
+      ...(rec.from !== undefined ? { from: rec.from } : {}),
+      ...(rec.to !== undefined ? { to: rec.to } : {}),
+      ...(rec.minutes !== undefined ? { minutes: rec.minutes } : {}),
+      ...(rec.reason !== undefined ? { durationReason: rec.reason } : {}),
     });
   };
   // guard.* —— 派生端护栏主动丢弃
